@@ -21,7 +21,7 @@
   },
 
   "node": {
-    "icon": "/PsychologyHistoryGraph/icon.png",
+    "icon": "KliqueASP/PsychologyHistoryGraph/icon.png",
     "iconSize": 14,
     "ring": {
       "innerRadius": 0.65,
@@ -302,7 +302,7 @@
 
   "person": {
     "color": "#38bdf8",
-    "icon": "/PsychologyHistoryGraph/person.png",
+    "icon": "KliqueASP/PsychologyHistoryGraph/person.png",
     "category": "temporal",
     "timeline": {
       "startField": "anno_nascita",
@@ -313,7 +313,7 @@
 
   "place": {
     "color": "#22c55e",
-    "icon": "/PsychologyHistoryGraph/place.png",
+    "icon": "KliqueASP/PsychologyHistoryGraph/place.png",
     "category": "spatial",
     "macroAreaField": "macro_area",
     "alwaysVisible": true
