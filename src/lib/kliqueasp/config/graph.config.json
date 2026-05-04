@@ -302,7 +302,7 @@
 
   "person": {
     "color": "#38bdf8",
-    "icon": "KliqueASP/PsychologyHistoryGraph/person.png",
+    "icon": "KliqueASP/assets/PsychologyHistoryGraph/person.png",
     "category": "temporal",
     "timeline": {
       "startField": "anno_nascita",
@@ -313,7 +313,7 @@
 
   "place": {
     "color": "#22c55e",
-    "icon": "KliqueASP/PsychologyHistoryGraph/place.png",
+    "icon": "KliqueASP/assets/PsychologyHistoryGraph/place.png",
     "category": "spatial",
     "macroAreaField": "macro_area",
     "alwaysVisible": true
