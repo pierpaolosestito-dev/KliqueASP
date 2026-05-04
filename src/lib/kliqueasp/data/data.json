@@ -1,0 +1,66 @@
+{
+  "nodes": [
+    {
+      "id": "alice_rossi",
+      "label": "Alice Rossi",
+      "type": "actor",
+      "data": {
+        "active_from": 2018,
+        "active_to": 2024,
+        "affiliations": [
+          {
+            "group": "Network Analysis"
+          }
+        ]
+      }
+    },
+    {
+      "id": "bruno_verdi",
+      "label": "Bruno Verdi",
+      "type": "actor",
+      "data": {
+        "active_from": 2019,
+        "active_to": 2023,
+        "affiliations": [
+          {
+            "group": "Network Analysis"
+          },
+          {
+            "group": "Cybersecurity"
+          }
+        ]
+      }
+    },
+    {
+      "id": "carla_bianchi",
+      "label": "Carla Bianchi",
+      "type": "actor",
+      "data": {
+        "active_from": 2020,
+        "active_to": 2025,
+        "affiliations": [
+          {
+            "group": "Social Analysis"
+          },
+          {
+            "group": "Network Analysis"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "alice_rossi",
+      "target": "bruno_verdi"
+    },
+    {
+      "source": "alice_rossi",
+      "target": "carla_bianchi"
+    },
+    {
+      "source": "bruno_verdi",
+      "target": "carla_bianchi"
+    }
+  ]
+}
