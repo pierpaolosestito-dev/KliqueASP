@@ -14,6 +14,8 @@
   };
   export let forceEasterEgg: boolean = false;
 
+  export let JsonEditor: any = null;
+export let jsonEditorProps: any = {};
   // ---------------------------------------------------------------------------
   // DEFAULT CONFIG
   // ---------------------------------------------------------------------------
@@ -1871,6 +1873,7 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 </script>
 
 <div
+  class:with-json-editor={JsonEditor && jsonEditorProps?.open}
   class="app-root"
   style="
   --info-top: {UI.infoPanel.top}px;
@@ -2008,6 +2011,12 @@ valid(V) :- node(V), group(V, ${groupAtom}).
     --autocomplete-font-size: {UI.autocomplete.fontSize}px;
   "
 >
+  {#if JsonEditor}
+    <svelte:component
+      this={JsonEditor}
+      {...jsonEditorProps}
+    />
+  {/if}
   <div bind:this={container} class="graph"></div>
 
 <!-- TOOLBAR -->
@@ -2019,6 +2028,15 @@ valid(V) :- node(V), group(V, ${groupAtom}).
   <button on:click={clearClique}>
     Clear Clique
   </button>
+
+  {#if JsonEditor}
+  <button
+    type="button"
+    on:click={() => jsonEditorProps?.onOpen?.()}
+  >
+    JSON Editor
+  </button>
+{/if}
 
 <!--<img
   src={toolbarIcon.src}
@@ -2312,5 +2330,33 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 
   .filter-card input[type="checkbox"] {
     accent-color: var(--filter-accent-color, #38bdf8);
+  }
+
+    .app-root.with-json-editor .graph {
+    margin-left: 420px;
+    width: calc(100vw - 420px);
+  }
+
+  .app-root.with-json-editor .toolbar {
+    left: calc(var(--toolbar-left) + 420px);
+  }
+
+  .app-root.with-json-editor .filter-card {
+    left: calc(var(--filter-left) + 420px);
+  }
+
+  @media (max-width: 900px) {
+    .app-root.with-json-editor .graph {
+      margin-left: 0;
+      width: 100vw;
+    }
+
+    .app-root.with-json-editor .toolbar {
+      left: var(--toolbar-left);
+    }
+
+    .app-root.with-json-editor .filter-card {
+      left: var(--filter-left);
+    }
   }
 </style>
