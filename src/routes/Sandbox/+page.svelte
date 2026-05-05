@@ -8,7 +8,7 @@
         "startField": "$.data.active_from",
         "endField": "$.data.active_to"
       },
-      "macroAreaField": "$.data.affiliations[*].group"
+      "group": "$.data.affiliations[*].group"
     }
   }
 }`;

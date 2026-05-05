@@ -308,14 +308,14 @@
       "startField": "anno_nascita",
       "endField": "anno_morte"
     },
-    "macroAreaField": "roles[].macro_area"
+    "group": "roles[].macro_area"
   },
 
   "place": {
     "color": "#22c55e",
     "icon": "KliqueASP/assets/PsychologyHistoryGraph/place.png",
     "category": "spatial",
-    "macroAreaField": "macro_area",
+    "group": "macro_area",
     "alwaysVisible": true
   }
 }

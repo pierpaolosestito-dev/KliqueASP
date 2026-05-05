@@ -27,7 +27,7 @@
   //         "startField": "$.data.active_from",
   //         "endField": "$.data.active_to"
   //       },
-  //       "macroAreaField": "$.data.affiliations[*].macro_area"
+  //       "group": "$.data.affiliations[*].group"
   //     }
   //   }
   // }
@@ -86,7 +86,7 @@
     solver: {
       enabled: true,
       features: {
-        macroFilter: true,
+        groupFilter: true,
         minSize: true,
         topPerSize: true,
         onlyMaximum: true,
@@ -325,7 +325,7 @@
     filters: {
       enabled: true,
       types: true,
-      macroAreas: true
+      groups: true
     },
 
     nodeTypes: {
@@ -349,7 +349,7 @@
           startField: "anno_nascita",
           endField: "anno_morte"
         },
-        macroAreaField: "roles[].macro_area"
+        group: "roles[].group"
       },
 
       place: {
@@ -483,16 +483,16 @@
   // ---------------- FILTERS ----------------
   const filtersEnabled = GRAPH_CONFIG.filters?.enabled ?? true;
   const typeFiltersEnabled = GRAPH_CONFIG.filters?.types ?? true;
-  const macroFiltersEnabled = GRAPH_CONFIG.filters?.macroAreas ?? false;
+  const groupFiltersEnabled = GRAPH_CONFIG.filters?.groups ?? false;
 
   let availableTypes: string[] = [];
-  let availableMacroAreas: string[] = [];
+  let availableGroups: string[] = [];
 
   let selectedTypes = new Set<string>();
-  let selectedMacroAreasFilter = new Set<string>();
+  let selectedGroupsFilter = new Set<string>();
 
-  // ---------------- SOLVER MACRO FILTER ----------------
-  let selectedMacroArea: string = "";
+  // ---------------- SOLVER GROUP FILTER ----------------
+  let selectedGroup: string = "";
 
   // ---------------- HELPERS ----------------
   function atomize(s: string) {
@@ -541,14 +541,14 @@
   // ---------------------------------------------------------------------------
   // Supporta una forma leggera di JSONPath sufficiente per i mapping del grafo:
   //
-  // - "roles[].macro_area"
-  // - "roles[*].macro_area"
-  // - "data.roles[].macro_area"
-  // - "$.data.roles[*].macro_area"
+  // - "roles[].group"
+  // - "roles[*].group"
+  // - "data.roles[].group"
+  // - "$.data.roles[*].group"
   //
   // Se il path non inizia con "$" o "data.", viene interpretato come relativo
-  // a node.data. Quindi "roles[].macro_area" equivale a
-  // "$.data.roles[*].macro_area".
+  // a node.data. Quindi "roles[].group" equivale a
+  // "$.data.roles[*].group".
   // ---------------------------------------------------------------------------
 
   function normalizeJsonPathExpression(path: string): string {
@@ -683,22 +683,22 @@
   function computeDynamicFilters() {
     if (!originalData?.nodes) {
       availableTypes = [];
-      availableMacroAreas = [];
+      availableGroups = [];
       return;
     }
 
     const typeSet = new Set<string>();
-    const macroSet = new Set<string>();
+    const groupSet = new Set<string>();
 
     for (const node of originalData.nodes) {
       if (node.type) typeSet.add(node.type);
 
-      const macros = extractMacroAreas(node);
-      macros.forEach(m => macroSet.add(m));
+      const groups = extractGroups(node);
+      groups.forEach(g => groupSet.add(g));
     }
 
     availableTypes = Array.from(typeSet).sort();
-    availableMacroAreas = Array.from(macroSet).sort();
+    availableGroups = Array.from(groupSet).sort();
   }
 
   function isGraphEmpty(graph: any): boolean {
@@ -777,21 +777,21 @@
     return selectedTypes.has(node.type);
   }
 
-  function extractMacroAreas(node: any): string[] {
+  function extractGroups(node: any): string[] {
     const config = GRAPH_CONFIG.nodeTypes?.[node.type];
 
-    if (!config?.macroAreaField) return [];
+    if (!config?.group) return [];
 
-    return jsonPathValues(node, config.macroAreaField)
+    return jsonPathValues(node, config.group)
       .map((value) => String(value).trim())
       .filter(Boolean);
   }
 
-  function nodePassesMacroFilters(node: any) {
-    if (!macroFiltersEnabled || selectedMacroAreasFilter.size === 0) return true;
+  function nodePassesGroupFilters(node: any) {
+    if (!groupFiltersEnabled || selectedGroupsFilter.size === 0) return true;
 
-    return extractMacroAreas(node).some((m) =>
-      selectedMacroAreasFilter.has(m)
+    return extractGroups(node).some((g) =>
+      selectedGroupsFilter.has(g)
     );
   }
 
@@ -871,11 +871,11 @@
         ...visibleRelated
       ]);
 
-      // --- STEP 4: applica filtri (type + macro)
+      // --- STEP 4: applica filtri (type + group)
       for (const node of originalData.nodes) {
         if (!expanded.has(node.id)) continue;
         if (!nodePassesTypeFilters(node)) continue;
-        if (!nodePassesMacroFilters(node)) continue;
+        if (!nodePassesGroupFilters(node)) continue;
 
         visibleNodes.add(node.id);
       }
@@ -886,7 +886,7 @@
       if (visibleNodes.size === 0) {
         for (const node of originalData.nodes) {
           if (!nodePassesTypeFilters(node)) continue;
-          if (!nodePassesMacroFilters(node)) continue;
+          if (!nodePassesGroupFilters(node)) continue;
           if (!nodePassesTimeline(node)) continue;
 
           visibleNodes.add(node.id);
@@ -900,7 +900,7 @@
       // =========================================================
       for (const node of originalData.nodes) {
         if (!nodePassesTypeFilters(node)) continue;
-        if (!nodePassesMacroFilters(node)) continue;
+        if (!nodePassesGroupFilters(node)) continue;
         if (!nodePassesTimeline(node)) continue;
 
         visibleNodes.add(node.id);
@@ -1397,11 +1397,11 @@
     recomputeGraphData();
   }
 
-  function toggleMacroAreaFilter(macro: string, checked: boolean) {
-    const next = new Set(selectedMacroAreasFilter);
-    if (checked) next.add(macro);
-    else next.delete(macro);
-    selectedMacroAreasFilter = next;
+  function toggleGroupFilter(group: string, checked: boolean) {
+    const next = new Set(selectedGroupsFilter);
+    if (checked) next.add(group);
+    else next.delete(group);
+    selectedGroupsFilter = next;
     recomputeGraphData();
   }
 
@@ -1549,7 +1549,7 @@
     clearHistory();
 
     selectedTypes = new Set();
-    selectedMacroAreasFilter = new Set();
+    selectedGroupsFilter = new Set();
 
     currentStart = GRAPH_CONFIG.timeline.start;
     currentEnd = GRAPH_CONFIG.timeline.end;
@@ -1593,8 +1593,8 @@
 #show in/1.
 `;
 
-  const ASP_PROGRAM_FILTERED = (macroAtom: string) => `
-valid(V) :- node(V), macro(V, ${macroAtom}).
+  const ASP_PROGRAM_FILTERED = (groupAtom: string) => `
+valid(V) :- node(V), group(V, ${groupAtom}).
 
 { in(V) : valid(V) }.
 
@@ -1627,17 +1627,17 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
       facts += `node(${idx}).\n`;
     }
 
-    // ---------------- MACRO FACTS (GENERIC)
+    // ---------------- GROUP FACTS (GENERIC)
     for (const node of data.nodes) {
       const idx = indexMap.get(node.id);
       if (!idx) continue;
 
-      const macroAreas = extractMacroAreas(node);
-      if (!macroAreas.length) continue;
+      const groups = extractGroups(node);
+      if (!groups.length) continue;
 
-      for (const macro of macroAreas) {
-        const atom = atomize(macro);
-        facts += `macro(${idx},${atom}).\n`;
+      for (const group of groups) {
+        const atom = atomize(group);
+        facts += `group(${idx},${atom}).\n`;
       }
     }
 
@@ -1676,10 +1676,10 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
 
     let program: string;
 
-    if (!selectedMacroArea) {
+    if (!selectedGroup) {
       program = ASP_PROGRAM_DEFAULT;
     } else {
-      const atom = atomize(selectedMacroArea);
+      const atom = atomize(selectedGroup);
       program = ASP_PROGRAM_FILTERED(atom);
     }
 
@@ -1803,14 +1803,14 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
     });
   }
 
-  function computeMacroAreas() {
+  function computeGroups() {
     const set = new Set<string>();
 
     for (const node of originalData?.nodes ?? []) {
-      extractMacroAreas(node).forEach(m => set.add(m));
+      extractGroups(node).forEach(g => set.add(g));
     }
 
-    availableMacroAreas = Array.from(set).sort();
+    availableGroups = Array.from(set).sort();
   }
 
   // ---------------- LIFECYCLE ----------------
@@ -1818,7 +1818,7 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
     (async () => {
       const ForceGraph3D = (await import("3d-force-graph")).default;
 
-      computeMacroAreas();
+      computeGroups();
 
       clingoWorker = new Worker("/clingo/clingo.web.worker.js", {
         type: "module"
@@ -1860,7 +1860,7 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
         .d3Force("link", forceLink().distance(F.linkDistance).strength(F.linkStrength));
 
       loadDataset();
-      computeMacroAreas();
+      computeGroups();
     })();
   });
 
@@ -2085,17 +2085,17 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
       </div>
     {/if}
 
-    {#if macroFiltersEnabled}
+    {#if groupFiltersEnabled}
       <div class="filter-section">
         <span class="filter-title">Groups</span>
-        {#each availableMacroAreas as macro}
+        {#each availableGroups as group}
           <label>
             <input
               type="checkbox"
-              checked={selectedMacroAreasFilter.has(macro)}
-              on:change={(e) => toggleMacroAreaFilter(macro, (e.currentTarget as HTMLInputElement).checked)}
+              checked={selectedGroupsFilter.has(group)}
+              on:change={(e) => toggleGroupFilter(group, (e.currentTarget as HTMLInputElement).checked)}
             />
-            {macro}
+            {group}
           </label>
         {/each}
       </div>
@@ -2167,8 +2167,8 @@ valid(V) :- node(V), macro(V, ${macroAtom}).
   selectedNodeId={selectedId}
   bind:minSize={minCliqueSize}
   bind:topPerSize={topPerSize}
-  bind:selectedMacroArea
-  {availableMacroAreas}
+  bind:selectedGroup
+  {availableGroups}
   on:close={() => showSolverPanel = false}
   on:highlight={(e) => {
     const clique = e.detail as string[];
