@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { base } from "$app/paths";
   import * as THREE from "three";
   import { forceManyBody, forceCenter, forceLink } from "d3-force-3d";
   import TimelineSlider from "./components/TimelineSlider.svelte";
@@ -1822,13 +1823,16 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 
       computeGroups();
 
-      clingoWorker = new Worker("/clingo/clingo.web.worker.js", {
+      clingoWorker = new Worker(`${base}/clingo/clingo.web.worker.js`, {
         type: "module"
       });
 
+      clingoWorker.onerror = (e) =>
+        console.error("❌ [CLINGO] Worker failed to load:", e.message, e);
+
       clingoWorker.postMessage({
         type: "init",
-        wasmUrl: "/clingo/clingo.wasm"
+        wasmUrl: `${base}/clingo/clingo.wasm`
       });
 
       graph3D = ForceGraph3D()(container)
