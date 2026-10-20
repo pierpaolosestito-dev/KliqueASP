@@ -21,7 +21,6 @@
   },
 
   "node": {
-    "icon": "KliqueASP/PsychologyHistoryGraph/icon.png",
     "iconSize": 14,
     "ring": {
       "innerRadius": 0.65,
@@ -49,8 +48,9 @@
 
   "solver": {
   "enabled": true,
+  "cliqueMode": "maximal",
   "features": {
-    "macroFilter": true,
+    "groupFilter": true,
     "minSize": true,
     "topPerSize": true,
     "onlyMaximum": true,
@@ -229,12 +229,6 @@
   },
 
   "toolbar": {
-    "icon": {
-      "src": "/PsychologyHistoryGraph/icon.png",
-      "width": 28,
-      "height": 28,
-      "marginRight": 6
-    },
     "spacing": 8,
     "padding": "8px 10px",
     "borderRadius": 8,
@@ -285,7 +279,7 @@
   "filters": {
   "enabled": true,
   "types": true,
-  "macroAreas": true
+  "groups": true
 },
 
   "nodeTypes": {
@@ -297,12 +291,12 @@
 },
   "default": {
     "color": "#334155",
-    "icon": "/PsychologyHistoryGraph/icon.png"
+    "icon": "assets/PsychologyHistoryGraph/icon.png"
   },
 
   "person": {
     "color": "#38bdf8",
-    "icon": "KliqueASP/assets/PsychologyHistoryGraph/person.png",
+    "icon": "assets/PsychologyHistoryGraph/person.png",
     "category": "temporal",
     "timeline": {
       "startField": "anno_nascita",
@@ -313,7 +307,7 @@
 
   "place": {
     "color": "#22c55e",
-    "icon": "KliqueASP/assets/PsychologyHistoryGraph/place.png",
+    "icon": "assets/PsychologyHistoryGraph/place.png",
     "category": "spatial",
     "group": "macro_area",
     "alwaysVisible": true

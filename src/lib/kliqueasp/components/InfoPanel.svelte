@@ -1,6 +1,4 @@
 <script lang="ts">
-  import type { NodeDetails } from "../data/details";
-
   type Neighbor = {
     id: string;
     label: string;
@@ -10,7 +8,7 @@
 
   // Props dal parent
   export let selectedNode: any = null;
-  export let selectedDetails: NodeDetails | GenericRecord | null = null;
+  export let selectedDetails: GenericRecord | null = null;
   export let rootSelectedId: string | null = null;
   export let neighborIds: Neighbor[] = [];
   export let highlightedNeighbors: Set<string> = new Set();
@@ -30,8 +28,83 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") closeModal();
+    if (showModal && e.key === "Escape") closeModal();
   }
+
+  function focusOnMount(node: HTMLElement) {
+    node.focus();
+  }
+
+  // I campi HTML del dataset (biografia_html, contenuto) vengono renderizzati
+  // con {@html}: teniamo solo tag di formattazione e link http(s)/mailto.
+  const ALLOWED_TAGS = new Set([
+    "a", "b", "blockquote", "br", "code", "div", "em", "h1", "h2", "h3", "h4",
+    "h5", "h6", "hr", "i", "li", "ol", "p", "pre", "small", "span", "strong",
+    "sub", "sup", "u", "ul"
+  ]);
+
+  const DROPPED_TAGS = new Set([
+    "script", "style", "iframe", "object", "embed", "template", "noscript",
+    "link", "meta", "base", "form", "svg", "math"
+  ]);
+
+  function sanitizeHtml(html: string): string {
+    const doc = new DOMParser().parseFromString(String(html ?? ""), "text/html");
+
+    const clean = (parent: Node) => {
+      for (const child of Array.from(parent.childNodes)) {
+        if (child.nodeType === Node.COMMENT_NODE) {
+          child.remove();
+          continue;
+        }
+
+        if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+        const el = child as Element;
+        const tag = el.tagName.toLowerCase();
+
+        if (DROPPED_TAGS.has(tag)) {
+          el.remove();
+          continue;
+        }
+
+        clean(el);
+
+        if (!ALLOWED_TAGS.has(tag)) {
+          el.replaceWith(...Array.from(el.childNodes));
+          continue;
+        }
+
+        const href = tag === "a" ? el.getAttribute("href") ?? "" : "";
+
+        for (const attr of Array.from(el.attributes)) {
+          el.removeAttribute(attr.name);
+        }
+
+        if (tag === "a" && /^(https?:|mailto:)/i.test(href.trim())) {
+          el.setAttribute("href", href.trim());
+          el.setAttribute("target", "_blank");
+          el.setAttribute("rel", "noopener noreferrer");
+        }
+      }
+    };
+
+    clean(doc.body);
+    return doc.body.innerHTML;
+  }
+
+  // Alcune immagini del dataset sono URL dell'ottimizzatore Next.js del sito
+  // di origine ("/_next/image?url=<originale>&w=..."): usiamo l'URL originale.
+  function resolveImageUrl(url: string): string {
+    const value = String(url ?? "").trim();
+    const match = /^\/_next\/image\?(.*)$/.exec(value);
+    if (!match) return value;
+
+    const original = new URLSearchParams(match[1]).get("url");
+    return original && /^https?:\/\//i.test(original) ? original : value;
+  }
+
+  let failedImageUrl = "";
 
   function onBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) closeModal();
@@ -74,6 +147,8 @@
       }));
   }
 </script>
+
+<svelte:window on:keydown={handleKeydown} />
 
 {#if selectedNode}
   <div class="info-panel">
@@ -126,7 +201,8 @@
       aria-modal="true"
       on:click={onBackdropClick}
       on:keydown={handleKeydown}
-      tabindex="0"
+      tabindex="-1"
+      use:focusOnMount
     >
       <div class="modal-card">
 
@@ -200,17 +276,18 @@
               {#if selectedDetails.biografia_html}
                 <hr />
                 <div class="biografia">
-                  {@html selectedDetails.biografia_html}
+                  {@html sanitizeHtml(selectedDetails.biografia_html)}
                 </div>
               {/if}
 
             {:else if selectedDetails.tipo === "place"}
 
-              {#if selectedDetails.immagine_url}
+              {#if selectedDetails.immagine_url && resolveImageUrl(selectedDetails.immagine_url) !== failedImageUrl}
                 <img
-                  src={selectedDetails.immagine_url}
+                  src={resolveImageUrl(selectedDetails.immagine_url)}
                   alt={selectedDetails.titolo}
                   class="place-image"
+                  on:error={() => (failedImageUrl = resolveImageUrl(selectedDetails?.immagine_url))}
                 />
               {/if}
 
@@ -235,7 +312,7 @@
 
               {#if selectedDetails.contenuto}
                 <div class="contenuto">
-                  {@html selectedDetails.contenuto}
+                  {@html sanitizeHtml(selectedDetails.contenuto)}
                 </div>
               {/if}
 
@@ -318,6 +395,10 @@
     align-items: center;
     justify-content: center;
     padding: 18px;
+  }
+
+  .modal-backdrop:focus {
+    outline: none;
   }
 
   .modal-card {

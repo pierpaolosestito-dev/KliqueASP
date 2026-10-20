@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import RAW_GRAPH_CONFIG from "../config/graph.config.json";
+
+  // Sezione "solver" del config già risolta dal parent (GraphApp).
+  export let config: any = {};
 
   export let open: boolean = false;
 
@@ -11,9 +13,11 @@
     timeMs?: number;
     nodesCount?: number;
     linksCount?: number;
-    datasetMode?: string;
     periodLabel?: string;
+    cliqueMode?: string;
   };
+
+  export let error: string = "";
 
   export let maximumCliques: string[][] = [];
   export let allCliques: string[][] = [];
@@ -23,15 +27,15 @@
   export let minSize: number = 3;
   export let topPerSize: number = 5;
 
-  export let selectedMacroArea: string | null = null;
-  export let availableMacroAreas: string[] = [];
+  export let selectedGroup: string = "";
+  export let availableGroups: string[] = [];
 
   const dispatch = createEventDispatcher();
 
   const DEFAULT_SOLVER_CFG = {
     enabled: true,
     features: {
-      macroFilter: true,
+      groupFilter: true,
       minSize: true,
       topPerSize: true,
       onlyMaximum: true,
@@ -74,7 +78,7 @@
 
   const SOLVER_CFG = deepMerge(
     DEFAULT_SOLVER_CFG,
-    (RAW_GRAPH_CONFIG as any)?.solver ?? {}
+    config ?? {}
   );
 
   const F = SOLVER_CFG.features ?? DEFAULT_SOLVER_CFG.features;
@@ -169,6 +173,17 @@
       ? (allCliques ?? []).filter(c => Array.isArray(c) && c.includes(selectedNodeId)).length
       : 0;
 
+  const CLIQUE_MODE_LABELS: Record<string, string> = {
+    maximal: "maximal cliques",
+    all: "all cliques (incl. sub-cliques)",
+    maximum: "maximum cliques only"
+  };
+
+  $: histogramRows = Array.from(stats?.histogram?.entries?.() ?? [])
+    .sort((a, b) => b[0] - a[0]);
+
+  $: histogramMax = Math.max(1, ...histogramRows.map(([, count]) => count));
+
   $: selectedInMaximum =
     selectedNodeId
       ? (maximumCliques ?? []).some(c => Array.isArray(c) && c.includes(selectedNodeId))
@@ -205,6 +220,9 @@
 
   {#if F.stats !== false}
   <div class="solver-meta">
+    {#if stats?.cliqueMode}
+      <div><strong>Mode:</strong> {CLIQUE_MODE_LABELS[stats.cliqueMode] ?? stats.cliqueMode}</div>
+    {/if}
     <div><strong>Total cliques:</strong> {stats?.totalCliques ?? 0}</div>
     <div><strong>Maximum size:</strong> {stats?.maxSize ?? 0}</div>
 
@@ -226,6 +244,27 @@
   </div>
   {/if}
 
+  {#if error}
+    <div class="solver-error" role="alert">
+      <strong>Solver error</strong>
+      <pre>{error}</pre>
+    </div>
+  {/if}
+
+  {#if F.histogram !== false && histogramRows.length > 0}
+  <div class="histogram" aria-label="Clique size distribution">
+    {#each histogramRows as [size, count]}
+      <div class="histogram-row">
+        <span class="histogram-label">Size {size}</span>
+        <span class="histogram-track">
+          <span class="histogram-bar" style="width: {(count / histogramMax) * 100}%"></span>
+        </span>
+        <span class="histogram-count">{count}</span>
+      </div>
+    {/each}
+  </div>
+  {/if}
+
   {#if F.selectedAnalysis !== false && selectedNodeId}
   <div class="selected-analysis">
     <div><strong>Selected node:</strong> {selectedNodeId}</div>
@@ -239,13 +278,13 @@
 
   <div class="solver-controls">
 
-    {#if F.macroFilter !== false}
+    {#if F.groupFilter !== false}
     <label>
       Group
-      <select bind:value={selectedMacroArea}>
+      <select bind:value={selectedGroup}>
         <option value="">-- none --</option>
-        {#each availableMacroAreas as area}
-          <option value={area}>{area}</option>
+        {#each availableGroups as group}
+          <option value={group}>{group}</option>
         {/each}
       </select>
     </label>
@@ -308,12 +347,12 @@
         </div>
 
         {#each group.cliques as c}
-          <div class="clique-item" on:click={() => highlightClique(c)}>
+          <button type="button" class="clique-item" on:click={() => highlightClique(c)}>
             {c.join(", ")}
             {#if c.length === stats?.maxSize}
               <span class="max-badge">MAX</span>
             {/if}
-          </div>
+          </button>
         {/each}
       </div>
     {/each}
@@ -395,6 +434,11 @@
   }
 
   .clique-item {
+    width: 100%;
+    text-align: left;
+    border: none;
+    color: inherit;
+    font-family: inherit;
     padding: var(--solver-item-padding);
     margin-bottom: var(--solver-item-mb);
     background: var(--solver-item-bg);
@@ -420,5 +464,57 @@
 
   .empty {
     opacity: 0.6;
+  }
+
+  .solver-error {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    color: #991b1b;
+  }
+
+  .solver-error pre {
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    font-size: 11px;
+  }
+
+  .histogram {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .histogram-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .histogram-label {
+    width: 52px;
+    flex: none;
+  }
+
+  .histogram-track {
+    flex: 1;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(14, 165, 233, 0.1);
+    overflow: hidden;
+  }
+
+  .histogram-bar {
+    display: block;
+    height: 100%;
+    background: var(--solver-item-hover);
+  }
+
+  .histogram-count {
+    min-width: 32px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 </style>

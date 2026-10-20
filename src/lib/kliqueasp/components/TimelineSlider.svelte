@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import RAW_GRAPH_CONFIG from "../config/graph.config.json";
+
+  // Sezione ui.timeline del config già risolta dal parent (GraphApp).
+  export let uiConfig: any = {};
 
   const DEFAULT_TIMELINE_UI = {
     bottom: 20,
@@ -61,7 +63,7 @@
   const UI = {
     timeline: deepMerge(
       DEFAULT_TIMELINE_UI,
-      (RAW_GRAPH_CONFIG as any)?.ui?.timeline ?? {}
+      uiConfig ?? {}
     )
   };
 
@@ -188,12 +190,14 @@
     width: 100%;
     pointer-events: none;
     -webkit-appearance: none;
+    appearance: none;
     background: transparent;
   }
 
   .slider::-webkit-slider-thumb {
     pointer-events: all;
     -webkit-appearance: none;
+    appearance: none;
     width: var(--tl-thumb-size);
     height: var(--tl-thumb-size);
     border-radius: 50%;
@@ -203,6 +207,25 @@
   }
 
   .slider::-webkit-slider-runnable-track {
+    height: var(--tl-track-height);
+    border-radius: var(--tl-track-radius);
+    background: var(--tl-track-color);
+  }
+
+  /* Firefox: senza queste regole i thumb ereditano pointer-events: none
+     e il doppio slider non è trascinabile. */
+  .slider::-moz-range-thumb {
+    pointer-events: all;
+    width: var(--tl-thumb-size);
+    height: var(--tl-thumb-size);
+    border-radius: 50%;
+    background: var(--tl-thumb-color);
+    border: var(--tl-thumb-border);
+    box-sizing: border-box;
+    cursor: pointer;
+  }
+
+  .slider::-moz-range-track {
     height: var(--tl-track-height);
     border-radius: var(--tl-track-radius);
     background: var(--tl-track-color);

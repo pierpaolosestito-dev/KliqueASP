@@ -16,7 +16,7 @@
   export let forceEasterEgg: boolean = false;
 
   export let JsonEditor: any = null;
-export let jsonEditorProps: any = {};
+  export let jsonEditorProps: any = {};
   // ---------------------------------------------------------------------------
   // DEFAULT CONFIG
   // ---------------------------------------------------------------------------
@@ -59,7 +59,6 @@ export let jsonEditorProps: any = {};
     },
 
     node: {
-      icon: "/PsychologyHistoryGraph/icon.png",
       iconSize: 14,
       ring: {
         innerRadius: 0.65,
@@ -88,6 +87,10 @@ export let jsonEditorProps: any = {};
 
     solver: {
       enabled: true,
+      // "maximal": clique non estendibili (default)
+      // "all":     tutte le clique, incluse le sotto-clique (--opt-mode=enum)
+      // "maximum": solo le clique di cardinalità massima (--opt-mode=optN)
+      cliqueMode: "maximal",
       features: {
         groupFilter: true,
         minSize: true,
@@ -272,12 +275,6 @@ export let jsonEditorProps: any = {};
       },
 
       toolbar: {
-        icon: {
-          src: "/PsychologyHistoryGraph/icon.png",
-          width: 28,
-          height: 28,
-          marginRight: 6
-        },
         spacing: 8,
         padding: "8px 10px",
         borderRadius: 8,
@@ -341,12 +338,12 @@ export let jsonEditorProps: any = {};
 
       default: {
         color: "#334155",
-        icon: "/PsychologyHistoryGraph/icon.png"
+        icon: "assets/PsychologyHistoryGraph/icon.png"
       },
 
       person: {
         color: "#38bdf8",
-        icon: "/PsychologyHistoryGraph/icon.png",
+        icon: "assets/PsychologyHistoryGraph/icon.png",
         category: "temporal",
         timeline: {
           startField: "anno_nascita",
@@ -357,14 +354,45 @@ export let jsonEditorProps: any = {};
 
       place: {
         color: "#22c55e",
-        icon: "/PsychologyHistoryGraph/icon.png",
+        icon: "assets/PsychologyHistoryGraph/icon.png",
         category: "spatial",
         alwaysVisible: true
       }
     }
   };
 
-  const RAW_CONFIG: any = graphConfig ?? {};
+  // ---------------------------------------------------------------------------
+  // ALIAS LEGACY
+  // ---------------------------------------------------------------------------
+  // Prima del rename "macroArea" -> "group" il config usava altre chiavi.
+  // Le traduciamo nelle chiavi correnti, senza sovrascrivere quelle nuove,
+  // così i config già pubblicati (es. results/jsons/graph.config.json)
+  // continuano a funzionare.
+  // ---------------------------------------------------------------------------
+  function applyLegacyConfigAliases(raw: any): any {
+    if (!raw || typeof raw !== "object") return {};
+
+    const cfg = JSON.parse(JSON.stringify(raw));
+
+    for (const typeCfg of Object.values(cfg.nodeTypes ?? {}) as any[]) {
+      if (typeCfg && typeof typeCfg === "object" && typeCfg.group === undefined && typeCfg.macroAreaField !== undefined) {
+        typeCfg.group = typeCfg.macroAreaField;
+      }
+    }
+
+    if (cfg.filters && cfg.filters.groups === undefined && cfg.filters.macroAreas !== undefined) {
+      cfg.filters.groups = cfg.filters.macroAreas;
+    }
+
+    const solverFeatures = cfg.solver?.features;
+    if (solverFeatures && solverFeatures.groupFilter === undefined && solverFeatures.macroFilter !== undefined) {
+      solverFeatures.groupFilter = solverFeatures.macroFilter;
+    }
+
+    return cfg;
+  }
+
+  const RAW_CONFIG: any = applyLegacyConfigAliases(graphConfig);
 
   function isPlainObject(value: any): boolean {
     return (
@@ -438,6 +466,7 @@ export let jsonEditorProps: any = {};
   normalizeNodeTypeConfigs();
 
   const UI = GRAPH_CONFIG.ui;
+  const solverEnabled = GRAPH_CONFIG.solver?.enabled !== false;
 
   let container: HTMLDivElement;
   let graph3D: any;
@@ -465,6 +494,8 @@ export let jsonEditorProps: any = {};
 
   // ---------------- SOLVER STATE ----------------
   let showSolverPanel = false;
+  let solverRunning = false;
+  let solverError = "";
 
   let maximumCliques: string[][] = [];
   let allCliques: string[][] = [];
@@ -476,15 +507,17 @@ export let jsonEditorProps: any = {};
     timeMs: undefined as number | undefined,
     nodesCount: undefined as number | undefined,
     linksCount: undefined as number | undefined,
-    datasetMode: "unified" as string | undefined,
-    periodLabel: undefined as string | undefined
+    periodLabel: undefined as string | undefined,
+    cliqueMode: undefined as string | undefined
   };
 
   let minCliqueSize = 3;
   let topPerSize = 5;
 
   // ---------------- FILTERS ----------------
-  const filtersEnabled = GRAPH_CONFIG.filters?.enabled ?? true;
+  const filtersEnabled =
+    GRAPH_CONFIG.features?.filters !== false &&
+    GRAPH_CONFIG.filters?.enabled !== false;
   const typeFiltersEnabled = GRAPH_CONFIG.filters?.types ?? true;
   const groupFiltersEnabled = GRAPH_CONFIG.filters?.groups ?? false;
 
@@ -822,7 +855,7 @@ export let jsonEditorProps: any = {};
     if (!originalData) return;
 
     const TIMELINE_CFG = GRAPH_CONFIG.timeline ?? {};
-    const mode = easterEggMode ? "simple" : (TIMELINE_CFG.mode ?? "graph-aware");
+    const mode = easterEggMode ? "simple" : (TIMELINE_CFG.mode ?? "simple");
 
     const visibleNodes = new Set<string>();
 
@@ -868,11 +901,15 @@ export let jsonEditorProps: any = {};
         if (visibleTemporal.has(t)) visibleRelated.add(s);
       }
 
-      // --- STEP 3: unione
+      // --- STEP 3: unione (+ tipi dichiarati alwaysVisible)
       const expanded = new Set<string>([
         ...visibleTemporal,
         ...visibleRelated
       ]);
+
+      for (const node of originalData.nodes) {
+        if (GRAPH_CONFIG.nodeTypes?.[node.type]?.alwaysVisible) expanded.add(node.id);
+      }
 
       // --- STEP 4: applica filtri (type + group)
       for (const node of originalData.nodes) {
@@ -947,7 +984,7 @@ export let jsonEditorProps: any = {};
     // =========================================================
     // 🔹 update graph
     // =========================================================
-    graph3D.graphData(data);
+    graph3D?.graphData(data);
     refreshNodeVisuals();
   }
 
@@ -975,6 +1012,22 @@ export let jsonEditorProps: any = {};
 
     const graphEdges = graph.edges ?? graph.links ?? [];
 
+    // Il grafo è trattato come non orientato (anche dall'encoding ASP):
+    // A-B e B-A sono lo stesso arco, quindi teniamo solo la prima occorrenza.
+    const seenEdges = new Set<string>();
+    const links: any[] = [];
+
+    for (const e of graphEdges) {
+      const source = atomize(getLinkEndId(e.source));
+      const target = atomize(getLinkEndId(e.target));
+      const key = source < target ? `${source}\u0000${target}` : `${target}\u0000${source}`;
+
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+
+      links.push({ source, target, type: e.type });
+    }
+
     originalData = {
       nodes: graph.nodes.map((n: any) => {
         const label = normalizeName(n.label);
@@ -985,11 +1038,7 @@ export let jsonEditorProps: any = {};
           id: n.id ? atomize(n.id) : atomize(label)
         };
       }),
-      links: graphEdges.map((e: any) => ({
-        source: atomize(getLinkEndId(e.source)),
-        target: atomize(getLinkEndId(e.target)),
-        type: e.type
-      }))
+      links
     };
 
     updateTimelineBoundsFromDataIfNeeded();
@@ -997,7 +1046,7 @@ export let jsonEditorProps: any = {};
     computeDynamicFilters();
     recomputeGraphData();
 
-    graph3D.cameraPosition({ x: 0, y: 0, z: 220 }, { x: 0, y: 0, z: 0 }, 800);
+    graph3D?.cameraPosition({ x: 0, y: 0, z: 220 }, { x: 0, y: 0, z: 0 }, 800);
   }
 
   // ---------------- HISTORY ----------------
@@ -1022,12 +1071,14 @@ export let jsonEditorProps: any = {};
   }
 
   // ---------------- AUTOCOMPLETE ----------------
-  let searchIndex: { label: string; norm: string }[] = [];
-  let suggestions: string[] = [];
+  let searchIndex: { id: string; label: string; norm: string }[] = [];
+  let suggestions: { id: string; label: string }[] = [];
   let showSuggestions = false;
+  let searchMessage = "";
 
   function buildSearchIndexFromNodes(nodes: any[]) {
     searchIndex = nodes.map((n) => ({
+      id: n.id,
       label: n.label,
       norm: n.label.toLowerCase(),
     }));
@@ -1050,21 +1101,21 @@ export let jsonEditorProps: any = {};
         if (item.norm.startsWith(text)) score += 3;
         else if (item.norm.includes(` ${text}`)) score += 2;
         else if (item.norm.includes(text)) score += 1;
-        return { label: item.label, score };
+        return { id: item.id, label: item.label, score };
       })
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score || a.label.length - b.label.length)
       .slice(0, 7)
-      .map((r) => r.label);
+      .map(({ id, label }) => ({ id, label }));
 
     suggestions = ranked;
     showSuggestions = ranked.length > 0;
   }
 
-  function chooseSuggestion(label: string) {
-    query = label;
+  function chooseSuggestion(s: { id: string; label: string }) {
+    query = s.label;
     showSuggestions = false;
-    searchNode(label);
+    selectSearchResult(getNodeById(s.id, originalData?.nodes ?? []));
   }
 
   // ---------------- NODE STYLE ----------------
@@ -1083,7 +1134,13 @@ export let jsonEditorProps: any = {};
     };
   }
 
-  const H = GRAPH_CONFIG.nodeTypes.highlight;
+  // I colori di highlight possono arrivare da nodeTypes.highlight oppure dal
+  // blocco "colors" del config; i valori espliciti dell'utente vincono sui default.
+  const H = {
+    ...DEFAULT_GRAPH_CONFIG.nodeTypes.highlight,
+    ...(RAW_CONFIG.colors ?? {}),
+    ...(RAW_CONFIG.nodeTypes?.highlight ?? {})
+  };
 
   const colorAccessor = (n: any) => {
     // Clique highlight attivo
@@ -1158,7 +1215,7 @@ export let jsonEditorProps: any = {};
     ];
   }
 
-  function getExplicitNodeIcon(node: any): string | null {
+  function getConfiguredNodeIcon(node: any): string | null {
     const type = getNodeType(node);
 
     if (type === "logo") return null;
@@ -1177,6 +1234,16 @@ export let jsonEditorProps: any = {};
     return null;
   }
 
+  // Path delle icone che hanno fallito il caricamento: per questi nodi si usa
+  // la pallina di fallback invece di uno sprite vuoto.
+  const failedIconPaths = new Set<string>();
+
+  function getExplicitNodeIcon(node: any): string | null {
+    const path = normalizeAssetPath(getConfiguredNodeIcon(node));
+    if (!path || failedIconPaths.has(path)) return null;
+    return path;
+  }
+
   const textureLoader = new THREE.TextureLoader();
   const textureCache = new Map<string, THREE.Texture>();
 
@@ -1186,44 +1253,36 @@ export let jsonEditorProps: any = {};
     const value = path.trim();
     if (!value) return null;
 
-    // URL assoluti esterni
-    if (/^https?:\/\//i.test(value)) {
+    // URL assoluti esterni, data URL e blob URL restano invariati
+    if (/^(https?:\/\/|data:image\/|blob:)/i.test(value)) {
       return value;
     }
 
-    // Data URL base64
-    if (/^data:image\//i.test(value)) {
-      return value;
+    // Path locali: sono relativi alla cartella static/ e vanno serviti sotto
+    // il base path dell'app ("" in dev, "/KliqueASP" su GitHub Pages).
+    const relative = value.replace(/^\/+/, "");
+    const baseNoSlash = base.replace(/^\/+/, "");
+
+    // Compatibilità con config che includono già il base path
+    // (es. "KliqueASP/assets/...").
+    if (baseNoSlash && relative.startsWith(`${baseNoSlash}/`)) {
+      return `/${relative}`;
     }
 
-    // Blob URL
-    if (/^blob:/i.test(value)) {
-      return value;
-    }
-
-    // Path assoluto già valido
-    if (value.startsWith("/")) {
-      return value;
-    }
-
-    // Path relativo locale
-    return "/" + value;
+    return `${base}/${relative}`;
   }
 
-  function getTexture(path: string | undefined | null) {
-    const safePath = normalizeAssetPath(path);
-
-    if (!safePath) return null;
-
+  function getTexture(safePath: string) {
     if (!textureCache.has(safePath)) {
       const tex = textureLoader.load(
         safePath,
-        () => {
-          refreshNodeVisuals();
-        },
+        undefined,
         undefined,
         (err) => {
           console.warn("❌ Texture non caricabile:", safePath, err);
+          failedIconPaths.add(safePath);
+          textureCache.delete(safePath);
+          rebuildNodeObjects();
         }
       );
 
@@ -1237,18 +1296,17 @@ export let jsonEditorProps: any = {};
   const R = GRAPH_CONFIG.node.ring;
   const ringGeometry = new THREE.RingGeometry(R.innerRadius, R.outerRadius, R.segments);
 
-  function makeIconSprite(
-    node: any,
-    size = 14,
-    opacity = 1,
-    iconPath: string | null = getExplicitNodeIcon(node)
-  ) {
+  // Geometrie condivise della pallina di fallback.
+  const ballGlowGeometry = new THREE.SphereGeometry(4.1, 24, 24);
+  const ballCoreGeometry = new THREE.SphereGeometry(2.65, 32, 32);
+  const ballHighlightGeometry = new THREE.SphereGeometry(0.75, 16, 16);
+
+  function makeIconSprite(tex: THREE.Texture, size = 14) {
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
-        map: getTexture(iconPath),
+        map: tex,
         transparent: true,
-        depthWrite: false,
-        opacity,
+        depthWrite: false
       })
     );
 
@@ -1256,35 +1314,32 @@ export let jsonEditorProps: any = {};
     return sprite;
   }
 
-  function makeFallbackNodeBall(node: any, opacity = 1) {
+  function makeFallbackNodeBall(node: any) {
     const group = new THREE.Group();
     const color = new THREE.Color(getDeterministicFallbackColor(node));
 
     const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(4.1, 24, 24),
+      ballGlowGeometry,
       new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: Math.min(0.18, opacity * 0.18),
         depthWrite: false
       })
     );
 
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(2.65, 32, 32),
+      ballCoreGeometry,
       new THREE.MeshBasicMaterial({
         color,
-        transparent: true,
-        opacity: Math.min(1, opacity)
+        transparent: true
       })
     );
 
     const highlight = new THREE.Mesh(
-      new THREE.SphereGeometry(0.75, 16, 16),
+      ballHighlightGeometry,
       new THREE.MeshBasicMaterial({
         color: "#ffffff",
         transparent: true,
-        opacity: Math.min(0.55, opacity * 0.55),
         depthWrite: false
       })
     );
@@ -1295,16 +1350,14 @@ export let jsonEditorProps: any = {};
     group.add(core);
     group.add(highlight);
 
-    return group;
+    return { group, glow, core, highlight };
   }
 
-  function makeRing(color: string, opacity = 1) {
+  function makeRing() {
     const ring = new THREE.Mesh(
       ringGeometry,
       new THREE.MeshBasicMaterial({
-        color,
         transparent: true,
-        opacity: Math.min(0.95, opacity),
         side: THREE.DoubleSide,
         depthWrite: false,
       })
@@ -1315,7 +1368,13 @@ export let jsonEditorProps: any = {};
     return ring;
   }
 
-  function makeLabel(text: string, opacity = 1) {
+  // Le texture delle label dipendono solo dal testo: le riusiamo.
+  const labelTextureCache = new Map<string, THREE.CanvasTexture>();
+
+  function getLabelTexture(text: string) {
+    let texture = labelTextureCache.get(text);
+    if (texture) return texture;
+
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d")!;
     const L = GRAPH_CONFIG.node.label;
@@ -1328,15 +1387,21 @@ export let jsonEditorProps: any = {};
     ctx.fillStyle = "white";
     ctx.fillText(text, 10, 26);
 
-    const texture = new THREE.CanvasTexture(canvas);
+    texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    labelTextureCache.set(text, texture);
+
+    return texture;
+  }
+
+  function makeLabel(text: string) {
+    const L = GRAPH_CONFIG.node.label;
 
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
-        map: texture,
+        map: getLabelTexture(text),
         transparent: true,
-        depthWrite: false,
-        opacity,
+        depthWrite: false
       })
     );
 
@@ -1346,32 +1411,67 @@ export let jsonEditorProps: any = {};
 
   function makeNodeObject(node: any) {
     const group = new THREE.Group();
-    const o = opacityForNode(node.id);
 
     const iconPath = getExplicitNodeIcon(node);
     const tex = iconPath ? getTexture(iconPath) : null;
 
+    let icon: THREE.Sprite | null = null;
+    let ball: ReturnType<typeof makeFallbackNodeBall> | null = null;
+
     // 🔹 ICONA se disponibile/configurata
     if (tex) {
-      group.add(makeIconSprite(node, GRAPH_CONFIG.node.iconSize, o, iconPath));
+      icon = makeIconSprite(tex, GRAPH_CONFIG.node.iconSize);
+      group.add(icon);
     } else {
       // 🔹 fallback visiva node-like: pallina 3D pulita, senza iniziali
-      group.add(makeFallbackNodeBall(node, o));
+      ball = makeFallbackNodeBall(node);
+      group.add(ball.group);
     }
 
     // 🔹 ring sempre
-    group.add(makeRing(colorAccessor(node), o));
+    const ring = makeRing();
+    group.add(ring);
 
     // 🔹 label
-    const label = makeLabel(node.label, Math.max(0.18, o));
-    const L = GRAPH_CONFIG.node.label;
-    label.position.y = L.offsetY;
+    const label = makeLabel(node.label);
+    label.position.y = GRAPH_CONFIG.node.label.offsetY;
     group.add(label);
+
+    group.userData.kq = { icon, ball, ring, label };
+    applyNodeVisual(node, group);
 
     return group;
   }
 
+  // Aggiorna colore/opacità di un oggetto già creato, senza ricostruirlo.
+  function applyNodeVisual(node: any, obj: any) {
+    const kq = obj?.userData?.kq;
+    if (!kq) return;
+
+    const o = opacityForNode(node.id);
+
+    kq.ring.material.color.set(colorAccessor(node));
+    kq.ring.material.opacity = Math.min(0.95, o);
+
+    if (kq.icon) kq.icon.material.opacity = o;
+
+    if (kq.ball) {
+      kq.ball.glow.material.opacity = Math.min(0.18, o * 0.18);
+      kq.ball.core.material.opacity = Math.min(1, o);
+      kq.ball.highlight.material.opacity = Math.min(0.55, o * 0.55);
+    }
+
+    kq.label.material.opacity = Math.max(0.18, o);
+  }
+
   function refreshNodeVisuals() {
+    for (const node of data?.nodes ?? []) {
+      applyNodeVisual(node, node.__threeObj);
+    }
+  }
+
+  // Ricostruzione completa (solo quando cambia la scelta icona/fallback).
+  function rebuildNodeObjects() {
     graph3D?.nodeThreeObject((node: any) => makeNodeObject(node));
   }
 
@@ -1453,11 +1553,7 @@ export let jsonEditorProps: any = {};
     const node = data.nodes.find((n: any) => n.id === id);
     if (!node) return;
 
-    const degree = data.links.filter((l: any) => {
-      const s = getLinkEndId(l.source);
-      const t = getLinkEndId(l.target);
-      return s === id || t === id;
-    }).length;
+    const degree = neighborMap.get(id)?.size ?? 0;
 
     selectedNode = { ...node, degree };
     updateSelectedDetails(id);
@@ -1491,54 +1587,64 @@ export let jsonEditorProps: any = {};
     refreshNodeVisuals();
   }
 
-  function searchNode(q: string) {
-    const text = q.trim().toLowerCase();
-    if (!text) return;
-
-    console.log("🔍 SEARCH:", text);
-
-    const node = originalData.nodes.find((n: any) =>
-      n.label.toLowerCase().includes(text)
-    );
-
-    console.log("🔍 FOUND NODE:", node);
-
-    if (!node) {
-      console.warn("❌ Nodo non trovato");
-      return;
-    }
-
-    const id = node.id;
-
-    console.log("🧠 ID:", id);
+  // Seleziona id come nuovo nodo radice (click, ricerca, history, clique).
+  function selectRoot(id: string, historyMode: "start" | "truncate" = "start") {
+    const node = getNodeById(id);
+    if (!node) return;
 
     rootSelectedId = id;
     selectedId = id;
     highlightedNeighbors = new Set();
 
-    startHistory(node.id,node.label);
-
-    const isVisible = data.nodes.find((n: any) => n.id === id);
-    console.log("👁️ VISIBILE PRIMA?", !!isVisible);
-
-    if (!isVisible) {
-      console.log("♻️ RECOMPUTE GRAPH...");
-      recomputeGraphData();
-    }
-
-    console.log("📊 NODO DOPO FILTER:", data.nodes.find((n: any) => n.id === id));
+    if (historyMode === "start") startHistory(node.id, node.label);
+    else truncateHistoryTo(id);
 
     focusNode(id);
     selectNode(id);
     refreshNodeVisuals();
   }
 
-  const toolbarIcon = {
-    src: GRAPH_CONFIG.ui?.toolbar?.icon?.src || "/PsychologyHistoryGraph/icon.png",
-    width: GRAPH_CONFIG.ui?.toolbar?.icon?.width ?? 28,
-    height: GRAPH_CONFIG.ui?.toolbar?.icon?.height ?? 28,
-    marginRight: GRAPH_CONFIG.ui?.toolbar?.icon?.marginRight ?? 6
-  };
+  function selectSearchResult(node: any) {
+    if (!node) {
+      searchMessage = "Nessun nodo trovato";
+      return;
+    }
+
+    // Un nodo nascosto da filtri/timeline non può essere selezionato:
+    // lo segnaliamo invece di lasciare una selezione invisibile.
+    if (!getNodeById(node.id)) {
+      searchMessage = `"${node.label}" è nascosto dai filtri o dalla timeline correnti`;
+      return;
+    }
+
+    searchMessage = "";
+    selectRoot(node.id);
+  }
+
+  function searchNode(q: string) {
+    const text = q.trim().toLowerCase();
+    if (!text || !originalData) return;
+
+    // Priorità: match esatto > prefisso > sottostringa; a parità, nodi visibili.
+    const rank = (n: any) => {
+      const label = n.label.toLowerCase();
+      const score = label === text ? 3 : label.startsWith(text) ? 2 : label.includes(text) ? 1 : 0;
+      return score * 2 + (getNodeById(n.id) ? 1 : 0);
+    };
+
+    let best: any = null;
+    let bestScore = 0;
+
+    for (const n of originalData.nodes) {
+      const score = rank(n);
+      if (score > bestScore) {
+        best = n;
+        bestScore = score;
+      }
+    }
+
+    selectSearchResult(bestScore >= 2 ? best : null);
+  }
 
   function resetView() {
     rootSelectedId = null;
@@ -1549,6 +1655,7 @@ export let jsonEditorProps: any = {};
     cliqueNodes = new Set();
     suggestions = [];
     showSuggestions = false;
+    searchMessage = "";
     clearHistory();
 
     selectedTypes = new Set();
@@ -1586,27 +1693,67 @@ export let jsonEditorProps: any = {};
   }
 
   // ---------------- ASP ----------------
-  const ASP_PROGRAM_DEFAULT = `
-{ in(V) : node(V) }.
+  // Modalità di enumerazione (solver.cliqueMode):
+  // - "maximal": tutte le clique massimali (non estendibili) -> default
+  // - "all":     tutte le clique, incluse le sotto-clique (--opt-mode=enum);
+  //              è il comportamento con cui sono stati prodotti i CSV in results/
+  // - "maximum": solo le clique di cardinalità massima (--opt-mode=optN)
+  type CliqueMode = "maximal" | "all" | "maximum";
 
-:- in(U), in(V), U < V, not edge(U,V).
+  const CLIQUE_MODES: CliqueMode[] = ["maximal", "all", "maximum"];
 
-#maximize { 1,V : in(V) }.
+  function getCliqueMode(): CliqueMode {
+    const mode = GRAPH_CONFIG.solver?.cliqueMode;
+    return CLIQUE_MODES.includes(mode) ? mode : "maximal";
+  }
 
-#show in/1.
-`;
+  // Stringa ASP quotata: i valori dei gruppi possono contenere spazi, "&",
+  // iniziare con una cifra, ecc. e non sempre sono costanti valide.
+  function aspString(value: string) {
+    const escaped = String(value)
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n");
 
-  const ASP_PROGRAM_FILTERED = (groupAtom: string) => `
-valid(V) :- node(V), group(V, ${groupAtom}).
+    return `"${escaped}"`;
+  }
 
-{ in(V) : valid(V) }.
+  function buildCliqueProgram(mode: CliqueMode, group: string) {
+    const domain = group ? "valid" : "node";
+    const lines: string[] = [];
 
-:- in(U), in(V), U < V, not edge(U,V).
+    if (group) {
+      lines.push(`valid(V) :- node(V), group(V, ${aspString(group)}).`, "");
+    }
 
-#maximize { 1,V : in(V) }.
+    lines.push(
+      `{ in(V) : ${domain}(V) }.`,
+      "",
+      ":- in(U), in(V), U < V, not edge(U,V)."
+    );
 
-#show in/1.
-`;
+    if (mode === "maximal") {
+      // Massimalità: ogni candidato fuori dalla clique deve avere almeno un
+      // membro non adiacente (altrimenti la clique sarebbe estendibile).
+      lines.push(
+        "",
+        `out(W) :- ${domain}(W), in(V), V != W, not edge(W,V).`,
+        `:- ${domain}(W), not in(W), not out(W).`
+      );
+    } else {
+      lines.push("", "#maximize { 1,V : in(V) }.");
+    }
+
+    lines.push("", "#show in/1.");
+
+    return lines.join("\n");
+  }
+
+  function getCliqueModeOptions(mode: CliqueMode): string[] {
+    if (mode === "all") return ["--opt-mode=enum"];
+    if (mode === "maximum") return ["--opt-mode=optN"];
+    return [];
+  }
 
   function buildAspFactsFromCurrentData() {
     if (!data) return { facts: "", reverseIndex: {} };
@@ -1635,12 +1782,8 @@ valid(V) :- node(V), group(V, ${groupAtom}).
       const idx = indexMap.get(node.id);
       if (!idx) continue;
 
-      const groups = extractGroups(node);
-      if (!groups.length) continue;
-
-      for (const group of groups) {
-        const atom = atomize(group);
-        facts += `group(${idx},${atom}).\n`;
+      for (const group of new Set(extractGroups(node))) {
+        facts += `group(${idx},${aspString(group)}).\n`;
       }
     }
 
@@ -1661,9 +1804,65 @@ valid(V) :- node(V), group(V, ${groupAtom}).
     return { facts, reverseIndex };
   }
 
+  // Invia un programma al worker e attende il risultato JSON di clingo.
+  function callClingo(program: string, options: string[]): Promise<any> {
+    return new Promise((resolve) => {
+      const cleanup = () => {
+        clingoWorker.removeEventListener("message", onMessage);
+        clingoWorker.removeEventListener("error", onError);
+      };
+
+      const onMessage = (e: MessageEvent) => {
+        const msg = e.data;
+
+        // La risposta a "init" è null: non è il risultato di questo run.
+        if (!msg || typeof msg !== "object" || !("Result" in msg)) return;
+
+        cleanup();
+        resolve(msg);
+      };
+
+      const onError = (e: ErrorEvent) => {
+        cleanup();
+        resolve({ Result: "ERROR", Error: e.message || "Clingo worker error" });
+      };
+
+      clingoWorker.addEventListener("message", onMessage);
+      clingoWorker.addEventListener("error", onError);
+
+      clingoWorker.postMessage({
+        type: "run",
+        args: [program, 0, options]
+      });
+    });
+  }
+
+  function parseWitnessCliques(witnesses: any[], reverseIndex: Record<number, string>) {
+    const seen = new Set<string>();
+    const cliques: string[][] = [];
+
+    for (const w of witnesses ?? []) {
+      const names = (w?.Value ?? [])
+        .map((atom: string) => /^in\((\d+)\)$/.exec(atom))
+        .filter(Boolean)
+        .map((m: RegExpExecArray) => reverseIndex[Number(m[1])])
+        .filter(Boolean) as string[];
+
+      if (names.length <= 2) continue;
+
+      // Con --opt-mode=optN lo stesso modello ottimo può comparire due volte.
+      const key = [...names].sort().join("\u0000");
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      cliques.push(names);
+    }
+
+    return cliques;
+  }
+
   async function runMaximumClique() {
-    console.log("🔵 [CLIQUE] Starting computation on FILTERED graph...");
-    console.time("CLIQUE_TIME");
+    if (solverRunning || !clingoWorker) return;
 
     if (!data || !data.nodes?.length) {
       console.warn("⚠️ No visible nodes. Aborting clique computation.");
@@ -1677,165 +1876,94 @@ valid(V) :- node(V), group(V, ${groupAtom}).
       return;
     }
 
-    let program: string;
-
-    if (!selectedGroup) {
-      program = ASP_PROGRAM_DEFAULT;
-    } else {
-      const atom = atomize(selectedGroup);
-      program = ASP_PROGRAM_FILTERED(atom);
-    }
-
+    const mode = getCliqueMode();
+    const program = buildCliqueProgram(mode, selectedGroup);
     const fullProgram = facts.trim() + "\n\n" + program.trim() + "\n";
+
+    solverRunning = true;
+    solverError = "";
+
     const t0 = performance.now();
+    const result = await callClingo(fullProgram, getCliqueModeOptions(mode));
+    const t1 = performance.now();
 
-    return new Promise<void>((resolve) => {
-      const handler = (e: MessageEvent) => {
-        const msg = e.data;
+    solverRunning = false;
 
-        if (msg?.Result === "ERROR") {
-          console.error("❌ CLINGO ERROR:", msg.Error);
-          console.timeEnd("CLIQUE_TIME");
-          clingoWorker.removeEventListener("message", handler);
-          resolve();
-          return;
-        }
+    let foundCliques: string[][] = [];
 
-        if (!msg?.Call?.[0]?.Witnesses) return;
-
-        const t1 = performance.now();
-        const witnesses = msg.Call[0].Witnesses;
-
-        const foundCliques: string[][] = [];
-
-        for (const w of witnesses) {
-          const ids = w.Value
-            .filter((v: string) => v.startsWith("in("))
-            .map((atom: string) => {
-              const m = atom.match(/in\((\d+)\)/);
-              return m ? parseInt(m[1]) : null;
-            })
-            .filter(Boolean) as number[];
-
-          const names = ids
-            .map((id) => reverseIndex[id])
-            .filter(Boolean);
-
-          if (names.length > 2) {
-            foundCliques.push(names);
-          }
-        }
-
-        if (!foundCliques.length) {
-          console.warn("⚠️ No clique > size 2 found in filtered graph");
-
-          maximumCliques = [];
-          allCliques = [];
-
-          solverStats = {
-            totalCliques: 0,
-            maxSize: 0,
-            histogram: new Map<number, number>(),
-            timeMs: t1 - t0,
-            nodesCount: data.nodes.length,
-            linksCount: data.links.length,
-            datasetMode: "unified",
-            periodLabel: `${currentStart}–${currentEnd}`
-          };
-
-          cliqueNodes = new Set();
-          showSolverPanel = true;
-
-          console.timeEnd("CLIQUE_TIME");
-          clingoWorker.removeEventListener("message", handler);
-          resolve();
-          return;
-        }
-
-        foundCliques.sort((a, b) => b.length - a.length);
-
-        const maxSize = foundCliques[0].length;
-        const maxCliques = foundCliques.filter(c => c.length === maxSize);
-
-        console.log("🟢 Maximum Clique(s) on FILTERED graph: size =", maxSize);
-        maxCliques.forEach((c, i) => console.log(`  Max ${i + 1}:`, c));
-
-        console.log("⚪ Other Cliques (size > 1):");
-        foundCliques
-          .filter(c => c.length < maxSize)
-          .forEach((c, i) => console.log(`  Clique ${i + 1} (size=${c.length}):`, c));
-
-        const hist = new Map<number, number>();
-        for (const c of foundCliques) {
-          hist.set(c.length, (hist.get(c.length) ?? 0) + 1);
-        }
-
-        maximumCliques = maxCliques;
-        allCliques = foundCliques;
-
-        solverStats = {
-          totalCliques: foundCliques.length,
-          maxSize,
-          histogram: hist,
-          timeMs: t1 - t0,
-          nodesCount: data.nodes.length,
-          linksCount: data.links.length,
-          datasetMode: "unified",
-          periodLabel: `${currentStart}–${currentEnd}`
-        };
-
-        showSolverPanel = true;
-        cliqueNodes = new Set(maxCliques[0]);
-
-        console.timeEnd("CLIQUE_TIME");
-
-        clingoWorker.removeEventListener("message", handler);
-        resolve();
-      };
-
-      clingoWorker.addEventListener("message", handler);
-
-      clingoWorker.postMessage({
-        type: "run",
-        args: [
-          fullProgram,
-          0,
-          ["--opt-mode=enum"]
-        ]
-      });
-    });
-  }
-
-  function computeGroups() {
-    const set = new Set<string>();
-
-    for (const node of originalData?.nodes ?? []) {
-      extractGroups(node).forEach(g => set.add(g));
+    if (result?.Result === "ERROR") {
+      console.error("❌ CLINGO ERROR:", result.Error);
+      solverError = result.Error || "Clingo error";
+    } else {
+      foundCliques = parseWitnessCliques(result?.Call?.[0]?.Witnesses, reverseIndex);
     }
 
-    availableGroups = Array.from(set).sort();
+    foundCliques.sort((a, b) => b.length - a.length);
+
+    const maxSize = foundCliques[0]?.length ?? 0;
+
+    // In modalità "maximum" clingo stampa anche i modelli intermedi non ottimi.
+    if (mode === "maximum") {
+      foundCliques = foundCliques.filter((c) => c.length === maxSize);
+    }
+
+    const maxCliques = foundCliques.filter((c) => c.length === maxSize);
+
+    const hist = new Map<number, number>();
+    for (const c of foundCliques) {
+      hist.set(c.length, (hist.get(c.length) ?? 0) + 1);
+    }
+
+    console.log(
+      `🟢 [CLIQUE] mode=${mode}${selectedGroup ? ` group=${selectedGroup}` : ""}: ` +
+      `${foundCliques.length} cliques, max size ${maxSize}, ${(t1 - t0).toFixed(1)} ms`
+    );
+
+    maximumCliques = maxCliques;
+    allCliques = foundCliques;
+
+    solverStats = {
+      totalCliques: foundCliques.length,
+      maxSize,
+      histogram: hist,
+      timeMs: t1 - t0,
+      nodesCount: data.nodes.length,
+      linksCount: data.links.length,
+      periodLabel: `${currentStart}–${currentEnd}`,
+      cliqueMode: mode
+    };
+
+    showSolverPanel = true;
+    cliqueNodes = new Set(maxCliques[0] ?? []);
+    refreshNodeVisuals();
   }
 
   // ---------------- LIFECYCLE ----------------
+  let destroyed = false;
+
   onMount(() => {
     (async () => {
       const ForceGraph3D = (await import("3d-force-graph")).default;
 
-      computeGroups();
+      // Il componente può essere smontato prima che l'import termini
+      // (es. "Apply JSON" ripetuto nella Sandbox).
+      if (destroyed) return;
 
-      clingoWorker = new Worker(`${base}/clingo/clingo.web.worker.js`, {
-        type: "module"
-      });
+      if (solverEnabled) {
+        clingoWorker = new Worker(`${base}/clingo/clingo.web.worker.js`, {
+          type: "module"
+        });
 
-      clingoWorker.onerror = (e) =>
-        console.error("❌ [CLINGO] Worker failed to load:", e.message, e);
+        clingoWorker.onerror = (e) =>
+          console.error("❌ [CLINGO] Worker failed to load:", e.message, e);
 
-      clingoWorker.postMessage({
-        type: "init",
-        wasmUrl: `${base}/clingo/clingo.wasm`
-      });
+        clingoWorker.postMessage({
+          type: "init",
+          wasmUrl: `${base}/clingo/clingo.wasm`
+        });
+      }
 
-      graph3D = ForceGraph3D()(container)
+      graph3D = new ForceGraph3D(container)
         .nodeId("id")
         .nodeLabel("label")
         .backgroundColor(GRAPH_CONFIG.graph.backgroundColor)
@@ -1844,18 +1972,11 @@ valid(V) :- node(V), group(V, ${groupAtom}).
         .linkWidth(GRAPH_CONFIG.graph.linkWidth);
 
       graph3D.nodeThreeObjectExtend(false);
-      graph3D.nodeThreeObject((node: any) => makeNodeObject(node));
+      rebuildNodeObjects();
 
       graph3D.onNodeClick((node: any) => {
-        rootSelectedId = node.id;
-        selectedId = node.id;
-        highlightedNeighbors = new Set();
         showSuggestions = false;
-        startHistory(node.id,node.label);
-        focusNode(node.id);
-        selectNode(node.id);
-        updateSelectedDetails(node.id);
-        refreshNodeVisuals();
+        selectRoot(node.id);
       });
 
       const F = GRAPH_CONFIG.forces;
@@ -1866,11 +1987,11 @@ valid(V) :- node(V), group(V, ${groupAtom}).
         .d3Force("link", forceLink().distance(F.linkDistance).strength(F.linkStrength));
 
       loadDataset();
-      computeGroups();
     })();
   });
 
   onDestroy(() => {
+    destroyed = true;
     graph3D?._destructor?.();
     clingoWorker?.terminate();
   });
@@ -2025,13 +2146,15 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 
 <!-- TOOLBAR -->
 <div class="toolbar">
-  <button on:click={runMaximumClique}>
-    Run Maximum Clique
-  </button>
+  {#if solverEnabled}
+    <button on:click={runMaximumClique} disabled={solverRunning}>
+      {solverRunning ? "Running…" : "Run Maximum Clique"}
+    </button>
 
-  <button on:click={clearClique}>
-    Clear Clique
-  </button>
+    <button on:click={clearClique}>
+      Clear Clique
+    </button>
+  {/if}
 
   {#if JsonEditor}
   <button
@@ -2042,22 +2165,15 @@ valid(V) :- node(V), group(V, ${groupAtom}).
   </button>
 {/if}
 
-<!--<img
-  src={toolbarIcon.src}
-  alt="Icon"
-  style={`
-    width:${toolbarIcon.width}px;
-    height:${toolbarIcon.height}px;
-    margin-right:${toolbarIcon.marginRight}px;
-  `}
-/>-->
-
   <div class="search-wrap">
     <input
       type="text"
       placeholder="Search node..."
       bind:value={query}
-      on:input={() => rankCandidates(query)}
+      on:input={() => {
+        searchMessage = "";
+        rankCandidates(query);
+      }}
       on:keydown={(e) => {
         if (e.key === "Enter") {
           showSuggestions = false;
@@ -2071,10 +2187,17 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 
     {#if showSuggestions}
       <div class="autocomplete">
-        {#each suggestions as s}
-          <div class="autocomplete-item" on:click={() => chooseSuggestion(s)}>{s}</div>
+        {#each suggestions as s (s.id)}
+          <button
+            type="button"
+            class="autocomplete-item"
+            on:mousedown|preventDefault
+            on:click={() => chooseSuggestion(s)}
+          >{s.label}</button>
         {/each}
       </div>
+    {:else if searchMessage}
+      <div class="search-message" role="status">{searchMessage}</div>
     {/if}
   </div>
 
@@ -2087,7 +2210,7 @@ valid(V) :- node(V), group(V, ${groupAtom}).
   </div>
 </div>
 
-{#if GRAPH_CONFIG.features.filters}
+{#if filtersEnabled}
   <div class="filter-card">
     <strong>Filters</strong>
 
@@ -2151,19 +2274,12 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 <HistoryPanel
   {history}
   onClear={clearHistory}
-  onJumpTo={(id) => {
-    rootSelectedId = id;
-    selectedId = id;
-    highlightedNeighbors = new Set();
-    truncateHistoryTo(id);
-    focusNode(id);
-    selectNode(id);
-    refreshNodeVisuals();
-  }}
+  onJumpTo={(id) => selectRoot(id, "truncate")}
 />
 
 {#if GRAPH_CONFIG.features.timeline}
 <TimelineSlider
+  uiConfig={UI.timeline}
   min={GRAPH_CONFIG.timeline.start}
   max={GRAPH_CONFIG.timeline.end}
   start={currentStart}
@@ -2181,9 +2297,12 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 />
 {/if}
 
+{#if solverEnabled}
 <SolverPanel
+  config={GRAPH_CONFIG.solver}
   open={showSolverPanel}
   stats={solverStats}
+  error={solverError}
   maximumCliques={maximumCliques}
   allCliques={allCliques}
   selectedNodeId={selectedId}
@@ -2197,27 +2316,12 @@ valid(V) :- node(V), group(V, ${groupAtom}).
 
     cliqueNodes = new Set(clique);
 
-    const firstNodeId = clique[0];
-
-    if (firstNodeId) {
-      rootSelectedId = firstNodeId;
-      selectedId = firstNodeId;
-      highlightedNeighbors = new Set();
-
-      const node = getNodeById(firstNodeId);
-
-      if (node) {
-        startHistory(node.id, node.label);
-      }
-
-      focusNode(firstNodeId);
-      selectNode(firstNodeId);
-      updateSelectedDetails(firstNodeId);
-    }
+    if (clique[0]) selectRoot(clique[0]);
 
     refreshNodeVisuals();
   }}
 />
+{/if}
 </div>
 
 <style>
@@ -2272,6 +2376,14 @@ valid(V) :- node(V), group(V, ${groupAtom}).
   }
 
   .autocomplete-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 0;
+    color: inherit;
+    font-family: inherit;
     padding: var(--autocomplete-item-padding);
     cursor: pointer;
     font-size: var(--autocomplete-font-size);
@@ -2286,8 +2398,24 @@ valid(V) :- node(V), group(V, ${groupAtom}).
     border-top: none;
   }
 
-  .autocomplete-item:hover {
+  .autocomplete-item:hover,
+  .autocomplete-item:focus-visible {
     background: var(--autocomplete-hover, rgba(56, 189, 248, 0.2));
+  }
+
+  .search-message {
+    position: absolute;
+    top: calc(100% + var(--autocomplete-offset-y));
+    left: 0;
+    width: var(--search-width);
+    max-width: var(--search-max-width);
+    box-sizing: border-box;
+    padding: var(--autocomplete-item-padding);
+    font-size: var(--autocomplete-font-size);
+    background: var(--autocomplete-bg);
+    border-radius: var(--autocomplete-radius);
+    box-shadow: var(--autocomplete-shadow);
+    z-index: var(--autocomplete-z);
   }
 
   .zoom-inline {

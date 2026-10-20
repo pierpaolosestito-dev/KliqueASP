@@ -92,6 +92,16 @@ The solver panel reports:
 
 Detected cliques can be highlighted directly in the 3D graph.
 
+The set of cliques returned by the solver is controlled by `solver.cliqueMode` in the configuration:
+
+| `cliqueMode` | Returned cliques | clingo options |
+|---|---|---|
+| `"maximal"` (default) | every maximal (non-extendable) clique | — |
+| `"all"` | every clique, including sub-cliques of larger ones | `--opt-mode=enum` |
+| `"maximum"` | only cliques of maximum cardinality | `--opt-mode=optN` |
+
+Only cliques with more than two nodes are reported. The CSV files in `static/assets/PsychologyHistoryGraph/results/` were produced with the `"all"` semantics.
+
 ---
 
 ## 🧬 Data-Driven Design
@@ -230,11 +240,13 @@ Example:
         "startField": "$.data.active_from",
         "endField": "$.data.active_to"
       },
-      "macroAreaField": "$.data.affiliations[*].group"
+      "group": "$.data.affiliations[*].group"
     }
   }
 }
 ```
+
+The legacy keys `macroAreaField` (node types), `filters.macroAreas` and `solver.features.macroFilter` are still accepted as aliases of `group`, `filters.groups` and `solver.features.groupFilter`.
 
 This configuration means that:
 
@@ -294,14 +306,27 @@ edge(1,3).
 edge(3,1).
 ```
 
-When a semantic filter is selected, the framework also generates facts such as:
+Semantic groups extracted through the `group` mapping become `group/2` facts, with the group value as an ASP string:
 
 ```prolog
-macro(1,psychology).
-macro(3,psychology).
+group(1,"Psicologia").
+group(3,"Psicologia").
 ```
 
-The default maximum clique encoding is:
+The default encoding (`cliqueMode: "maximal"`) enumerates maximal cliques:
+
+```prolog
+{ in(V) : node(V) }.
+
+:- in(U), in(V), U < V, not edge(U,V).
+
+out(W) :- node(W), in(V), V != W, not edge(W,V).
+:- node(W), not in(W), not out(W).
+
+#show in/1.
+```
+
+With `cliqueMode: "all"` or `"maximum"` the maximality rules are replaced by the optimization statement, and the solver is run with `--opt-mode=enum` or `--opt-mode=optN` respectively:
 
 ```prolog
 { in(V) : node(V) }.
@@ -313,19 +338,22 @@ The default maximum clique encoding is:
 #show in/1.
 ```
 
-When a semantic group is selected, the search space is restricted:
+When a semantic group is selected in the solver panel, the search space is restricted to the nodes of that group (here with the maximal encoding):
 
 ```prolog
-valid(V) :- node(V), macro(V, psychology).
+valid(V) :- node(V), group(V, "Psicologia").
 
 { in(V) : valid(V) }.
 
 :- in(U), in(V), U < V, not edge(U,V).
 
-#maximize { 1,V : in(V) }.
+out(W) :- valid(W), in(V), V != W, not edge(W,V).
+:- valid(W), not in(W), not out(W).
 
 #show in/1.
 ```
+
+Edges are treated as undirected: duplicated `A–B` / `B–A` entries in the dataset are merged when the graph is loaded.
 
 The answer sets are mapped back to graph node identifiers and highlighted in the 3D visualization.
 
@@ -461,11 +489,11 @@ The GitHub Pages deployment exposes three entry points:
   Shows the KliqueASP landing graph. If no dataset is loaded, the framework displays the built-in KliqueASP easter egg graph.
 
 - **KliqueASP Sandbox**  
-  https://pierpaolosestito-dev.github.io/KliqueASP/KliqueASP/
+  https://pierpaolosestito-dev.github.io/KliqueASP/Sandbox/
 
   Provides an interactive sandbox where users can edit both the graph configuration JSON and the dataset JSON directly from the browser, then reload the visualization.
 
 - **Psychology History Graph**  
-  https://pierpaolosestito-dev.github.io/KliqueASP/KliqueASP/PsychologyHistoryGraph/
+  https://pierpaolosestito-dev.github.io/KliqueASP/PsychologyHistoryGraph/
 
   Loads the static case-study dataset and configuration for the Italian Psychology History Knowledge Graph.
