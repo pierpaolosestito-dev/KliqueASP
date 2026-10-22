@@ -14,7 +14,8 @@ const config = {
 		}),
 
 		paths: {
-			base: dev ? '' : '/KliqueASP'
+			base: dev ? '' : '/KliqueASP',
+			relative: false
 		}
 	}
 };

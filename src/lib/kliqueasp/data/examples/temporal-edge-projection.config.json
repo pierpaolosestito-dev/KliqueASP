@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 2,
+  "features": {
+    "timeline": true
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type",
+      "groupFields": ["$.groups[*]"]
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.validFrom",
+        "toField": "$.validTo"
+      }
+    }
+  }
+}

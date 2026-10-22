@@ -1,0 +1,742 @@
+{
+    "metadata":  {
+                     "name":  "Davis Southern Women",
+                     "source":  "NetworkX 3.7 davis_southern_women_graph source, derived from Davis, Gardner and Gardner (1941) via UCINET",
+                     "sourceUrl":  "https://raw.githubusercontent.com/networkx/networkx/networkx-3.7/networkx/generators/social.py",
+                     "women":  18,
+                     "events":  14,
+                     "attendanceRecords":  89,
+                     "transformation":  "The source bipartite incidence relation is made explicit as an undirected edge with type attendance; no event dates or attendance times are added.",
+                     "note":  "This is the conventional 18 by 14, 89-incidence version; interpretations and alternative historical reconstructions should be cited and reviewed separately."
+                 },
+    "nodes":  [
+                  {
+                      "id":  "Evelyn Jefferson",
+                      "label":  "Evelyn Jefferson",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Laura Mandeville",
+                      "label":  "Laura Mandeville",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Theresa Anderson",
+                      "label":  "Theresa Anderson",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Brenda Rogers",
+                      "label":  "Brenda Rogers",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Charlotte McDowd",
+                      "label":  "Charlotte McDowd",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Frances Anderson",
+                      "label":  "Frances Anderson",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Eleanor Nye",
+                      "label":  "Eleanor Nye",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Pearl Oglethorpe",
+                      "label":  "Pearl Oglethorpe",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Ruth DeSand",
+                      "label":  "Ruth DeSand",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Verne Sanderson",
+                      "label":  "Verne Sanderson",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Myra Liddel",
+                      "label":  "Myra Liddel",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Katherina Rogers",
+                      "label":  "Katherina Rogers",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Sylvia Avondale",
+                      "label":  "Sylvia Avondale",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Nora Fayette",
+                      "label":  "Nora Fayette",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Helen Lloyd",
+                      "label":  "Helen Lloyd",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Dorothy Murchison",
+                      "label":  "Dorothy Murchison",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Olivia Carleton",
+                      "label":  "Olivia Carleton",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "Flora Price",
+                      "label":  "Flora Price",
+                      "type":  "woman",
+                      "bipartite":  0
+                  },
+                  {
+                      "id":  "E1",
+                      "label":  "E1",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E2",
+                      "label":  "E2",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E3",
+                      "label":  "E3",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E4",
+                      "label":  "E4",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E5",
+                      "label":  "E5",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E6",
+                      "label":  "E6",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E7",
+                      "label":  "E7",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E8",
+                      "label":  "E8",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E9",
+                      "label":  "E9",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E10",
+                      "label":  "E10",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E11",
+                      "label":  "E11",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E12",
+                      "label":  "E12",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E13",
+                      "label":  "E13",
+                      "type":  "event",
+                      "bipartite":  1
+                  },
+                  {
+                      "id":  "E14",
+                      "label":  "E14",
+                      "type":  "event",
+                      "bipartite":  1
+                  }
+              ],
+    "edges":  [
+                  {
+                      "id":  "attendance-001",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E1",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-002",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E2",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-003",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-004",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E4",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-005",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-006",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-007",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-008",
+                      "source":  "Evelyn Jefferson",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-009",
+                      "source":  "Laura Mandeville",
+                      "target":  "E1",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-010",
+                      "source":  "Laura Mandeville",
+                      "target":  "E2",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-011",
+                      "source":  "Laura Mandeville",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-012",
+                      "source":  "Laura Mandeville",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-013",
+                      "source":  "Laura Mandeville",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-014",
+                      "source":  "Laura Mandeville",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-015",
+                      "source":  "Laura Mandeville",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-016",
+                      "source":  "Theresa Anderson",
+                      "target":  "E2",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-017",
+                      "source":  "Theresa Anderson",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-018",
+                      "source":  "Theresa Anderson",
+                      "target":  "E4",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-019",
+                      "source":  "Theresa Anderson",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-020",
+                      "source":  "Theresa Anderson",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-021",
+                      "source":  "Theresa Anderson",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-022",
+                      "source":  "Theresa Anderson",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-023",
+                      "source":  "Theresa Anderson",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-024",
+                      "source":  "Brenda Rogers",
+                      "target":  "E1",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-025",
+                      "source":  "Brenda Rogers",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-026",
+                      "source":  "Brenda Rogers",
+                      "target":  "E4",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-027",
+                      "source":  "Brenda Rogers",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-028",
+                      "source":  "Brenda Rogers",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-029",
+                      "source":  "Brenda Rogers",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-030",
+                      "source":  "Brenda Rogers",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-031",
+                      "source":  "Charlotte McDowd",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-032",
+                      "source":  "Charlotte McDowd",
+                      "target":  "E4",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-033",
+                      "source":  "Charlotte McDowd",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-034",
+                      "source":  "Charlotte McDowd",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-035",
+                      "source":  "Frances Anderson",
+                      "target":  "E3",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-036",
+                      "source":  "Frances Anderson",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-037",
+                      "source":  "Frances Anderson",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-038",
+                      "source":  "Frances Anderson",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-039",
+                      "source":  "Eleanor Nye",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-040",
+                      "source":  "Eleanor Nye",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-041",
+                      "source":  "Eleanor Nye",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-042",
+                      "source":  "Eleanor Nye",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-043",
+                      "source":  "Pearl Oglethorpe",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-044",
+                      "source":  "Pearl Oglethorpe",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-045",
+                      "source":  "Pearl Oglethorpe",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-046",
+                      "source":  "Ruth DeSand",
+                      "target":  "E5",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-047",
+                      "source":  "Ruth DeSand",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-048",
+                      "source":  "Ruth DeSand",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-049",
+                      "source":  "Ruth DeSand",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-050",
+                      "source":  "Verne Sanderson",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-051",
+                      "source":  "Verne Sanderson",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-052",
+                      "source":  "Verne Sanderson",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-053",
+                      "source":  "Verne Sanderson",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-054",
+                      "source":  "Myra Liddel",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-055",
+                      "source":  "Myra Liddel",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-056",
+                      "source":  "Myra Liddel",
+                      "target":  "E10",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-057",
+                      "source":  "Myra Liddel",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-058",
+                      "source":  "Katherina Rogers",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-059",
+                      "source":  "Katherina Rogers",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-060",
+                      "source":  "Katherina Rogers",
+                      "target":  "E10",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-061",
+                      "source":  "Katherina Rogers",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-062",
+                      "source":  "Katherina Rogers",
+                      "target":  "E13",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-063",
+                      "source":  "Katherina Rogers",
+                      "target":  "E14",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-064",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-065",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-066",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-067",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E10",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-068",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-069",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E13",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-070",
+                      "source":  "Sylvia Avondale",
+                      "target":  "E14",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-071",
+                      "source":  "Nora Fayette",
+                      "target":  "E6",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-072",
+                      "source":  "Nora Fayette",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-073",
+                      "source":  "Nora Fayette",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-074",
+                      "source":  "Nora Fayette",
+                      "target":  "E10",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-075",
+                      "source":  "Nora Fayette",
+                      "target":  "E11",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-076",
+                      "source":  "Nora Fayette",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-077",
+                      "source":  "Nora Fayette",
+                      "target":  "E13",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-078",
+                      "source":  "Nora Fayette",
+                      "target":  "E14",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-079",
+                      "source":  "Helen Lloyd",
+                      "target":  "E7",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-080",
+                      "source":  "Helen Lloyd",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-081",
+                      "source":  "Helen Lloyd",
+                      "target":  "E10",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-082",
+                      "source":  "Helen Lloyd",
+                      "target":  "E11",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-083",
+                      "source":  "Helen Lloyd",
+                      "target":  "E12",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-084",
+                      "source":  "Dorothy Murchison",
+                      "target":  "E8",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-085",
+                      "source":  "Dorothy Murchison",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-086",
+                      "source":  "Olivia Carleton",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-087",
+                      "source":  "Olivia Carleton",
+                      "target":  "E11",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-088",
+                      "source":  "Flora Price",
+                      "target":  "E9",
+                      "type":  "attendance"
+                  },
+                  {
+                      "id":  "attendance-089",
+                      "source":  "Flora Price",
+                      "target":  "E11",
+                      "type":  "attendance"
+                  }
+              ]
+}

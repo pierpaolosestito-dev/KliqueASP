@@ -2,9 +2,9 @@
 
 > **Interactive Knowledge Graph exploration meets Answer Set Programming.**
 
-KliqueASP is a browser-based framework for exploring heterogeneous Knowledge Graphs through an interactive 3D interface and client-side **Answer Set Programming (ASP)** reasoning.
+KliqueASP is a browser-based framework for exploring heterogeneous graph datasets through an interactive 3D interface and client-side **Answer Set Programming (ASP)** reasoning.
 
-It lets users load a JSON-labelled graph, filter it visually and semantically, generate ASP facts from the current graph projection, solve a maximum clique task directly in the browser, and inspect the results inside the graph visualization.
+It lets users load a JSON graph, declare optional mappings for its structure and metadata, filter the visible projection, run graph-analysis tasks in the browser, and inspect witnesses in the visualization. The original maximum-clique analysis of the Psychology History Graph remains the case-study baseline; the framework also supports k-plex, k-core, paths, components, typed motifs, constrained modularity communities, integrity checks, and selected counterfactual tasks.
 
 🌐 **Live demo**  
 https://pierpaolosestito-dev.github.io/KliqueASP/PsychologyHistoryGraph/
@@ -50,9 +50,11 @@ It supports:
 
 ### ⏳ Timeline-Aware Projection
 
-Temporal metadata can be extracted from node fields and used to filter the graph dynamically.
+Temporal metadata can be mapped from node fields using `nodeTypes.<type>.timeline` or from schema v2 edge records using `graphMapping.edge.validity.fromField` and `toField`.
 
-The framework supports a **graph-aware timeline mode**, where temporal nodes visible in the selected interval can bring connected contextual nodes into the current projection.
+With `features.timeline: true`, the slider is available when a loaded node type declares both timeline fields or when every schema v2 edge has a valid mapped interval. For edge intervals, the slider bounds are derived from the mapped data unless explicitly configured. An edge remains in the selected projection exactly when its closed validity interval overlaps the selected window; the same time-filtered edge set feeds the 3D view and ASP tasks. The existing **graph-aware timeline mode** for mapped temporal nodes remains available and can bring connected contextual nodes into the projection.
+
+Incomplete or invalid edge intervals do not activate edge-time filtering. The application does not infer temporal fields from familiar node-type names or supply case-study dates to a different graph.
 
 This is useful for datasets where entities such as people, institutions, places, events, or organizations are connected across time.
 
@@ -62,7 +64,7 @@ This is useful for datasets where entities such as people, institutions, places,
 
 KliqueASP can extract semantic groups from nested JSON metadata and automatically expose them as filters.
 
-For example, if a node contains roles, affiliations, disciplines, or groups, these values can be extracted through configuration and used to restrict the reasoning task.
+For example, if a node contains roles, affiliations, disciplines, or groups, these values can be extracted through configuration and used to restrict the reasoning task. Schema v2 can map groups with `graphMapping.node.groupFields`; legacy `nodeTypes.<type>.group` mappings are also supported when declared by the graph configuration.
 
 ---
 
@@ -74,11 +76,17 @@ No dedicated backend is required.
 
 This makes the reasoning workflow portable, inspectable, and reproducible from the client side.
 
+After a completed solve, the panels report the clingo Worker's current and peak WebAssembly linear-memory buffer size since that Worker started. This measures WASM linear memory only; it excludes the Worker JavaScript heap, graph data, DOM, and total browser-process memory.
+
+ASP timing diagnostics are opt-in with `solver.diagnostics.aspTiming: true`. They report clingo's `Time.Total` and `Time.Solve` for the latest single Worker invocation. Their difference is labeled **pre-solving** because it combines program parsing, grounding, and setup; it is not an isolated grounding timer. Composite app analyses may issue several clingo invocations, so this diagnostic describes only the latest invocation, while each result panel's existing elapsed time remains the end-to-end task duration. The option defaults to `false` and does not change the program, solver options, or answer sets.
+
+Detailed ASP statistics are separately opt-in with `solver.diagnostics.aspStats: true`. KliqueASP requests clingo's `--stats=2` only when this flag is enabled, then shows ground-LP atoms and rules (original and simplified), solver variables, choices, and conflicts for the latest invocation. These counters are not aggregated across multi-query analyses. The flag defaults to `false`; the statistics option does not change the answer sets.
+
 ---
 
-### 🔎 Maximum Clique Detection
+### 🔎 Clique Analysis
 
-The current implementation uses maximum clique detection as a representative combinatorial reasoning task.
+Maximum clique detection is the preserved case-study task and a representative combinatorial reasoning task. It shares the current graph projection and visualization with the additional structural ASP tasks described below.
 
 The solver panel reports:
 
@@ -101,6 +109,137 @@ The set of cliques returned by the solver is controlled by `solver.cliqueMode` i
 | `"maximum"` | only cliques of maximum cardinality | `--opt-mode=optN` |
 
 Only cliques with more than two nodes are reported. The CSV files in `static/assets/PsychologyHistoryGraph/results/` were produced with the `"all"` semantics.
+
+On the Psychology History Graph, the current default `"maximal"` profile returns 308 cliques: 255 of size 3, 52 of size 4, and 1 of size 5. Re-running `"all"` through the shipped clingo-WASM worker reproduces the case-study counts: 505 on the full graph, 192 on the person-only projection, 146 for the full Medicina group, and 45 for people in Medicina. These counts use different enumeration semantics and should not be compared as if they were the same query.
+
+The optional `solver.explainCliqueSupports` setting enables positive explanations directly in the ASP answer:
+
+```json
+{
+  "solver": {
+    "explainCliqueSupports": true
+  }
+}
+```
+
+When enabled, selecting a clique shows, for each unordered pair of its nodes, the edge record(s) that witness adjacency, and the 3D view highlights those records. A separate **Download clique witnesses CSV** export records the supported pairs, mapped source edge IDs, and any local record keys generated for records without source IDs; the existing clique CSV stays unchanged. In multigraphs all parallel records are shown, so the explanation includes every mapped record supporting each pair rather than choosing one arbitrarily. Legacy graphs show the supporting node pairs without fabricating edge IDs. The setting is off by default so the existing solver output and cost remain unchanged. This explains why the returned node set is a clique in the input projection; it does not explain why an edge exists or establish a social or historical interpretation.
+
+### 🧩 Structural graph analysis
+
+The structural analysis action supports connected components, weakly and strongly connected components for mapped directed graphs, k-plex, k-core, bounded shortest paths, minimum dominating sets, minimum node/edge separators, and modularity communities on the current visible graph projection.
+
+- **Connected components** partitions the undirected induced graph into disjoint sets under ordinary reachability. It does not optimize or rank components; the group filter computes components of the induced subgraph on that group.
+- **Weakly connected components** partitions a directed induced graph after ignoring arc direction. The ASP encoding derives a symmetric adjacency relation from the mapped directed edges and computes its transitive closure. Group restrictions apply to both endpoints and intermediate nodes. This differs from strong connectivity, which preserves direction in every reachability step.
+- **Strongly connected components** partitions a directed induced graph by mutual reachability: every node in a component can reach every other by following the declared arc direction. It is available only when schema v2 maps the graph as directed. The ASP encoding computes transitive reachability and assigns each node to the smallest indexed node mutually reachable with it; this root is only a canonical component label, not a domain ranking. The group filter restricts both the nodes and the paths used to establish reachability. This task is validated on synthetic directed graphs; the current psychology case study does not supply a directed social relation suitable for interpreting SCCs.
+
+Run `npm run benchmark:strong-components` to check directed chains and cycles with 34, 100, and 250 nodes against an independent Kosaraju implementation. Pass `-- --stress` to include 500-node profiles. The benchmark reports elapsed/solver time, ground atom count, and peak/current WASM linear memory; these synthetic sparse profiles are a scaling check, not a general performance guarantee.
+- **Bounded shortest path** returns one simple path with the fewest edges between chosen endpoints, subject to a maximum length of 100 edges. It follows the graph's declared direction and can restrict path nodes to a configured group. Each step now carries the ID of every visible edge record supporting that adjacency, including parallel records; for legacy graphs without edge IDs it reports the endpoint pair. The 3D view highlights the route records and a separate CSV exports the step witnesses. An opt-in certificate derives the nodes reachable within each bound below the returned path length, proving that no shorter route exists in the selected projection; it can be exported separately and is disabled by default. If no path meets the bound, the same option runs a separate ASP query that returns the bounded reachable sets as a why-not certificate; the original no-route result remains unchanged. Both certificates may add solver time and memory, especially with high path limits. Ties are not all enumerated. Reachability is a topological witness and does not establish influence or causality.
+- The bounded shortest-path encoding derives ASP reachability layers up to the requested limit, takes the goal's first reachable layer as the path length and constructs a witness along increasing shortest-distance layers. This establishes minimality without optimizing over arbitrary node sequences; a successful path query therefore returns `SATISFIABLE` after computing the shortest distance.
+- **Typed path sequence** finds one simple path between chosen endpoints whose edge types match an exact ordered sequence selected in the panel. It requires schema version 2 with a type mapped for every edge. Directed graphs follow the declared arrow; undirected edges can be traversed either way. A group can restrict all path nodes. The result and CSV include the node route and source IDs of every edge record that supports each step. Edge-type labels are matched literally and are not assigned domain meanings by the solver. An opt-in why-not query can run after an empty result: ASP reports the nodes reachable after every exact sequence prefix, respecting direction and group, and exports a separate CSV. If the destination is reachable only when node revisits are allowed, the explanation identifies the simple-path restriction as the blocker; otherwise the first empty prefix shows where typed walk reachability stops. It is a bounded certificate for the declared sequence, not a causal explanation.
+- Run `npm run benchmark:typed-path` to reproduce a small synthetic scaling check for typed paths. It reports graph and sequence sizes, ASP input size, and median grounding-plus-solving time over three runs while requesting one witness. It does not enumerate all paths.
+- Run `npm run benchmark:psychology-path -- 100 3` to compare ASP with independent BFS on a most-distant pair in the psychology graph, using a permissive path bound and three repetitions; append `explain` to measure the opt-in minimality certificate too.
+- Run `npm run benchmark:path-scaling` to profile the one-witness shortest-path query on synthetic 34–500 node layered graphs with exponentially many tied routes; each reported path length is checked against BFS. The benchmark reports ASP input bytes, clingo grounding/solver statistics, clingo timing, and peak WASM linear memory as well as wall time.
+- Run `npm run benchmark:path-scaling:stress` to probe the clingo-WASM worker on a dense 500-node layered graph. On the tested build, layer width 30 (9,060 edges) succeeds, while width 31 (9,672 edges) traps with `memory access out of bounds`; the same worker then fails a trivial query, while a fresh worker succeeds. This stress command intentionally exits nonzero when that failure is reproduced. The threshold is specific to this encoding, clingo-WASM artifact and runtime; it is not a general graph-size limit. The app now replaces a worker after any solver `ERROR` response.
+- Run `npm run benchmark:typed-path-enumeration` for a separate full-enumeration profile on synthetic layered graphs. It verifies the expected model count and `Models.More === "no"` for 16, 64, 256, 1,024 and 4,096 paths, and records clingo total/solve times, grounded atoms/rules, choices and conflicts. A second series holds the answer count at 256 while scaling the candidate domain to 34, 100 and 200 nodes. It tracks both the peak exported WebAssembly linear-memory buffer and the peak resident set size (RSS) of an isolated Node process for each memory profile. In these local runs, RSS ranges from 109.7 MB for 16 paths to 206.5 MB for 4,096; the fixed 256-path profiles range from 149.4 to 150.7 MB across the three graph domains. The RSS run performs one solve without warmup and is separate from timing runs. It includes Node runtime, JavaScript results, WASM and benchmark harness; it is a process-level proxy, not a direct measure of browser Worker memory or JS heap alone. The exported WASM buffer remained at 18,087,936 bytes in these profiles. Node defines `process.resourceUsage().maxRSS` in KiB and notes that RSS includes JavaScript and native/runtime memory; see the [Node.js v22.17.0 process API](https://nodejs.org/download/release/v22.17.0/docs/api/process.html#processresourceusage). The measurement does not change the interactive one-witness task.
+- A minimum **dominating set** selects the fewest candidate nodes so every target node is either selected or adjacent to a selected node. The candidate group and target group are independent: for example, nodes in one group can cover targets in another. An empty target-group selection means every visible node is a target; an empty candidate-group selection means every visible node is eligible. Clicking a solution shows which selected node covers each target, distinguishes self-coverage from adjacency, highlights supporting edge records, and offers a separate CSV witness export. Parallel records are preserved; legacy graphs fall back to endpoint pairs. The witness establishes feasibility, while ASP optimization establishes minimum cardinality. The task requires an undirected projection and reports infeasible candidate/target combinations instead of treating them as a complete cover. One optimum is shown by default; all tied optima are optional and may be numerous.
+- Run `npm run benchmark:dominating-set` to compare one minimum dominating-set query on the Psychology History Graph and Davis Southern Women fixture. Each dataset runs in an isolated Node process with a 20-second wall timeout; the script checks coverage independently and reports input size, clingo times, ground size and peak WASM linear memory. The task uses clingo's unsatisfiable-core (`usc`) optimization strategy. The latest run proves a 69-node optimum on the Psychology History Graph (335 nodes, 989 edges; 0.51 s wall, 0.446 s clingo time) and a five-node optimum on Davis (32 nodes, 89 edges; 0.32 s wall); both coverage witnesses pass independent validation. Enumeration of all tied optima uses `optN` with the same strategy and is checked against exhaustive results on all 64 simple four-node graphs. The parser ignores `Lower` progress records that have no answer-set `Value`. The command exits nonzero if any optimum is unproven or its witness fails validation.
+- A minimum **node separator** finds the fewest eligible intermediate nodes whose hypothetical removal disconnects two chosen terminals by reachability. In schema v2 directed graphs, paths follow the declared arc direction; otherwise the existing undirected semantics apply. The terminals are protected, and an optional group limits which other nodes may be removed. If the terminals were already disconnected in the selected direction or projection, the optimum is the empty set. If no permitted removal can disconnect them (for example, a direct arc joins the protected terminals), the task reports that no solution exists. For each optimum, the panel also shows the nodes still reachable from the start terminal after removal and can highlight that side in 3D. The separate certificate CSV records the removed nodes and reachable side. This is a topological vulnerability scenario, not a recommendation to remove real entities.
+- A separate **minimum-cost node separator** minimizes the sum of mapped node-removal costs while protecting both terminals, using the same direction-aware reachability semantics as the cardinality task. Configure `graphMapping.node.removalCostField` with a positive integer for every node. An optional group limits eligible nodes; the costs are separate from descriptive attributes. The summary and CSV include the total cost. Without complete costs the weighted task is disabled, while the cardinality-based node separator remains available.
+- Run `npm run benchmark:weighted-node-separator-scaling` to compare the production ASP encoding with an independent weighted vertex-cut reference on cycles from 34 to 1,000 nodes, a 100-node path and star, a 10×10 grid, and the Davis Southern Women topology. Each profile uses three ASP runs and a 20-second clingo limit. Costs are generated deterministically by the benchmark and are not supplied by or interpreted as real domain data. The command verifies that ASP proves the same minimum total cost as the reference; any timeout or unproven optimum exits nonzero.
+- A minimum **edge separator** finds the fewest edge records whose hypothetical removal disconnects two chosen terminals. Schema v2 directed graphs follow the declared arc direction; undirected and legacy graphs retain two-way traversal. Parallel records count separately, so every parallel connection may need to be cut. The task operates on the visible projection, highlights and exports the removed source edge IDs (or endpoint labels for legacy data), and reports an empty optimum when terminals are already disconnected. For each optimum, the panel also shows the nodes still reachable from the start terminal and can highlight that side in 3D; the separate certificate CSV records the removed edge IDs and reachable side. It is unweighted: an edge `weight` may describe tie strength and is not treated as a removal cost.
+- A separate **minimum-cost edge separator** minimizes the sum of explicitly mapped positive integer removal costs, not the number of edges, using the same direction-aware reachability semantics as the cardinality task. Configure `graphMapping.edge.removalCostField` for every edge; missing, zero, fractional, unsafe, or incomplete costs disable this task. The mapping is separate from `weightField`, because tie strength is not automatically a cost of removal. The result summary and CSV include the total removal cost. Both edge-cut tasks preserve parallel records and IDs.
+- Run `npm run benchmark:weighted-edge-separator-scaling` to compare the production ASP encoding with an independent weighted max-flow/min-cut reference on cycles from 34 to 1,000 nodes, a 100-node path and star, a 10×10 grid, and the Davis Southern Women topology. Each profile uses three ASP runs and a 20-second clingo limit. Costs are generated deterministically by the benchmark and are not supplied by or interpreted as real domain data. ASP witnesses are checked for separation and optimum cost; a timeout or unproven optimum exits nonzero.
+- **Modularity communities** partitions every node in the selected group to maximize Newman–Girvan modularity. The optional `graphAnalysis.communities.resolution` sets γ to a finite positive decimal; the default is 1 and preserves the existing objective. The application interprets the decimal exactly as a rational `p/q`, reports γ and `p/q`, and uses the integer contribution `4·M·q·L_C − p·D_C²`; the resulting modularity is the total score divided by `4·M²·q`. Larger γ tends to favor finer partitions, but its effect depends on the graph and constraints. By default the graph remains unweighted: every undirected edge record has unit weight, parallel records count separately, and self-loops contribute twice to node volume. Set `graphAnalysis.communities.useEdgeWeights` to `true` to opt in to the mapped `graphMapping.edge.weightField`. Weighted mode accepts complete, finite, non-negative decimal weights when a common exact integer scale keeps the weights and objective within JavaScript's safe-integer range; the UI and certificate CSV report the scale and actual total weight. Zero-weight records are allowed when the total is positive. Negative, incomplete, non-finite, excessively precise, or excessively large weights disable this mode. `M` is the total edge weight (or edge-record count in unweighted mode), `L_C` is internal weight, and `D_C` is weighted volume; the score preserves the modularity ordering without floating-point arithmetic. Optional minimum/maximum community counts and `graphAnalysis.communities.mustLink` / `cannotLink` node-ID pairs constrain the partition. `attributeBounds` adds opt-in per-community minima/maxima for a scalar value of a mapped node attribute. It requires the attribute alias in `graphMapping.node.attributes`; counts use exact JSON scalar type and value, missing values do not count, and the bound applies to every community in the selected visible/group candidate domain. For example, a minimum of one node with `role="clinician"` requires that value in each community; it does not encode a social or normative interpretation. An infeasible bound produces no partition. The UI reports observed counts for every constrained community and includes them in structured CSV witness data. The UI shows one optimum by default and can enumerate tied optima; a projection with no edges or zero total weight has undefined modularity and is rejected. An optional explanation adds internal record count, internal weight, volume, integer contribution, and source edge records. Selecting a community highlights its nodes and supporting records; a separate CSV includes the per-community and total score. The default run does not emit these witness atoms. This is a structural baseline and does not establish historically meaningful groups.
+
+Exact modularity optimization can be expensive on larger projections. The task uses `solver.taskTimeoutMs` (20 seconds by default) and reports a timeout without displaying an unproven partition.
+
+For a disconnected projection with no community-count, must-link, cannot-link, or attribute-bound constraints, the app automatically adds an exact ASP pruning rule: positive-volume nodes from different connected components cannot share a community. Merging such communities has no internal cross-edge gain and strictly decreases the modularity objective; zero-volume nodes remain unrestricted so tied optima are preserved. The rule is omitted when those global constraints could require a merge, and it does not change connected projections. `npm run benchmark:modularity-components` compares the baseline and separated encodings on three disjoint K4 components and independently checks that both prove the same optimum. In a controlled run using the app's pairwise encoding, both proved score 864 (294 ms baseline, 223 ms separated). Add `-- --stress` to measure five disjoint K4 components (20 nodes), which exercises the app's aggregate encoding above the 18-node pairwise threshold; in one run the baseline timed out at 20 s while the separated ASP proved score 2880 in 1.56 s. That timeout makes this stress comparison inconclusive; it is not evidence of equal optimal scores. The exhaustive tests verify exactness and preservation of all optima on small disconnected graphs, including zero-volume nodes. These synthetic results test a topology-specific reduction, not general scaling.
+
+Run `npm run benchmark:modularity-datasets -- davis bb` to measure exact modularity on the Davis Southern Women fixture; replace `davis` with `psychology`, `karate` or `all`, and `bb` with `default` or `usc` to compare clingo strategies. Each dataset runs in a separate process with a 20-second wall timeout. An optional third argument selects `aggregate` (default), experimental `pairwise`, `equivalence` or `incremental`, `incumbent` (a verified lower-bound constraint), `seed-heuristic` (a feasible partition as a search preference), or `connected` (positive-volume community connectivity, exact only without global community constraints). These alternatives are benchmark-only and do not change the app's solver; the equivalence encoding chooses pairwise co-membership, enforces an equivalence relation, and derives canonical community representatives. The incremental encoding adds each node's exact discrete change to the degree-volume square and counts an internal edge when its higher-index endpoint is assigned. This introduces node/community aggregate instances and does not guarantee smaller grounding. Non-aggregate modes are rejected above 50 nodes to bound grounding. The benchmark independently checks any returned partition and reports input size, grounding statistics, solver timing and peak WASM linear memory. The `karate` profile uses the checked-in 34-node, 78-edge schema v2 fixture, but does not treat its `club` attribute as a target partition or ground truth. On Karate, controlled runs measured 16,382 bytes for aggregate, 34,855 for pairwise, 35,249 for equivalence and 17,032 for incremental; all four timed out at 20 seconds with the default strategy. Equivalence and incremental also timed out under `usc` and `bb`. On Davis (32 nodes, 89 records), equivalence generates 24,189 bytes and times out with all three strategies; the prior aggregate and pairwise runs also timed out there. The alternative encodings are correct on exhaustive small graphs but show no measured performance benefit on the checked-in datasets; they remain isolated research benchmarks. The greedy lower-bound and seed-guided modes also time out on Karate under `default`, `usc` and `bb`; they remain reproducible negative experiments. These timeouts are performance limits of the measured setup, not evidence that a community partition does not exist.
+
+The additional experimental `connected` encoding constrains the positive-volume members of each community to be connected through positive-weight edges. With positive resolution and no community-count, must-link, cannot-link, or attribute-bound constraints, an optimum cannot contain two disconnected positive-volume pieces in one community: splitting them strictly increases the objective. Zero-volume nodes remain unrestricted, and zero-weight edges do not connect pieces. Exhaustive ASP results preserve every optimum across all 64 simple four-node graphs; a weighted fixture covers loops, parallel records, and zero-weight edges. This encoding is not used by the app: both it and the current aggregate encoding timed out at 20 seconds on Davis (32 nodes, 89 edges; 8,369 vs. 7,725 input bytes) and Karate Club (34 nodes, 78 edges; 17,336 vs. 16,692 bytes). The forced timeout yielded no grounding/solving counters, so no performance improvement was established.
+
+Follow-up benchmark: the incremental encoding generated 8,065 bytes on Davis and also timed out at 20 seconds under `default`, `bb` and `usc`; it did not prove an optimum on this second dataset either.
+
+Run `npm run benchmark:modularity-baselines -- all` to compare the local greedy incumbent, a local multi-start Louvain implementation and the pinned `graphology-communities-louvain@2.0.2` implementation on the Psychology, Davis and Karate graphs. Each Louvain baseline uses 32 seeded restarts; the report includes independently checked modularity scores and pairwise Adjusted Rand Index to show how partitions vary across restarts. Graphology and both Louvain baselines are development-only benchmark tools: their partitions remain heuristic and are never reported as ASP optima.
+
+Run `npm run benchmark:modularity-resolution -- all` for an exploratory Graphology sweep at exact resolutions γ = 1/2, 1, 3/2 and 2. It independently checks the rational objective score and reports both within-resolution restart stability and agreement between the best partitions at different γ. Each γ defines a different objective, so its modularity value is compared only against other partitions at that same resolution; these heuristic runs do not prove ASP optima.
+
+Run `npm run benchmark:modularity-seed-stability -- all --replicates=12 --restarts=16` to compare best-of-restarts partitions across 12 master seeds for both Louvain baselines at γ=1. It reports score and runtime ranges, distinct selected partitions, and pairwise ARI; the internal restart seeds are checked to avoid overlap across master-seed runs. This is an empirical sensitivity measure on the named fixtures, not a statistical confidence interval, an ASP optimality proof, or semantic validation of communities.
+
+The experimental `graphology-seed` mode in `npm run benchmark:modularity-datasets -- davis default graphology-seed` adds the best of 16 Graphology restarts as an ASP search heuristic. It does not constrain community assignments or certify an optimum. On the checked-in Davis and Karate fixtures this mode times out at 20 seconds before proving an optimum, so it remains a negative benchmark rather than an application feature.
+
+```json
+{
+  "graphAnalysis": {
+    "communities": {
+      "useEdgeWeights": true,
+      "resolution": 1.5,
+      "minCount": 2,
+      "maxCount": 5,
+      "mustLink": [["source-node-a", "source-node-b"]],
+      "cannotLink": [["source-node-c", "source-node-d"]],
+      "attributeBounds": [
+        { "attribute": "role", "value": "clinician", "minPerCommunity": 1, "maxPerCommunity": 3 }
+      ]
+    }
+  }
+}
+```
+
+Here `role` must be a key in `graphMapping.node.attributes`. The positive integer minima and maxima apply independently to each community. Use `0` only as “no bound”; every item must declare at least one positive bound. Duplicate attribute/value rules are rejected.
+
+The pair values can be source node IDs or normalized IDs. A configured pair must be present in the visible projection and selected group; otherwise the run reports the missing constraint endpoint instead of ignoring the constraint.
+The configured minimum and maximum initialize the corresponding UI controls; values entered in the panel apply to that run. The must-link and cannot-link pairs remain hard constraints for every run.
+
+- A maximum **s-plex** is a largest node set in which every member is adjacent to at least `|S| - s` other members. Equivalently, each member may lack at most `s - 1` ties inside the set. The app proves its cardinality with ASP feasibility queries and binary search; a safe degree upper bound limits the search interval. By default it returns one maximum-cardinality solution; an explicit option runs a final exact-size ASP query to enumerate all maximum solutions, which can take much longer. Clicking a returned set shows the non-adjacent pairs emitted as an ASP certificate and checks that no node occurs in more than `s - 1` such pairs; a separate CSV exports that explanation. It does not enumerate every smaller or merely maximal s-plex.
+- The separate **inclusion-maximal s-plex** task returns sets that satisfy the same local condition and cannot be extended by another node in the selected candidate domain. It does not maximize set size: distinct maximal sets can have different cardinalities. The default builds one deterministic greedy candidate using the input order, degree orders, and up to 64 degree-ranked seed orders; clingo then verifies the s-plex and emits the blocker certificate before the UI displays it. This is a heuristic witness, not a maximum-cardinality result, and input order can affect ties. An independent toggle keeps the ASP encoding that enumerates all maximal models without optimization options; this can take much longer. At `s = 1`, this task returns maximal cliques. The group filter limits both members and possible extensions to that group. CSV exports label `maximum_cardinality` and `inclusion_maximal` semantics separately.
+- A **k-core** is the unique largest induced subgraph in which every included node has at least `k` distinct neighbors inside the subgraph. On directed graphs, the UI requires an explicit degree semantics: **in** counts predecessors, **out** counts successors, and **mutual** counts a neighbor only when both arcs exist. The selected relation is used consistently for membership, witnesses, peeling, highlighting, and CSV output; the default undirected semantics are unchanged. The Psychology History Graph remains undirected; these directed semantics are validated on synthetic digraphs and are not used to infer direction in the case study. Clicking the result exposes an ASP witness listing each distinct internal adjacency; selecting a member shows its degree inside the core and the source records for those ties. The 3D view highlights the core and all supporting records, including parallel records, and a separate CSV reports the per-node degree witnesses. An optional **Peeling ASP per i nodi esclusi** setting adds deterministic synchronous peeling rounds: each removed candidate node is paired with the distinct neighbors still active in that round, so the degree below `k` can be checked. The panel shows and can highlight these exclusions and their supporting records, and exports a separate peeling CSV even when the resulting core is empty. This explanation is off by default and does not change the normal task's solver input or cost. When enabled, clingo proves the core first, then derives one synchronous exclusion round per ASP query; the application checks that the fixed point matches the proved core and respects the selected candidate group and degree semantics. On a current run of the 335-node, 989-edge Psychology projection, the aligned worker-harness benchmark proves the 302-node `k=2` core in 403.8 ms (14,494 cumulative atoms) and the 230-node `k=3` core in 296.4 ms (17,308 atoms); these are one run per threshold. A controlled comparison on a 700-node path, three isolated runs per mode, uses the exact production round program: repeating the full graph facts took 24.52–26.59 seconds (median 25.74), 1,597,046 cumulative atoms and 12,320,721 input bytes; sending only active-domain facts took 16.73–17.30 seconds (median 16.74), 859,950 atoms and 7,446,928 bytes. On a 700-node cycle-with-tail, active facts lowered cumulative atoms by 22% and input bytes by 19%, but wall-time medians were essentially equal (24.40 versus 24.38 seconds); smaller grounding does not guarantee a faster run on every topology. Both variants return the reference core and every synchronous round matches independent peeling. Use `--round-facts=full` and `--round-facts=active` to reproduce a payload comparison with the same ASP builder. The default `npm run benchmark:kcore-peeling` measures the current active-domain round queries; `npm run benchmark:kcore-peeling:monolithic` measures the single-query encoding. A 700-node cycle-with-tail exceeds the app's default 20-second task timeout; the UI withholds an incomplete certificate. The 700-node star reaches the empty core in two removal rounds (three queries), in 0.68 seconds in the latest isolated run. Timings vary with machine load and are not latency guarantees. Peak WASM was 17.25 MiB in these profiles; benchmark-process RSS includes Node, the harness, graph data and WASM and does not isolate the browser Worker. Earlier iterative-versus-monolithic timing figures used a hand-written benchmark rule and are not comparable to the production ASP builder. These structural certificates explain membership relative to the selected candidate group; they do not establish causal explanations for ties.
+- An optional **Core number per ogni nodo** setting computes the full k-core profile of the current visible projection and selected candidate group using standard bucket peeling. It is independent of clingo and is labeled as such; the fixed-`k` ASP query remains the authoritative solver result and its membership can be cross-checked against nodes whose core number is at least `k`. Directed profiles use the explicitly selected in-, out-, or mutual-neighbor semantics. Self-loops are ignored and parallel edge records count as one distinct neighbor, matching the ASP k-core semantics. The UI groups nodes by exact core number, lets each level highlight the corresponding threshold k-core and its induced supporting records in the 3D view, and offers a separate `node_id,core_number,k_core_mode,eligible_group` CSV. For mutual directed cores, only arcs in reciprocal pairs are highlighted. The option is off by default and does not change ASP input. On the full Psychology History projection (335 nodes, 989 edges), it took 2.4–6.0 ms across two browser smoke runs and yielded 33 nodes at core number 1, 72 at 2, 61 at 3, 65 at 4, and 104 at 5; threshold sets matched the ASP and independent peeling at `k=2` (302 nodes) and `k=3` (230 nodes). These figures describe this visible projection, not a causal or temporal interpretation.
+
+The k-core and dominating-set encodings optimize in clingo; the maximum k-plex is proved through a sequence of ASP feasibility queries, and component detection computes a partition directly. Clique, k-plex, ordinary connected components, dominating sets, and modularity require undirected adjacency. K-core supports undirected graphs and directed graphs with an explicit in-, out-, or mutual-neighbor semantics. Separator tasks follow the mapped direction: schema v2 directed graphs respect arc direction, while undirected and legacy graphs allow traversal both ways. Weak and strong components follow their respective direction semantics and require schema v2 directed edges. Results can be highlighted in the 3D view and exported as CSV. Structural solver runs have a configurable total timeout, `solver.taskTimeoutMs` (default `20000`, capped at `300000` ms); after timeout, the worker is restarted and no unproven incumbent is presented as an optimum.
+
+For group-filtered structural tasks, the result summary distinguishes the full visible projection from the number of visible nodes in the selected group.
+
+Run `npm run benchmark:kcore-scaling` to compare the ASP `k=2` result against independent iterative peeling on sparse cycle-with-tail graphs from 34 to 1,000 nodes. It reports one optimum, wall and clingo times, grounding statistics, and peak WASM linear memory; the synthetic graph's 2-core is known in advance to be the cycle.
+
+Run `npm run benchmark:kcore-peeling` to profile the optional ASP exclusion certificate through 600 nodes. It asks clingo for one synchronous removal round per query, then checks every round, supporting neighbor, and final core against independent peeling; output includes query count, cumulative grounding statistics, wall/clingo time, peak WASM linear memory, and benchmark-process RSS. Run `npm run benchmark:kcore-peeling:monolithic` for the single-query encoding, or `npm run benchmark:kcore-peeling:psychology` for both thresholds on the case-study graph. `npm run benchmark:kcore-peeling:700` profiles a 700-node cycle-with-tail and `npm run benchmark:kcore-peeling:700:star` profiles a 700-node star. For custom profiles, run `node --experimental-strip-types scripts/benchmark-kcore-scaling.mjs --explain --iterative --nodes=700 --topology=path`; supported topologies are `cycle-with-tail`, `star`, `path`, and `cycle`. Add `--round-facts=full` to repeat the full graph fact bundle at every round, or leave the default `active` mode to send only the current induced domain. Both modes execute the same production round program and validate their results against independent peeling.
+
+Run `npm run benchmark:node-separator-scaling` to compare the minimum node separator with an independent Dinic max-flow implementation using vertex splitting. It retains cycle profiles from 34 to 1,000 nodes and adds a 100-node path, a 100-node star, a 10×10 grid and the 32-node/89-edge Davis Southern Women fixture. All ASP cut cardinalities match Dinic, including size 3 between `Evelyn Jefferson` and `E14` on Davis. On cycles, ASP medians range from about 3.2 ms at 34 nodes to 314.4 ms at 1,000; on the 10×10 grid they are about 4.6 ms, and on Davis about 5.1 ms. Each profile creates a fresh clingo-WASM runner using the shipped browser worker in a Worker-like VM. Dinic is also checked on a chain, two disjoint paths, a direct terminal edge and already disconnected terminals. These controlled profiles test correctness across varied topologies; they do not establish a general performance ranking or give the cuts a domain interpretation.
+
+Run `npm run benchmark:edge-separator-scaling` for the analogous edge cut, preserving edge-record identity in the ASP facts and comparing cut size against Dinic. It uses the same cycle, path, star, grid and Davis profiles as the node-separator benchmark; every ASP cardinality matches Dinic. On cycles, ASP medians range from about 3.9 ms (34 records) to 416.3 ms (1,000); the 10×10 grid takes about 12.0 ms and Davis about 6.3 ms for the same terminal pair. Each profile creates a fresh clingo-WASM runner using the shipped browser worker in a Worker-like VM. The benchmark checks its reference on a chain, two edge-disjoint paths, and disconnected terminals. It does not evaluate weighted costs, which require explicit trustworthy data.
+
+The full Psychology History Graph reaches its `k=2` and `k=3` cores in under a second and matches independent peeling. On the 335-node, 989-edge projection, `s=1` (maximum clique) is proved to have size 5 by three ASP queries in about 0.64 seconds; `s=2` is proved to have size 6 in three queries in 4.97–5.07 seconds across two benchmark runs. Both match independent branch-and-bound references. For `s=3`, the ASP binary feasibility search proves size 7 in four clingo queries; two ASP-only runs took 3.85–4.07 seconds and established that threshold 8 is UNSAT. The independent branch-and-bound reference now proves the same optimum after a deterministic multi-start greedy procedure supplies a valid incumbent: 2,680 search states in 4.03 seconds in one run, compared with four ASP feasibility queries in 4.48 seconds. The greedy phase only finds a lower bound; branch-and-bound proves that no larger solution exists. Direct clingo optimization and the `usc` strategy also time out for `s=2`. The search interval uses the safe upper bound `min(candidate count, degeneracy + s)`; reproduce comparisons with `npm run benchmark:psychology-kplex -- search 1` or `-- search 2`. Pass `opt` or `usc` to benchmark direct optimization. To measure ASP alone for `s=3`, run `node --experimental-strip-types scripts/benchmark-psychology-kplex.mjs --asp-only search 3`. These measurements are local and do not establish performance on larger graphs.
+
+For `s=4`, the same 335-node Psychology projection has an exact maximum of 8: ASP proves it in four feasibility queries (3.96 seconds in the measured run), while the independent branch-and-bound proves it in 4,718 states (6.55 seconds). The two solvers return different valid witnesses, which establishes tied optimum sets rather than a mismatch; the regression checks both witness conditions. Reproduce with `npm run benchmark:psychology-kplex -- search 4`.
+
+For `s=5`, the exact maximum on Psychology is 9. ASP proves it in four queries (3.72 seconds); branch-and-bound proves the same cardinality in 8,220 states (8.80 seconds). The regression checks `s=4,5,6,7,8,9`, including each witness's non-neighbor limit. Reproduce the `s=5` benchmark with `npm run benchmark:psychology-kplex -- search 5`.
+
+For `s=6`, ASP and the independent exact reference prove a maximum of 10. ASP uses four queries (4.86 seconds); branch-and-bound visits 13,386 states (13.59 seconds) in the measured run. The regression validates both witnesses' maximum size and non-neighbor limit for `s=4,5,6,7,8,9`. Reproduce with `npm run benchmark:psychology-kplex -- search 6`.
+
+For `s=7`, the exact maximum on Psychology is 11. ASP proves it in four queries (6.98 seconds); branch-and-bound visits 21,273 states (21.64 seconds). Both witnesses are validated, although they differ. Reproduce with `npm run benchmark:psychology-kplex -- search 7`.
+
+For `s=8`, ASP and branch-and-bound prove a maximum of 12 on Psychology. ASP uses four queries (5.42 seconds); branch-and-bound visits 32,840 states (26.78 seconds). The two witnesses differ and are each checked against the s-plex condition. Reproduce with `npm run benchmark:psychology-kplex -- search 8`.
+
+For `s=9`, both exact methods prove a maximum of 13 on Psychology. ASP uses four queries (6.37 seconds); branch-and-bound visits 50,291 states (35.21 seconds). This reference needed a larger bound, so the benchmark accepts `--budget-ms=N` for both its reference and each ASP child process; reproduce with `node --experimental-strip-types scripts/benchmark-psychology-kplex.mjs search 9 --budget-ms=60000`. The regression checks both witnesses against the s-plex condition. The budget affects only this benchmark, not the app's solver timeout.
+
+On the independent Zachary Karate Club fixture (schema v2, 34 nodes and 78 undirected edges), both the ASP search and exact branch-and-bound prove an `s=3` maximum of 6. The measured run uses three ASP feasibility queries (398.94 ms) and 320 branch-and-bound states (11.50 ms). Reproduce it with `npm run benchmark:karate-kplex -- search 3`. The `club` attribute is preserved by the mapping but is not used as a target partition.
+
+An additional `s=4` benchmark proves a maximum of 8 on the same fixture with four ASP feasibility queries; the independent branch-and-bound reference proves the same result in 53 explored states in that run. Reproduce it with `npm run benchmark:karate-kplex -- search 4`.
+
+For `s=5`, both exact methods prove a maximum of 9: ASP uses four feasibility queries (328.82 ms), while branch-and-bound visits 51 states (48.21 ms) in the measured run. The regression validates both witnesses for `s=4,5,6,7,8,9`. Reproduce with `npm run benchmark:karate-kplex -- search 5`.
+
+For `s=6`, ASP and branch-and-bound prove a maximum of 10 in four queries and 49 states respectively (332.07 ms and 77 ms in the measured run). Reproduce with `npm run benchmark:karate-kplex -- search 6`.
+
+For `s=7`, both methods again prove a maximum of 10: ASP uses four queries (582.44 ms) and branch-and-bound visits 49 states (124.5 ms). The returned witnesses differ but each satisfies the s-plex condition. The regression now checks s=4–9. Reproduce with `npm run benchmark:karate-kplex -- search 7`; the repeated maximum size does not imply a general trend beyond this fixture. Together, these checks span s=3–9 on the same 34-node graph and do not establish scaling on larger networks.
+
+For `s=8`, both methods prove a maximum of 11: ASP uses four queries (516.65 ms) and branch-and-bound visits 47 states (119.3 ms). The witnesses are checked independently. Reproduce with `npm run benchmark:karate-kplex -- search 8`; the measured maximum on this fixture does not establish scaling on larger networks.
+
+For `s=9`, both methods prove a maximum of 12: ASP uses four queries (493.39 ms) and branch-and-bound visits 45 states (162.22 ms). The regression checks both witness conditions, and the `s=9` result does not establish scaling beyond this fixture.
+
+Direct clingo optimization with `opt` or `usc` times out at 30 seconds for `s=8`, but these are not the app's `search` strategy; binary feasibility search proves both maxima in four queries.
+
+The Sandbox JSON Editor also offers a `Karate Club · 34 nodi, 78 archi` preset backed by the same checked-in dataset and schema v2 mapping used by the tests and benchmarks. `Reset example` still restores the legacy schema v1 sample, so the fixture can be explored in the UI without replacing the default graph.
 
 ---
 
@@ -167,6 +306,307 @@ Example edge:
 ```
 
 Both explicit identifiers and labels can be used, as long as they normalize to the same internal form.
+
+### Optional semantic mapping (schema version 2)
+
+Existing datasets and configurations remain in the legacy profile when `schemaVersion` is omitted. To pass additional graph meaning to ASP, declare `schemaVersion: 2` and map the fields explicitly. Missing values are not guessed from property names. Unknown keys inside schema v2 `graphMapping`, `graphIntegrity`, and `graphAnalysis` declarations (including their nested rule records) are errors, so misspelled options cannot silently fall back to defaults. Attribute names, role names, and unrelated application config keys remain user-defined and allowed.
+
+```json
+{
+  "schemaVersion": 2,
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type",
+      "roleField": "$.role",
+      "groupFields": ["$.data.affiliations[*].group"],
+      "removalCostField": "$.cut_cost",
+      "attributes": {
+        "year": "$.data.year",
+        "birthYear": "$.birth_year",
+        "recordId": "$.record_id",
+        "email": "$.email",
+        "roleCode": "$.role_code"
+      }
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "directed",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.valid_from",
+        "toField": "$.valid_to"
+      },
+      "weightField": "$.weight",
+      "removalCostField": "$.cut_cost",
+      "confidenceField": "$.confidence",
+      "confidenceRange": { "min": 0, "max": 100 },
+      "provenanceField": "$.source_ref",
+      "attributes": {
+        "event": "$.event",
+        "registryCode": "$.registry_code"
+      }
+    }
+  },
+  "graphIntegrity": {
+    "allowedNodeTypes": ["person", "institution", "researcher"],
+    "allowedEdgeTypes": ["works_at", "collaborates"],
+    "edgeTypeDomains": [
+      {
+        "edgeType": "works_at",
+        "sourceNodeTypes": ["person"],
+        "targetNodeTypes": ["institution"]
+      },
+      {
+        "edgeType": "collaborates",
+        "sourceNodeTypes": ["person"],
+        "targetNodeTypes": ["person"]
+      }
+    ],
+    "requiredNodeAttributes": [
+      { "nodeType": "person", "attributes": ["birthYear"] }
+    ],
+    "requiredEdgeAttributes": [
+      { "edgeType": "works_at", "attributes": ["event"] }
+    ],
+    "nodeAttributeDomains": [
+      { "nodeType": "person", "attribute": "roleCode", "allowedValues": ["clinician", "researcher"] }
+    ],
+    "edgeAttributeDomains": [
+      { "edgeType": "works_at", "attribute": "registryCode", "allowedValues": ["R-1", "R-2"] }
+    ],
+    "requiredEdgeIntervals": ["works_at"],
+    "uniqueNodeAttributes": [
+      { "nodeType": "person", "attribute": "recordId" }
+    ],
+    "uniqueEdgeAttributes": [
+      { "edgeType": "works_at", "attribute": "registryCode" }
+    ],
+    "cardinalities": [
+      { "nodeType": "person", "edgeType": "works_at", "incidence": "any", "max": 5 }
+    ],
+    "repairSuggestions": {
+      "removableEdges": [
+        { "edgeId": "source-edge-id", "cost": 3 }
+      ],
+      "nodeAttributeValues": [
+        { "nodeId": "person-source-id", "attribute": "email", "value": "candidate@example.org", "cost": 2 }
+      ],
+      "edgeAttributeValues": [
+        { "edgeId": "another-source-edge-id", "attribute": "event", "value": "CILC", "cost": 1 }
+      ],
+      "nodeAttributeReplacements": [
+        { "nodeId": "person-source-id", "attribute": "email", "expectedValue": "old@example.org", "value": "new@example.org", "cost": 4 }
+      ],
+      "edgeAttributeReplacements": [
+        { "edgeId": "another-source-edge-id", "attribute": "registryCode", "expectedValue": "R-1", "value": "R-2", "cost": 2 }
+      ],
+      "nodeTypeReplacements": [
+        { "nodeId": "person-source-id", "expectedType": "person", "newType": "researcher", "cost": 3 }
+      ],
+      "edgeTypeReplacements": [
+        { "edgeId": "another-source-edge-id", "expectedType": "works_at", "newType": "collaborates", "cost": 2 }
+      ],
+      "edgeIntervalReplacements": [
+        { "edgeId": "reversed-interval-edge-id", "expectedFrom": 1901, "expectedTo": 1899, "from": 1899, "to": 1901, "cost": 4 },
+        { "edgeId": "missing-start-edge-id", "expectedTo": 2020, "from": 2018, "to": 2020 }
+      ]
+    }
+  }
+}
+```
+
+All mappings are optional. Node paths are relative to the node object; edge paths are relative to the edge object. The path subset supports dotted paths and array expansion with `[]` or `[*]`. Existing `nodeTypes.*.group` mappings continue to work and can be combined with `graphMapping.node.groupFields`.
+
+An explicit node `idField`, edge `idField`, `sourceField` or `targetField` must resolve to exactly one scalar identifier: a string, finite number or boolean. Endpoint objects of the form `{ "id": value }` are supported. A path that resolves to multiple identifiers, or an object-valued identifier, is a validation error rather than being reduced to its first value or stringified. A missing edge ID remains allowed and receives a local ID. Legacy nodes with numeric ID `0` retain that ID instead of falling back to the label; other falsey legacy IDs such as `false` retain the label fallback, while schema v2 can map `false` explicitly.
+
+`direction` defaults to `undirected` and can be set to `directed`. Directed links are drawn with arrows. Clique and k-plex currently require undirected adjacency; the UI reports missing prerequisites on directed graphs instead of silently dropping direction. K-core offers explicit in-, out-, and mutual-neighbor semantics on directed graphs; other tasks that need undirected adjacency do not silently reinterpret directed edges. `identity` defaults to `simple`: one edge is kept per endpoint pair (ordered for directed graphs, unordered for undirected graphs). In schema v2, records in a simple graph are collapsed only when their mapped metadata agrees; conflicting metadata is a validation error instead of silently discarding a weight, interval, provenance value, or mapped attribute. Repeated mapped IDs must keep the same endpoints and metadata. Distinct IDs with otherwise identical mapped metadata still collapse with a warning; use `multigraph` to retain parallel records. The schema v1 legacy projection continues to collapse duplicate endpoint pairs as before.
+
+For schema v2 records without a mapped source ID, the normalizer generates a local edge ID and reserves all explicit mapped IDs first. If an explicit ID occupies the generated name, a deterministic suffixed ID is used and a warning is shown; ASP provenance maps that generated ID back to the correct input record.
+
+Mapped node facts are emitted as `node_type/2`, `node_role/2`, `node_group/2` and `node_attribute/3`. In schema version 2, edge records also retain `edge_record/1`, `edge_id/2`, `edge_source/2`, `edge_target/2`, `edge_direction/2`, `edge_type/2`, `edge_valid_from/2`, `edge_valid_to/2`, `edge_weight/2`, `edge_confidence/2` and `edge_provenance/2` where mapped. ASP numeric terms are integers; mapped non-integer decimals are preserved exactly as `decimal(N,D)` rational terms (for example, `0.8` becomes `decimal(4,5)`). Temporal endpoints currently require integer years/numbers or parseable ISO dates; fractional or malformed endpoints are kept as quoted values in `edge_valid_*_raw/2` with an `edge_valid_*_invalid/1` marker, so temporal rules never compare them as dates. The legacy `node/1`, `group/2` and `edge/2` facts remain available for the existing clique encoding. Confidence scores must be finite numeric values inside the configured source range for that capability to be available.
+
+When `graphMapping.edge.confidenceField` maps a valid value on every edge, the Sandbox exposes an optional minimum-score slider and exact numeric threshold field. By default the source range is `[0,1]`; set `graphMapping.edge.confidenceRange` to finite `{ "min": ..., "max": ... }` values with `min < max` when the JSON stores another numeric scale, such as percentages `[0,100]`. The controls and threshold remain in the source data's units, and the number field accepts any finite value inside the declared range, including precision finer than the slider's step. Both controls apply the same inclusive cutoff, and the default at the declared minimum includes every edge. The ASP fact `edge_confidence/2` keeps the original mapped score. Visible nodes remain in the projection when their incident edges are filtered out, so they may become isolated. The count of excluded edges is shown, and every ASP task uses the same filtered projection. In graph-aware timeline mode, low-score links do not bring related context nodes into the view. An absent, incomplete or out-of-range mapping hides the control and leaves the projection unchanged. Changing the threshold or another projection filter clears prior query results; projection controls are disabled while the solver runs. This is an explicit deterministic cutoff over a data-provided score: the application does not infer that the score is a probability, rank sources, or assign meaning to it.
+
+When `graphMapping.edge.provenanceField` maps a scalar source reference or an array of scalar references, edge-based structural, clique, motif, and integrity witnesses display the declared reference(s) and include them in their explanation/certificate CSVs. For arrays, references are trimmed, deduplicated, and sorted for deterministic output; ASP receives one `edge_provenance/2` fact per reference. This is descriptive metadata: the application does not treat the references as alternative edge worlds, rank sources, infer trust, resolve disagreement, or interpret values as probabilities. Integrity repair proposals carry declared references for actions on observed edges. Hypothetical counterfactual additions remain clearly separate and do not inherit the provenance of observed records.
+
+For example, map `provenanceField` to `$.source_refs` when an edge stores `"source_refs": ["archive-17", "catalogue-2"]`. The scalar and list forms use the same configuration field.
+
+Schema v2 can define optional, named source projections with `graphAnalysis.provenanceScenarios`:
+
+```json
+{
+  "graphAnalysis": {
+    "provenanceScenarios": {
+      "scenarios": [
+        { "id": "archive-a", "label": "Archive A", "sources": ["archive-a"] },
+        { "id": "combined", "label": "A or B", "sources": ["archive-a", "archive-b"] }
+      ],
+      "unattributedEdges": "exclude",
+      "referenceMatching": "any"
+    }
+  }
+}
+```
+
+This requires `graphMapping.edge.provenanceField`. `sources` is the set of active source references for a scenario. `referenceMatching` controls how an edge's declared references are compared with that set: `any` retains a multi-reference edge when at least one reference is active; `all` retains it only when every declared reference is active. It defaults to `any` to preserve the initial scenario-projection behavior. An edge with no usable reference follows the required `unattributedEdges` policy (`include` or `exclude`), independently of `referenceMatching`. “All sources” is the initial state and keeps the full edge set, including unattributed records. For clique, structural and motif queries, the app first applies the source scenario and then the confidence cutoff; in graph-aware timeline mode, only links surviving both projections can expand the visible node set. After node, timeline and visual filters, the same remaining links feed the 3D view and those ASP queries. Integrity checks and repairs use all imported nodes and the selected scenario's links, independently of confidence, visual filters and the timeline. Changing a projection clears results computed on the prior graph. These are deterministic record-selection policies; they do not establish that a reference is an independent proof, decide whether multiple citations are joint or conflicting, or compute brave/skeptical conclusions. Runtime ASP input contains the selected edge records as usual; the app does not ask ASP to infer over provenance references.
+
+When named provenance scenarios are configured, **Confronta clique massime** runs the exact maximum-clique task separately for every declared scenario and enumerates every tied optimum with clingo. It reports each scenario's maximum size and number of maximum cliques, plus how often each node appears across scenarios and across all optimal answer sets. A node is called *stable* only when it belongs to every maximum clique in every configured scenario; this is a deterministic comparison over the declared projections, not a probability, confidence score, or skeptical conclusion about uncertain facts. Non-universal membership can result from different scenarios or from tied optima inside one scenario. Nodes absent from every maximum clique are omitted from the membership list. The comparison applies the same active type/group filters, selected clique group, timeline window and confidence threshold to every scenario. In graph-aware timeline mode, it rebuilds the visible node cohort separately from each scenario's source-filtered, confidence-qualified links; in simple mode, the node cohort remains the same across scenarios. Each scenario row reports its own candidate-node and projected-edge counts. If a scenario has no eligible node in the selected clique group, the comparison stops with an explicit error and shows no partial result. Complete enumeration can be expensive when there are many scenarios or tied optima. Results are shown only when clingo confirms complete enumeration for every scenario; an error or incomplete run produces no partial comparison. The output panel can highlight a node in the 3D view and export `clique_scenario_stability.csv`.
+
+The structural analysis panel also offers **Confronta il k-core su tutti gli scenari** when at least two provenance scenarios are configured and `k-core` is selected. It runs the ASP k-core for each scenario using the same `k`, candidate group and, for directed graphs, the chosen in-degree, out-degree or mutual-neighbor semantics. Each run uses the same active type/group filters, timeline window and confidence threshold as the current view, but rebuilds the visible cohort for that scenario in graph-aware timeline mode. The comparison reports each scenario's candidate nodes, projected edges and core size. Membership rows distinguish nodes eligible in a scenario from nodes that actually belong to its core; “present in every scenario” is the intersection of the unique k-cores. Nodes absent from every core are omitted. This is a deterministic comparison over the finite configured list, not probability or epistemic reasoning. A shared `solver.taskTimeoutMs` budget covers all scenarios; missing candidates, an unproven solve or any error suppresses partial results. The panel highlights members in 3D and exports `kcore_provenance_scenario_stability.csv` with the scenario, group, confidence threshold and timeline window used.
+
+When at least two provenance scenarios are configured and `k-plex di cardinalità massima` is selected, **Confronta i k-plex massimi su tutti gli scenari** compares the complete maximum-witness sets. It requires **Tutti gli ottimi** to be checked: for each scenario, ASP first proves the maximum cardinality through feasibility queries, then enumerates every k-plex at that size. The same source, confidence, visible-node and graph-aware timeline projection is rebuilt per scenario. The result reports candidate and projected-node counts, maximum size, number of maximum witnesses, and each candidate's support across scenarios and answer sets. Candidates that belong to no maximum witness remain listed with zero support. “Presente in tutti gli ottimi” means the node occurs in every complete maximum witness of every configured scenario; witness counts are not probabilities or brave/skeptical conclusions over uncertain facts. One shared `solver.taskTimeoutMs` budget covers the whole comparison. A timeout, incomplete enumeration or error suppresses all partial results. The panel can highlight members in 3D and exports `kplex_provenance_scenario_stability.csv` with the selected group, confidence threshold and timeline window.
+`graphIntegrity` is optional and requires schema version 2. When present, the toolbar exposes an ASP check over all imported nodes and the selected provenance scenario's edges, even if the 3D view or timeline is filtered. Without a selected scenario this is the complete imported graph. Supported rules cover required node/edge types, closed `allowedNodeTypes`/`allowedEdgeTypes` vocabularies, typed edge endpoint domains, required node/edge attributes, finite allowed-value domains, unique node/edge attribute values, required edge intervals and typed edge cardinalities. Type vocabularies diagnose any mapped node or edge type outside the configured finite list. An attribute domain is an exact finite list of strings, finite numbers or booleans for a declared node/edge type and mapped attribute; it checks present values, while `required*Attributes` handles absence. On undirected graphs, endpoint domains are checked symmetrically and cardinality incidence must be `any`; `source`/`target` are meaningful only for directed graphs. For edge types in `requiredEdgeIntervals`, missing or invalid endpoints are reported with the source edge ID. The shared temporal parser accepts safe integers (including numeric strings), valid ISO dates (`YYYY-MM-DD`, interpreted as midnight UTC), and ISO date-times with seconds, up to millisecond precision, and an explicit `Z` or `±HH:MM` timezone. It rejects impossible Gregorian dates, timezone-free date-times, locale-dependent date strings, invalid clock values, and offsets beyond `±14:00`. Temporal task capability is available only when every mapped edge has an ordered interval (`from <= to`) and all endpoints share one domain (integers or ISO dates). Numeric values are compared as supplied: their unit must be consistent across the graph and declared by the dataset/configuration; the parser cannot infer whether `2024` means a year, a count, or an epoch value. Findings are diagnostic witnesses mapped back to source IDs. Unresolved edge endpoints are rejected by graph validation before ASP runs, since those records cannot be represented safely in the current numeric node index.
+
+The optional `repairSuggestions` task minimizes the total cost of a finite set of explicitly authorized actions: `removableEdges` lists source edge IDs; `nodeAttributeValues` and `edgeAttributeValues` supply values for currently missing mapped attributes; `nodeAttributeReplacements` and `edgeAttributeReplacements` state both the expected current value and a proposed replacement; `nodeTypeReplacements` and `edgeTypeReplacements` state the expected current type and a proposed new type; `edgeIntervalReplacements` states the expected current endpoints and a proposed interval. Attribute replacements require the current ASP value to equal `expectedValue`; type replacements require the corresponding `graphMapping.*.typeField`, an exact `expectedType` match and a new type contained in the matching `allowed*Types` vocabulary. Thus the finite type vocabulary also prevents a proposed edge type from evading endpoint rules by changing to an undeclared type. Every proposal is checked again against all configured type, endpoint, attribute, uniqueness, interval and cardinality rules. No value is inferred and no proposed action is applied to the graph.
+
+An interval replacement requires `graphMapping.edge.validity.fromField` and `toField`, a source edge ID, proposed `from`/`to` values, and an exact expected state for each current endpoint. Omit `expectedFrom` or `expectedTo`, or set it to `null`, when the endpoint has no mapped value; the normalizer treats source JSON `null` as missing. Valid expected values are compared after the app's existing normalization; other invalid raw scalar values must match exactly. Proposed endpoints use a closed, inclusive interval and must satisfy `from <= to`. Each endpoint must normalize to a safe integer under the shared temporal parser, or both must be ISO dates (`YYYY-MM-DD`) / ISO timestamps with seconds, optional millisecond precision, and `Z` or an offset no larger than `±14:00`. Numeric endpoints may mix JSON numbers and numeric strings because the graph normalizer compares their normalized integer values. Date-only values are interpreted at UTC midnight; timestamps are normalized to milliseconds. Timezone-free date-times, locale-dependent strings, invalid calendar/clock values and mixed integer/date intervals are rejected to avoid machine-dependent or unit-mixed comparisons. Candidate node/edge IDs refer to source IDs and candidate attribute names must exist in the respective mapping. Values are strings, finite numbers or booleans; types are non-empty strings. Costs are positive safe integers and default to 1, and the maximum possible combined cost must also fit a safe integer. If no authorized combination satisfies every constraint, the panel reports that no feasible repair exists. Example values such as `person`, `institution`, and `works_at` are illustrative and must match the configured dataset.
+
+### Configured typed motifs
+
+Schema version 2 can also declare positive, role-based motif templates under `graphAnalysis.motifs`. A template requires node-type domains for each role and at least one typed edge pattern. The toolbar exposes **Motivi tipizzati ASP** only when at least one template is configured; the panel reports missing node/edge type mappings before a run.
+
+Each returned positive instance is accompanied by a checkable witness: an injective assignment of source nodes to roles and the source edge records that satisfy every required pattern. Temporal templates additionally return either a common valid instant (`coValid`) or one record and mapped validity start per ordered pattern (`orderedByStart`). These witnesses establish the configured structural query, not a causal or historical claim.
+
+After an empty result, the panel also offers an opt-in why-not diagnosis. The ASP objective first maximizes assigned roles, then maximizes required patterns supported by existing edge records. Static templates report missing and unresolved relations and the records that do exist. Temporal templates add a final temporal objective: `coValid` selects a mapped interval boundary where the largest number of patterns are active together; `orderedByStart` selects valid supporting records with the fewest inversions between consecutive pattern positions. Patterns with no complete valid interval are reported separately from patterns that are inactive at the chosen `coValid` instant or violate the declared order. The panel and a separate CSV show the selected time/records and blockers. Ties yield one optimum. This diagnosis ranks explanations under the declared template; it does not suggest adding/removing edges or imply causal interventions, and it can be expensive on large graphs. The temporal why-not query is available only when temporal edge mappings are configured.
+
+```json
+{
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "shared-place",
+        "label": "Two people connected to the same place",
+        "roles": {
+          "personA": { "nodeTypes": ["person"] },
+          "personB": { "nodeTypes": ["person"] },
+          "place": { "nodeTypes": ["institution", "association"] }
+        },
+        "edges": [
+          { "sourceRole": "personA", "targetRole": "place", "edgeType": "affiliated_with" },
+          { "sourceRole": "personB", "targetRole": "place", "edgeType": "affiliated_with" }
+        ],
+        "symmetricRoles": [["personA", "personB"]]
+      }
+    ]
+  }
+}
+```
+
+The example labels are illustrative: role types and edge types must match the current graph's explicit mappings. `symmetricRoles` is optional; it removes equivalent role permutations only when the roles have the same node-type domains and swapping them preserves the complete typed pattern. The task returns every role assignment, maps nodes and supporting edge records back to source IDs, and can highlight or export those witnesses. Parallel edges are retained as edge witnesses. On undirected graphs, a typed edge pattern can match either stored endpoint order; on directed graphs, its source and target roles must match the declared arrow. The optional group selector restricts every role to nodes in that group. Analysis runs on the currently visible graph projection (including active view filters), and the number of matches can grow quickly; `solver.taskTimeoutMs` limits a run, and a timed-out partial enumeration is not shown as complete. By default templates require only their listed positive edge patterns; they allow additional edges between assigned roles.
+
+A static template can additionally declare exact typed relationships that must be absent:
+
+```json
+{
+  "id": "open-triad",
+  "roles": {
+    "source": { "nodeTypes": ["person"] },
+    "middle": { "nodeTypes": ["person"] },
+    "target": { "nodeTypes": ["person"] }
+  },
+  "edges": [
+    { "sourceRole": "source", "targetRole": "middle", "edgeType": "knows" },
+    { "sourceRole": "middle", "targetRole": "target", "edgeType": "knows" }
+  ],
+  "absentEdges": [
+    { "sourceRole": "source", "targetRole": "target", "edgeType": "knows" }
+  ],
+  "closedWorld": true
+}
+```
+
+`absentEdges` is rejected unless `closedWorld: true` is explicit. This is a researcher assertion that the current visible projection is complete for the listed typed relations; it is not inferred from missing JSON values. The task is available only when edge types are mapped for every edge record. On undirected graphs either endpoint order violates an absence condition; on directed graphs only the declared orientation does. Any parallel record of the forbidden type violates it. Other edge types remain allowed, so this is an explicit negative-pattern query, not a claim that the template describes the full induced subgraph. The positive result and CSV state the required absences and their scope. Why-not output reports present forbidden relations with their source edge IDs, and absences that cannot be checked because a role is unassigned. Temporal templates with absence conditions are currently rejected because the project has not defined whether absence means “never recorded”, “not valid at the selected instant”, or something else. The assumption applies after active view filters: filtering out an edge can make a relation absent in the analyzed projection, so this option must not be used when that projection is incomplete for the queried relation types.
+
+For a typed induced motif over a finite relation vocabulary, use `inducedEdgeTypes` instead of listing each missing pair by hand:
+
+```json
+{
+  "id": "induced-open-triad",
+  "roles": {
+    "left": { "nodeTypes": ["person"] },
+    "middle": { "nodeTypes": ["person"] },
+    "right": { "nodeTypes": ["person"] }
+  },
+  "edges": [
+    { "sourceRole": "left", "targetRole": "middle", "edgeType": "knows" },
+    { "sourceRole": "middle", "targetRole": "right", "edgeType": "knows" }
+  ],
+  "inducedEdgeTypes": ["knows"],
+  "closedWorld": true
+}
+```
+
+The compiler expands the vocabulary into negative ASP constraints for every role pair and listed type that is not already a required positive pattern. For undirected graphs it checks each unordered pair, including role self-pairs; for directed graphs it checks every ordered pair, including loops. Thus the example describes an open path with respect to `knows`. Types outside `inducedEdgeTypes` are outside this closed-world scope and are allowed unless separately constrained; positive `edges` outside the vocabulary still have to exist. The list is finite and explicit, so this is a typed induced subgraph relative to that vocabulary, not an assumption that every possible relation type is complete. It requires `closedWorld: true`, complete edge-type mapping, a static template, and data complete for those types in the current visible projection. Filters can affect the answer. Match, why-not, counterfactual and CSV output carry the generated absence conditions and the vocabulary.
+
+An additional opt-in completion query is available after a positive motif query returns no instances, if `graphAnalysis.counterfactuals.edgeAdditions` lists hypothetical edges. Every candidate must have a unique ID, existing source and target node IDs, a literal edge type, and a positive safe-integer `cost`. Candidate node IDs refer to the mapped source IDs (or normalized graph IDs). The query considers only candidates whose endpoints are in the current visible projection and selected motif group; excluded candidates are counted in the panel. Unknown/ambiguous node references, duplicate candidate IDs, and IDs colliding with observed edges are errors. For temporal motifs each candidate also needs a complete, valid interval.
+
+The ASP optimization finds a minimum-total-cost subset of those candidates that makes the configured motif true, including all configured closed-world absence conditions. A candidate that would create a forbidden typed relation cannot be selected. It returns an observed-role assignment, observed supporting edge IDs, and the hypothetical candidate IDs with their pattern positions and declared intervals. A separate CSV exports the proposal. The proposed edges are never inserted into the graph or saved, and highlighting shows only the assigned nodes and observed supporting edges. If no permitted candidate combination works, the UI reports that result; an interrupted or unproven optimization is not presented as an optimum. Costs rank scenarios only within the configured candidate set: they are not probabilities, confidence scores, or causal effects. It does not add arbitrary edges, remove observed data, or claim that a candidate relation is historically true.
+
+```json
+{
+  "graphAnalysis": {
+    "counterfactuals": {
+      "edgeAdditions": [
+        {
+          "id": "candidate-affiliation-1",
+          "sourceNodeId": "person-2",
+          "targetNodeId": "institution-1",
+          "edgeType": "affiliated_with",
+          "cost": 2,
+          "validity": { "from": 2000, "to": 2005 }
+        }
+      ]
+    }
+  }
+}
+```
+
+`validity` is required only if the selected motif is temporal, and its endpoints use the same parser as observed intervals: safe-integer numbers or numeric strings, ISO dates, or explicitly zoned ISO date-times. Invalid dates, timezone-free date-times, locale-dependent strings, and mixed integer/date intervals are rejected. This feature is data-driven: the IDs, type, interval, and cost have meaning only if the graph configuration and researcher-provided candidate set support them. The psychology case remains unchanged unless such candidates are explicitly supplied; the example values above are illustrative.
+
+### Structural k-plex completion counterfactual
+
+After a maximum k-plex query, select one returned witness and choose a target `t` from 1 through the query's `s`. The app fixes that witness's node set and asks ASP for a minimum-total-cost subset of `graphAnalysis.counterfactuals.edgeAdditions` that makes those nodes a `t`-plex. A target below the original `s` is a stricter requirement; `t = s` can return the unchanged witness at cost zero. A witness already meeting the target also returns an empty, zero-cost proposal.
+
+Only candidates with both endpoints in the selected witness, in the current visible projection, and not already adjacent in that projection are considered. Candidate IDs must be unique and must not collide with observed edge IDs; source and target references must resolve unambiguously. Candidate costs must be positive safe integers, and their configured total must fit the safe-integer range. A candidate's `edgeType` is preserved in the proposal as descriptive metadata; this structural query reasons over undirected adjacency and does not constrain the result by relation type. Candidate `validity` intervals are not interpreted by this static query. Existing visibility, type, group, timeline, and confidence filters define the observed projection supplied to ASP.
+
+The result is a scenario over the declared candidate set, not a prediction that an edge exists or an intervention that should be made. Proposed edges are never inserted into the graph or source JSON. The UI highlights only their endpoint nodes and exports each minimum-cost proposal to CSV. When no candidate combination can meet the target, the panel reports that no completion is possible; timeout or an unproven search is not shown as an optimum. Costs are ranking values supplied by the dataset author, not probabilities or causal effects.
+
+### Structural k-core completion counterfactual
+
+After a k-core query on an undirected graph, select one returned witness and choose a target `k` greater than or equal to the source threshold. The app fixes that node set and asks ASP for a minimum-total-cost subset of the same declared `edgeAdditions` that gives every node at least the target number of distinct neighbors inside the witness. It does not add or remove witness nodes. If the witness already meets the target, ASP returns an empty, zero-cost proposal; if the declared candidates cannot meet it, the panel reports no completion.
+
+Candidate resolution, projection filtering, cost validation, hypothetical-only results, highlighting, CSV export, and static treatment of `validity` follow the k-plex completion query above. This counterfactual currently uses undirected adjacency only. Directed k-core modes (`in`, `out`, `mutual`) are not silently converted to this semantics and the UI disables the query for directed graphs. The target degree is bounded by the available witness and declared candidates; an unreachable higher target is reported as infeasible.
+
+### Structural k-core membership counterfactual
+
+The k-core panel also supports a target-node query over the current visible/group candidate domain. It asks ASP for the minimum-cost subset of declared `edgeAdditions` that lets the selected node belong to a k-core at the target threshold. ASP chooses a degree-valid witness subset, so nodes outside that witness need not be modified. The witness is a certificate of membership, not a claim that it lists the entire maximal k-core after augmentation. If the target already belongs to the requested core, the minimum-cost answer is the empty addition set. When all optima are requested, projection enumerates distinct optimal addition sets and avoids duplicate outputs caused by alternate witness subsets.
+
+The query preserves the same explicit-candidate, cost, projection, undirected-adjacency, and hypothetical-only semantics described above. Candidate additions are restricted to endpoints in the current group/projection; edge types and `validity` intervals do not affect this static k-core query. A separate CSV column records the target and the ASP-certified witness nodes.
+
+To require **co-validity**, add `"temporal": { "semantics": "coValid" }` to a template. It requires complete mapped edge intervals. Each returned instance has one earliest mapped instant contained in a closed interval for every required typed edge pattern; the exported/highlightable witnesses are the edge records active at that instant. This is not an event-order or duration-window query, and it carries no causal or historical interpretation by itself. Those semantics depend on data mappings and template configuration, so no psychology-specific type names are built into ASP.
+
+To compare relationship onsets in the declared pattern order, use `"temporal": { "semantics": "orderedByStart" }`; set `"strict": true` to require strictly increasing starts. This mode also requires complete, valid mapped edge intervals. The order is the order of entries in the template's `edges` array, and the compared value for a supporting record is the mapped start of its validity interval (`edge_valid_from`). By default the constraint is non-strict (`start[i] <= start[i + 1]`); strict mode uses `<`. It does not compare interval ends, require intervals to be disjoint, or interpret a validity start as an independently observed event timestamp. The ASP query chooses one supporting edge record for each pattern edge. Different valid combinations of parallel records are returned as distinct temporal witnesses, with each record ID and mapped start shown in the result and CSV. This can increase enumeration substantially; the configured task timeout prevents partial results from being presented as complete. An ordered template's role symmetry is accepted only when swapping roles preserves the declared edge sequence, since sequence position is meaningful. These semantics are a structural query over mapped validity starts, not evidence of causation or a claim about historical events.
+
+Example template fragment:
+
+```json
+{
+  "temporal": { "semantics": "orderedByStart", "strict": true },
+  "edges": [
+    { "sourceRole": "initiator", "targetRole": "context", "edgeType": "initiator-context" },
+    { "sourceRole": "recipient", "targetRole": "context", "edgeType": "recipient-context" }
+  ]
+}
+```
+
+This is validated on synthetic interval data with the shipped clingo-WASM worker. The psychology graph does not map edge dates, and the Davis fixture does not date individual attendance records, so neither is used to claim a domain result for temporal ordering.
+
+Run `npm run benchmark:temporal-motifs` to reproduce a synthetic enumeration check. It scales disjoint motif instances and parallel supporting records, verifies complete model counts, and reports end-to-end wall time, clingo `Total`/`Solve` and `Total − Solve` medians, grounding atom/rule counts, and the per-runner WASM linear-memory baseline/current/peak. Clingo does not expose a dedicated grounding timer here: `Total − Solve` includes parsing, grounding, and setup and is only a pre-solve estimate. The benchmark cannot attribute the browser Worker's JavaScript heap or total resident memory. These measurements are a scaling diagnostic, not evidence about the psychology graph or any historical domain.
 
 ---
 
@@ -253,6 +693,36 @@ This configuration means that:
 - temporal information is extracted from `$.data.active_from` and `$.data.active_to`;
 - semantic group values are extracted from `$.data.affiliations[*].group`;
 - extracted groups can be used to populate filters and generate ASP facts.
+
+The timeline slider is opt-in through `features.timeline: true`. It is hidden by default, so a graph without mapped temporal fields does not inherit a synthetic date range from the application.
+
+For schema v2 edge-time projection, declare the edge interval fields explicitly:
+
+```json
+{
+  "schemaVersion": 2,
+  "features": { "timeline": true },
+  "graphMapping": {
+    "node": { "idField": "$.id", "typeField": "$.type" },
+    "edge": {
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "direction": "undirected",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.validFrom",
+        "toField": "$.validTo"
+      }
+    }
+  }
+}
+```
+
+The interval uses one comparable time domain (for example, integer years or supported ISO dates). The mapping must be valid for every edge before the edge-time slider becomes available. The selected window is inclusive at both ends. Node timeline mappings and edge validity mappings can be combined; each affects its corresponding part of the graph projection. Semantic fields such as `group`, `timeline`, and `alwaysVisible` must be declared in the graph configuration. Application defaults may supply presentation styles and icons, but do not implicitly map those semantics onto a generic graph that happens to use a built-in type name such as `person` or `place`.
+
+The synthetic four-node example in [`temporal-edge-projection.json`](src/lib/kliqueasp/data/examples/temporal-edge-projection.json) and [`temporal-edge-projection.config.json`](src/lib/kliqueasp/data/examples/temporal-edge-projection.config.json) demonstrates edge intervals across three windows. Its dates are test values, not annotations for a real network.
+
+The Sandbox JSON Editor offers optional presets for Davis Southern Women, Zachary Karate Club, and the synthetic temporal-edge graph. Each preset loads its dataset and graph mapping together; **Reset example** restores the original three-node legacy sample.
 
 ---
 
@@ -353,7 +823,7 @@ out(W) :- valid(W), in(V), V != W, not edge(W,V).
 #show in/1.
 ```
 
-Edges are treated as undirected: duplicated `A–B` / `B–A` entries in the dataset are merged when the graph is loaded.
+This `edge/2` example shows the legacy undirected profile: duplicated `A–B` / `B–A` entries are merged when the graph is loaded. In schema v2, mapped directed graphs retain arc direction and edge-record identity in the ASP facts; each task checks that its required projection is available instead of silently changing the graph's meaning.
 
 The answer sets are mapped back to graph node identifiers and highlighted in the 3D visualization.
 
@@ -365,6 +835,7 @@ The interface includes:
 
 - 🔍 node search with autocomplete;
 - 🧭 neighborhood navigation;
+- 🏷️ optional show/hide control for node labels on dense graphs (`features.labelVisibilityToggle: true`); labels are visible by default, and a graph can set `features.nodeLabelsVisibleByDefault: false` to start with labels hidden;
 - 🧱 type filters;
 - 🏷️ semantic filters;
 - ⏳ timeline slider;
@@ -403,6 +874,12 @@ Preview the production build:
 npm run preview
 ```
 
+To preview the static build using its GitHub Pages base path (`/KliqueASP`) locally, run:
+
+```bash
+npm run preview:base
+```
+
 ---
 
 ## 🧠 Why ASP?
@@ -419,31 +896,31 @@ This makes the framework suitable for exploratory scenarios where users need to 
 
 ## 🎯 Current Focus
 
-The current version focuses on maximum clique detection.
-
-This task was chosen because it provides a clear combinatorial benchmark for testing the full pipeline:
+KliqueASP preserves maximum clique detection as the original case study while extending the same data-driven pipeline to additional graph structures and constraints:
 
 ```text
 Graph projection → ASP fact generation → Client-side solving → Visual feedback
 ```
 
-KliqueASP is not intended to introduce a new clique-detection algorithm.  
-Its contribution is the integration of declarative reasoning inside an interactive visual exploration workflow.
+The project does not claim a new clique-detection algorithm. Its focus is the integration of optional graph mappings, explicit ASP encodings, witness inspection, and visual projections while keeping the original Psychology History Graph analysis reproducible.
 
 ---
 
+## Automated verification
+
+Run the project checks with:
+
+```sh
+npm test
+npm run check
+npm run build
+```
+
+The test suite runs the shipped clingo-WASM worker and compares ASP results with independent small-graph references. It also maps the checked-in Zachary Karate Club fixture (34 nodes, 78 undirected edges) through schema v2 and compares its ASP k=3 core (22 nodes) with iterative peeling. The source `club` labels are retained only as mapped node attributes; the fixture does not invent edge types, dates, or weights, and the labels are not treated as ground-truth communities. The independent branch-and-bound s-plex reference is checked against exhaustive search for s=1,2 on all 64 simple four-node graphs; the ASP binary feasibility search is checked against exhaustive maxima for s=1,2,3 on the same graphs. Psychology regressions prove s=3 size 7, s=4 size 8, s=5 size 9, s=6 size 10, s=7 size 11, s=8 size 12 and s=9 size 13 with independent branch-and-bound references and validate each ASP witness. Karate Club regressions prove s=3 size 6, s=4 size 8, s=5 size 9, s=6,7 size 10, s=8 size 11 and s=9 size 12 against the same exact reference. The Davis Southern Women fixture also maps the bipartite woman-event incidences as typed attendance edges and checks 322 ASP shared-event motifs against an independent incidence enumeration; its records have no mapped event dates, so temporal motifs remain unavailable. A typed one-edge path from Evelyn Jefferson to E1 also returns the original attendance edge ID. Sources: [NetworkX documentation](https://networkx.org/documentation/networkx-3.7/reference/generated/networkx.generators.social.davis_southern_women_graph.html), [NetworkX source](https://networkx.org/documentation/networkx-3.7/_modules/networkx/generators/social.html), and [statnet.data documentation](https://rdrr.io/github/statnet/statnet.data/man/davis.html).
+
 ## 🗺️ Roadmap
 
-Planned extensions include:
-
-- 🧩 support for custom ASP encodings;
-- 📤 export of generated ASP programs;
-- 🧪 improved debugging tools for node-index mappings;
-- 📚 support for multiple graph datasets;
-- 🧠 additional graph reasoning tasks;
-- 🧑‍🍳 integration as a reusable graph-oriented component in ASP-Chef;
-- 📊 richer visual analytics components;
-- 📝 improved documentation for custom datasets and configurations.
+The detailed implementation status and evidence are tracked in [`IDEA1.MD`](IDEA1.MD). Remaining work includes measuring exact modularity on larger projections without presenting an unproven partition as optimal, completing the visual audit across remaining views and responsive states, and validating temporal or multi-source interpretations only when suitable domain data is available. The Psychology History Graph currently has no mapped edge dates or provenance, so it remains the preserved structural case study rather than evidence for those interpretations.
 
 ---
 
@@ -479,9 +956,11 @@ This repository is released under the license specified in the project.
 
 ---
 
-## 🌐 Live Demo
+## 🌐 GitHub Pages Demo
 
-The GitHub Pages deployment exposes three entry points:
+These are the canonical URLs generated by the current static build. In a read-only check on 2026-10-21, GitHub Pages still served an older build: `/Sandbox/` and `/PsychologyHistoryGraph/` returned 404, and its JavaScript asset hashes did not match this checkout. The current build now emits directory `index.html` files for both routes. Recheck these URLs after publishing the updated `build/` output.
+
+The site has three entry points:
 
 - **Home / Easter Egg**  
   https://pierpaolosestito-dev.github.io/KliqueASP/

@@ -9,6 +9,9 @@
   export let onDatasetTextChange: (value: string) => void = () => {};
   export let onApply: () => void = () => {};
   export let onReset: () => void = () => {};
+  export let onLoadDavis: () => void = () => {};
+  export let onLoadKarate: () => void = () => {};
+  export let onLoadTemporalEdges: () => void = () => {};
   export let onClose: () => void = () => {};
 </script>
 
@@ -71,6 +74,33 @@
       >
         Reset example
       </button>
+
+      <button
+        class="secondary-button"
+        type="button"
+        on:click={onLoadDavis}
+        title="Carica il grafo bipartito Davis Southern Women con mapping schema v2"
+      >
+        Davis · 32 nodi, 89 archi
+      </button>
+
+      <button
+        class="secondary-button"
+        type="button"
+        on:click={onLoadKarate}
+        title="Carica il grafo Zachary Karate Club con mapping schema v2"
+      >
+        Karate Club · 34 nodi, 78 archi
+      </button>
+
+      <button
+        class="secondary-button"
+        type="button"
+        on:click={onLoadTemporalEdges}
+        title="Carica una fixture sintetica schema v2 con intervalli temporali sugli archi"
+      >
+        Rete temporale · 4 nodi, 5 archi
+      </button>
     </div>
   </aside>
 {/if}
@@ -82,11 +112,13 @@
     z-index: 100;
     width: 420px;
     height: 100vh;
+    height: 100dvh;
     box-sizing: border-box;
     padding: 18px;
     display: flex;
     flex-direction: column;
     gap: 14px;
+    overflow: hidden;
     background: rgba(15, 23, 42, 0.96);
     color: #e5e7eb;
     border-right: 1px solid rgba(148, 163, 184, 0.25);
@@ -112,14 +144,16 @@
     flex: 1;
     flex-direction: column;
     gap: 14px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .json-editor-section {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    min-height: 0;
-    flex: 1;
+    min-height: 120px;
+    flex: 1 0 120px;
   }
 
   .json-editor-section label {
@@ -130,8 +164,9 @@
 
   textarea {
     width: 100%;
-    height: 100%;
-    min-height: 190px;
+    min-height: 96px;
+    height: auto;
+    flex: 1 1 96px;
     resize: vertical;
     box-sizing: border-box;
     padding: 12px;
@@ -172,6 +207,7 @@
 
   .json-editor-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     margin-top: auto;
   }

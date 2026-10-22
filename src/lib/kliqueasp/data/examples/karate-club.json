@@ -1,0 +1,574 @@
+{
+    "metadata":  {
+                     "name":  "Zachary\u0027s Karate Club",
+                     "source":  "NetworkX 2.6 karate_club_graph source; based on Zachary (1977) and UCINET data",
+                     "sourceUrl":  "https://raw.githubusercontent.com/networkx/networkx/networkx-2.6/networkx/generators/social.py",
+                     "nodeCount":  34,
+                     "undirectedEdgeCount":  78,
+                     "note":  "The club attribute records split affiliation labels; it is not asserted to be a gold-standard community partition."
+                 },
+    "nodes":  [
+                  {
+                      "id":  0,
+                      "label":  "Member 0",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  1,
+                      "label":  "Member 1",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  2,
+                      "label":  "Member 2",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  3,
+                      "label":  "Member 3",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  4,
+                      "label":  "Member 4",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  5,
+                      "label":  "Member 5",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  6,
+                      "label":  "Member 6",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  7,
+                      "label":  "Member 7",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  8,
+                      "label":  "Member 8",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  9,
+                      "label":  "Member 9",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  10,
+                      "label":  "Member 10",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  11,
+                      "label":  "Member 11",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  12,
+                      "label":  "Member 12",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  13,
+                      "label":  "Member 13",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  14,
+                      "label":  "Member 14",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  15,
+                      "label":  "Member 15",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  16,
+                      "label":  "Member 16",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  17,
+                      "label":  "Member 17",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  18,
+                      "label":  "Member 18",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  19,
+                      "label":  "Member 19",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  20,
+                      "label":  "Member 20",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  21,
+                      "label":  "Member 21",
+                      "club":  "Mr. Hi"
+                  },
+                  {
+                      "id":  22,
+                      "label":  "Member 22",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  23,
+                      "label":  "Member 23",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  24,
+                      "label":  "Member 24",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  25,
+                      "label":  "Member 25",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  26,
+                      "label":  "Member 26",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  27,
+                      "label":  "Member 27",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  28,
+                      "label":  "Member 28",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  29,
+                      "label":  "Member 29",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  30,
+                      "label":  "Member 30",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  31,
+                      "label":  "Member 31",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  32,
+                      "label":  "Member 32",
+                      "club":  "Officer"
+                  },
+                  {
+                      "id":  33,
+                      "label":  "Member 33",
+                      "club":  "Officer"
+                  }
+              ],
+    "edges":  [
+                  {
+                      "id":  "e1",
+                      "source":  0,
+                      "target":  1
+                  },
+                  {
+                      "id":  "e2",
+                      "source":  0,
+                      "target":  2
+                  },
+                  {
+                      "id":  "e3",
+                      "source":  0,
+                      "target":  3
+                  },
+                  {
+                      "id":  "e4",
+                      "source":  0,
+                      "target":  4
+                  },
+                  {
+                      "id":  "e5",
+                      "source":  0,
+                      "target":  5
+                  },
+                  {
+                      "id":  "e6",
+                      "source":  0,
+                      "target":  6
+                  },
+                  {
+                      "id":  "e7",
+                      "source":  0,
+                      "target":  7
+                  },
+                  {
+                      "id":  "e8",
+                      "source":  0,
+                      "target":  8
+                  },
+                  {
+                      "id":  "e9",
+                      "source":  0,
+                      "target":  10
+                  },
+                  {
+                      "id":  "e10",
+                      "source":  0,
+                      "target":  11
+                  },
+                  {
+                      "id":  "e11",
+                      "source":  0,
+                      "target":  12
+                  },
+                  {
+                      "id":  "e12",
+                      "source":  0,
+                      "target":  13
+                  },
+                  {
+                      "id":  "e13",
+                      "source":  0,
+                      "target":  17
+                  },
+                  {
+                      "id":  "e14",
+                      "source":  0,
+                      "target":  19
+                  },
+                  {
+                      "id":  "e15",
+                      "source":  0,
+                      "target":  21
+                  },
+                  {
+                      "id":  "e16",
+                      "source":  0,
+                      "target":  31
+                  },
+                  {
+                      "id":  "e17",
+                      "source":  1,
+                      "target":  2
+                  },
+                  {
+                      "id":  "e18",
+                      "source":  1,
+                      "target":  3
+                  },
+                  {
+                      "id":  "e19",
+                      "source":  1,
+                      "target":  7
+                  },
+                  {
+                      "id":  "e20",
+                      "source":  1,
+                      "target":  13
+                  },
+                  {
+                      "id":  "e21",
+                      "source":  1,
+                      "target":  17
+                  },
+                  {
+                      "id":  "e22",
+                      "source":  1,
+                      "target":  19
+                  },
+                  {
+                      "id":  "e23",
+                      "source":  1,
+                      "target":  21
+                  },
+                  {
+                      "id":  "e24",
+                      "source":  1,
+                      "target":  30
+                  },
+                  {
+                      "id":  "e25",
+                      "source":  2,
+                      "target":  3
+                  },
+                  {
+                      "id":  "e26",
+                      "source":  2,
+                      "target":  7
+                  },
+                  {
+                      "id":  "e27",
+                      "source":  2,
+                      "target":  8
+                  },
+                  {
+                      "id":  "e28",
+                      "source":  2,
+                      "target":  9
+                  },
+                  {
+                      "id":  "e29",
+                      "source":  2,
+                      "target":  13
+                  },
+                  {
+                      "id":  "e30",
+                      "source":  2,
+                      "target":  27
+                  },
+                  {
+                      "id":  "e31",
+                      "source":  2,
+                      "target":  28
+                  },
+                  {
+                      "id":  "e32",
+                      "source":  2,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e33",
+                      "source":  3,
+                      "target":  7
+                  },
+                  {
+                      "id":  "e34",
+                      "source":  3,
+                      "target":  12
+                  },
+                  {
+                      "id":  "e35",
+                      "source":  3,
+                      "target":  13
+                  },
+                  {
+                      "id":  "e36",
+                      "source":  4,
+                      "target":  6
+                  },
+                  {
+                      "id":  "e37",
+                      "source":  4,
+                      "target":  10
+                  },
+                  {
+                      "id":  "e38",
+                      "source":  5,
+                      "target":  6
+                  },
+                  {
+                      "id":  "e39",
+                      "source":  5,
+                      "target":  10
+                  },
+                  {
+                      "id":  "e40",
+                      "source":  5,
+                      "target":  16
+                  },
+                  {
+                      "id":  "e41",
+                      "source":  6,
+                      "target":  16
+                  },
+                  {
+                      "id":  "e42",
+                      "source":  8,
+                      "target":  30
+                  },
+                  {
+                      "id":  "e43",
+                      "source":  8,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e44",
+                      "source":  8,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e45",
+                      "source":  9,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e46",
+                      "source":  13,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e47",
+                      "source":  14,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e48",
+                      "source":  14,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e49",
+                      "source":  15,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e50",
+                      "source":  15,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e51",
+                      "source":  18,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e52",
+                      "source":  18,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e53",
+                      "source":  19,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e54",
+                      "source":  20,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e55",
+                      "source":  20,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e56",
+                      "source":  22,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e57",
+                      "source":  22,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e58",
+                      "source":  23,
+                      "target":  25
+                  },
+                  {
+                      "id":  "e59",
+                      "source":  23,
+                      "target":  27
+                  },
+                  {
+                      "id":  "e60",
+                      "source":  23,
+                      "target":  29
+                  },
+                  {
+                      "id":  "e61",
+                      "source":  23,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e62",
+                      "source":  23,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e63",
+                      "source":  24,
+                      "target":  25
+                  },
+                  {
+                      "id":  "e64",
+                      "source":  24,
+                      "target":  27
+                  },
+                  {
+                      "id":  "e65",
+                      "source":  24,
+                      "target":  31
+                  },
+                  {
+                      "id":  "e66",
+                      "source":  25,
+                      "target":  31
+                  },
+                  {
+                      "id":  "e67",
+                      "source":  26,
+                      "target":  29
+                  },
+                  {
+                      "id":  "e68",
+                      "source":  26,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e69",
+                      "source":  27,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e70",
+                      "source":  28,
+                      "target":  31
+                  },
+                  {
+                      "id":  "e71",
+                      "source":  28,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e72",
+                      "source":  29,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e73",
+                      "source":  29,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e74",
+                      "source":  30,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e75",
+                      "source":  30,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e76",
+                      "source":  31,
+                      "target":  32
+                  },
+                  {
+                      "id":  "e77",
+                      "source":  31,
+                      "target":  33
+                  },
+                  {
+                      "id":  "e78",
+                      "source":  32,
+                      "target":  33
+                  }
+              ]
+}

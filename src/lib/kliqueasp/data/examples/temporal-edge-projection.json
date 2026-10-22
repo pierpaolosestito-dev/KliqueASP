@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    { "id": "a", "label": "A", "type": "analyst", "groups": ["G1"] },
+    { "id": "b", "label": "B", "type": "analyst", "groups": ["G1"] },
+    { "id": "c", "label": "C", "type": "analyst", "groups": ["G1"] },
+    { "id": "d", "label": "D", "type": "analyst", "groups": ["G1"] }
+  ],
+  "edges": [
+    { "id": "ab", "source": "a", "target": "b", "type": "collaboration", "validFrom": 1990, "validTo": 1999 },
+    { "id": "bd", "source": "b", "target": "d", "type": "mentorship", "validFrom": 2000, "validTo": 2009 },
+    { "id": "dc", "source": "d", "target": "c", "type": "collaboration", "validFrom": 2010, "validTo": 2014 },
+    { "id": "ca", "source": "c", "target": "a", "type": "mentorship", "validFrom": 2015, "validTo": 2020 },
+    { "id": "bc", "source": "b", "target": "c", "type": "collaboration", "validFrom": 2005, "validTo": 2015 }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "attributes": {
+        "club": "$.club"
+      }
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "direction": "undirected",
+      "identity": "simple"
+    }
+  }
+}

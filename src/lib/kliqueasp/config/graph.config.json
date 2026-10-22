@@ -37,7 +37,8 @@
 
   "features": {
     "filters": true,
-    "timeline": true
+    "timeline": true,
+    "labelVisibilityToggle": true
   },
 
   "timeline": {
@@ -49,6 +50,10 @@
   "solver": {
   "enabled": true,
   "cliqueMode": "maximal",
+  "diagnostics": {
+    "aspTiming": false,
+    "aspStats": false
+  },
   "features": {
     "groupFilter": true,
     "minSize": true,

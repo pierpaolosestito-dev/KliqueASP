@@ -1,8 +1,17 @@
 <script lang="ts">
   import GraphApp from "$lib/kliqueasp/GraphApp.svelte";
   import JsonEditor from "$lib/kliqueasp/components/JsonEditor.svelte";
+  import davisConfig from "$lib/kliqueasp/data/examples/davis-southern-women.config.json";
+  import davisDataset from "$lib/kliqueasp/data/examples/davis-southern-women.json";
+  import karateConfig from "$lib/kliqueasp/data/examples/karate-club.config.json";
+  import karateDataset from "$lib/kliqueasp/data/examples/karate-club.json";
+  import temporalEdgeConfig from "$lib/kliqueasp/data/examples/temporal-edge-projection.config.json";
+  import temporalEdgeDataset from "$lib/kliqueasp/data/examples/temporal-edge-projection.json";
 
   const DEFAULT_CONFIG_TEXT = `{
+  "features": {
+    "timeline": true
+  },
   "nodeTypes": {
     "actor": {
       "timeline": {
@@ -85,6 +94,7 @@
   let graphData: any = normalizeDataset(JSON.parse(DEFAULT_DATASET_TEXT));
 
   let graphKey = 0;
+  let nodeLabelsVisible = true;
   let errorMessage = "";
   let editorOpen = false;
 
@@ -105,6 +115,12 @@
     onApply: applyJson,
 
     onReset: resetEditors,
+
+    onLoadDavis: loadDavisExample,
+
+    onLoadKarate: loadKarateExample,
+
+    onLoadTemporalEdges: loadTemporalEdgeExample,
 
     onOpen: () => {
       editorOpen = true;
@@ -136,13 +152,35 @@
     applyJson();
   }
 
+  function loadDavisExample() {
+    configText = JSON.stringify(davisConfig, null, 2);
+    datasetText = JSON.stringify(davisDataset, null, 2);
+    applyJson();
+  }
+
+  function loadKarateExample() {
+    configText = JSON.stringify(karateConfig, null, 2);
+    datasetText = JSON.stringify(karateDataset, null, 2);
+    applyJson();
+  }
+
+  function loadTemporalEdgeExample() {
+    configText = JSON.stringify(temporalEdgeConfig, null, 2);
+    datasetText = JSON.stringify(temporalEdgeDataset, null, 2);
+    applyJson();
+  }
+
   function normalizeDataset(dataset: any) {
+    const source = dataset && typeof dataset === "object" && !Array.isArray(dataset)
+      ? dataset
+      : {};
     return {
-      nodes: Array.isArray(dataset?.nodes) ? dataset.nodes : [],
-      edges: Array.isArray(dataset?.edges)
-        ? dataset.edges
-        : Array.isArray(dataset?.links)
-          ? dataset.links
+      ...source,
+      nodes: Array.isArray(source.nodes) ? source.nodes : [],
+      edges: Array.isArray(source.edges)
+        ? source.edges
+        : Array.isArray(source.links)
+          ? source.links
           : []
     };
   }
@@ -161,6 +199,7 @@
     <GraphApp
       {graphConfig}
       {graphData}
+      bind:nodeLabelsVisible
       {JsonEditor}
       {jsonEditorProps}
     />

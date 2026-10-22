@@ -71,6 +71,7 @@
 
   export let min: number;
   export let max: number;
+  export let disabled = false;
 
   // ✅ controllati dal parent (App.svelte)
   export let start = min;
@@ -90,14 +91,18 @@
   }
 
   function updateStart(e: Event) {
-    const value = Number((e.target as HTMLInputElement).value);
+    const input = e.target as HTMLInputElement;
+    const value = Number(input.value);
     localStart = Math.min(value, localEnd);
+    if (input.value !== String(localStart)) input.value = String(localStart);
     emit();
   }
 
   function updateEnd(e: Event) {
-    const value = Number((e.target as HTMLInputElement).value);
+    const input = e.target as HTMLInputElement;
+    const value = Number(input.value);
     localEnd = Math.max(value, localStart);
+    if (input.value !== String(localEnd)) input.value = String(localEnd);
     emit();
   }
 </script>
@@ -141,6 +146,7 @@
       min={min}
       max={max}
       value={localStart}
+      {disabled}
       on:input={updateStart}
       class="slider slider-start"
     />
@@ -150,6 +156,7 @@
       min={min}
       max={max}
       value={localEnd}
+      {disabled}
       on:input={updateEnd}
       class="slider slider-end"
     />
@@ -169,6 +176,13 @@
     backdrop-filter: blur(var(--tl-blur));
     box-shadow: var(--tl-shadow);
     z-index: var(--tl-z);
+  }
+
+  @media (max-width: 600px) {
+    .timeline-container {
+      width: min(var(--tl-width), calc(100vw - 24px));
+      box-sizing: border-box;
+    }
   }
 
   .timeline-label {

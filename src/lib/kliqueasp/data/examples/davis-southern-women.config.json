@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "features": {
+    "labelVisibilityToggle": true,
+    "nodeLabelsVisibleByDefault": false
+  },
+  "node": {
+    "label": {
+      "font": "16px sans-serif",
+      "scale": [12, 5]
+    }
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type"
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "simple"
+    }
+  },
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "shared-event",
+        "label": "Due donne partecipano allo stesso evento",
+        "roles": {
+          "womanA": { "nodeTypes": ["woman"] },
+          "womanB": { "nodeTypes": ["woman"] },
+          "event": { "nodeTypes": ["event"] }
+        },
+        "edges": [
+          { "sourceRole": "womanA", "targetRole": "event", "edgeType": "attendance" },
+          { "sourceRole": "womanB", "targetRole": "event", "edgeType": "attendance" }
+        ],
+        "symmetricRoles": [["womanA", "womanB"]]
+      }
+    ]
+  }
+}

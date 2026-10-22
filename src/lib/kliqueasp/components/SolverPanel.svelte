@@ -1,5 +1,10 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { downloadCsvText, serializeCsv } from "../csvExport";
+  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+  import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
+  import type { CliqueSupportingEdge } from "../graph/graphModel";
+  import { buildCliqueSupportingExportRows } from "../graph/cliqueCsvExport";
 
   // Sezione "solver" del config già risolta dal parent (GraphApp).
   export let config: any = {};
@@ -21,6 +26,14 @@
 
   export let maximumCliques: string[][] = [];
   export let allCliques: string[][] = [];
+  export let supportingEdgesByClique: Record<string, CliqueSupportingEdge[]> = {};
+  export let edgeProvenanceBySourceId: Record<string, string> = {};
+  export let edgeProvenanceReferencesBySourceId: Record<string, string[]> = {};
+  export let workerWasmMemoryStats: WorkerWasmMemoryStats | null = null;
+  export let clingoTiming: ClingoInvocationTiming | null = null;
+  export let showClingoTiming: boolean = false;
+  export let clingoStats: ClingoInvocationStats | null = null;
+  export let showClingoStats: boolean = false;
 
   export let selectedNodeId: string | null = null;
 
@@ -89,8 +102,16 @@
 
   let filteredCliques: string[][] = [];
   let grouped: { size: number; cliques: string[][] }[] = [];
+  let selectedCliqueSignature = "";
+
+  function cliqueSignature(clique: string[]): string {
+    return [...clique].sort().join("\u0000");
+  }
+
+  $: selectedCliqueSupportingEdges = supportingEdgesByClique[ selectedCliqueSignature ] ?? [];
 
   function highlightClique(c: string[]) {
+    selectedCliqueSignature = cliqueSignature(c);
     dispatch("highlight", c);
   }
 
@@ -192,21 +213,21 @@
   function downloadCSV() {
     if (!filteredCliques?.length) return;
 
-    let csv = "size,clique\n";
+    const rows: unknown[][] = [["size", "clique"]];
+    for (const clique of filteredCliques) rows.push([clique.length, clique.join(" | ")]);
+    downloadCsvText("cliques_export.csv", serializeCsv(rows));
+  }
 
-    for (const c of filteredCliques) {
-      csv += `${c.length},"${c.join(" | ")}"\n`;
-    }
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "cliques_export.csv";
-    a.click();
-
-    URL.revokeObjectURL(url);
+  function downloadExplanationCSV() {
+    if (!filteredCliques.length) return;
+    const rows = buildCliqueSupportingExportRows(
+      filteredCliques,
+      supportingEdgesByClique,
+      edgeProvenanceBySourceId,
+      edgeProvenanceReferencesBySourceId
+    );
+    const csv = serializeCsv(rows);
+    downloadCsvText("cliques_with_supporting_edges.csv", csv);
   }
 </script>
 
@@ -241,6 +262,7 @@
     {#if stats?.periodLabel}
       <div><strong>Period:</strong> {stats.periodLabel}</div>
     {/if}
+    <WorkerMemoryReadout stats={workerWasmMemoryStats} {clingoTiming} showClingoTiming={showClingoTiming} {clingoStats} showClingoStats={showClingoStats} />
   </div>
   {/if}
 
@@ -329,9 +351,38 @@
     <button on:click={downloadCSV}>
       Download CSV (filtered)
     </button>
+    {#if Object.keys(supportingEdgesByClique).length > 0}
+    <button on:click={downloadExplanationCSV}>
+      Download clique witnesses CSV
+    </button>
+    {/if}
     {/if}
 
   </div>
+
+  {#if F.selectedAnalysis !== false && selectedCliqueSignature}
+    <div class="selected-analysis clique-explanation">
+      <strong>Positive ASP explanation</strong>
+      <p>Each unordered pair of clique nodes has at least one supporting edge record.</p>
+      {#if selectedCliqueSupportingEdges.length > 0}
+        <ul>
+          {#each selectedCliqueSupportingEdges as edge}
+            <li>
+              {edge.sourceNodeId} — {edge.targetNodeId}
+              {#if edge.edgeId}
+                <small>{edge.edgeIdGenerated ? "generated local record key" : "source edge ID"}: {edge.edgeId}</small>
+                {#if edgeProvenanceBySourceId[edge.edgeId]}
+                  <small>declared source: {edgeProvenanceBySourceId[edge.edgeId]}</small>
+                {/if}
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <small>Edge-record details are unavailable for this result.</small>
+      {/if}
+    </div>
+  {/if}
 
   <div class="solver-cliques">
     <h4>Cliques</h4>
@@ -401,6 +452,22 @@
     padding: var(--solver-selected-padding);
     background: var(--solver-selected-bg);
     border-radius: var(--solver-selected-radius);
+  }
+
+  .clique-explanation p {
+    margin: 5px 0;
+  }
+
+  .clique-explanation ul {
+    max-height: 180px;
+    overflow: auto;
+    margin: 6px 0 0;
+    padding-left: 20px;
+  }
+
+  .clique-explanation small {
+    display: block;
+    opacity: 0.75;
   }
 
   .solver-controls {
@@ -516,5 +583,15 @@
     min-width: 32px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 1280px) {
+    .solver-panel {
+      box-sizing: border-box;
+      width: min(var(--solver-width), calc(100vw - 20px));
+      right: 10px;
+      top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
+      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px);
+    }
   }
 </style>
