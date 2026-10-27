@@ -3,6 +3,10 @@ import dataset from "../src/lib/kliqueasp/data/examples/temporal-edge-projection
 import graphConfig from "../src/lib/kliqueasp/data/examples/temporal-edge-projection.config.json" with { type: "json" };
 import test from "node:test";
 import { buildAspFactsFromGraph, normalizeGraphData } from "../src/lib/kliqueasp/graph/graphModel.ts";
+import {
+  getGraphDisplayEdgeTypeColor,
+  getGraphDisplayEdgeTypeLegend
+} from "../src/lib/kliqueasp/graph/graphVisualization.ts";
 import { filterLinksByTemporalWindow } from "../src/lib/kliqueasp/graph/temporalProjection.ts";
 import {
   buildMaximumKPlexProgram,
@@ -50,6 +54,16 @@ function getRunner() {
   runnerPromise ??= createClingoWasmRunner();
   return runnerPromise;
 }
+
+test("il preset temporale configura colori distinti per i tipi d'arco presenti", () => {
+  const normalized = normalizeGraphData(dataset, graphConfig);
+  assert.equal(normalized.valid, true, JSON.stringify(normalized.diagnostics));
+  assert.deepEqual(getGraphDisplayEdgeTypeLegend(normalized.links, graphConfig.colors.edgeTypes), [
+    { type: "collaboration", color: "#38bdf8" },
+    { type: "mentorship", color: "#f59e0b" }
+  ]);
+  assert.equal(getGraphDisplayEdgeTypeColor(normalized.links[0], graphConfig.colors.edgeTypes), "#38bdf8");
+});
 
 test("la timeline schema v2 proietta gli stessi archi nei fatti ASP e conserva i massimi k-plex", async () => {
   const normalized = normalizeGraphData(dataset, graphConfig);

@@ -1,0 +1,492 @@
+{
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Sub-tribe 1",
+      "type": "subtribe"
+    },
+    {
+      "id": "2",
+      "label": "Sub-tribe 2",
+      "type": "subtribe"
+    },
+    {
+      "id": "3",
+      "label": "Sub-tribe 3",
+      "type": "subtribe"
+    },
+    {
+      "id": "4",
+      "label": "Sub-tribe 4",
+      "type": "subtribe"
+    },
+    {
+      "id": "5",
+      "label": "Sub-tribe 5",
+      "type": "subtribe"
+    },
+    {
+      "id": "6",
+      "label": "Sub-tribe 6",
+      "type": "subtribe"
+    },
+    {
+      "id": "7",
+      "label": "Sub-tribe 7",
+      "type": "subtribe"
+    },
+    {
+      "id": "8",
+      "label": "Sub-tribe 8",
+      "type": "subtribe"
+    },
+    {
+      "id": "9",
+      "label": "Sub-tribe 9",
+      "type": "subtribe"
+    },
+    {
+      "id": "10",
+      "label": "Sub-tribe 10",
+      "type": "subtribe"
+    },
+    {
+      "id": "11",
+      "label": "Sub-tribe 11",
+      "type": "subtribe"
+    },
+    {
+      "id": "12",
+      "label": "Sub-tribe 12",
+      "type": "subtribe"
+    },
+    {
+      "id": "13",
+      "label": "Sub-tribe 13",
+      "type": "subtribe"
+    },
+    {
+      "id": "14",
+      "label": "Sub-tribe 14",
+      "type": "subtribe"
+    },
+    {
+      "id": "15",
+      "label": "Sub-tribe 15",
+      "type": "subtribe"
+    },
+    {
+      "id": "16",
+      "label": "Sub-tribe 16",
+      "type": "subtribe"
+    }
+  ],
+  "edges": [
+    {
+      "id": "gama-1",
+      "source": "1",
+      "target": "2",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-2",
+      "source": "1",
+      "target": "3",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-3",
+      "source": "2",
+      "target": "3",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-4",
+      "source": "1",
+      "target": "4",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-5",
+      "source": "3",
+      "target": "4",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-6",
+      "source": "1",
+      "target": "5",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-7",
+      "source": "2",
+      "target": "5",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-8",
+      "source": "1",
+      "target": "6",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-9",
+      "source": "2",
+      "target": "6",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-10",
+      "source": "3",
+      "target": "6",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-11",
+      "source": "3",
+      "target": "7",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-12",
+      "source": "5",
+      "target": "7",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-13",
+      "source": "6",
+      "target": "7",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-14",
+      "source": "3",
+      "target": "8",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-15",
+      "source": "4",
+      "target": "8",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-16",
+      "source": "6",
+      "target": "8",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-17",
+      "source": "7",
+      "target": "8",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-18",
+      "source": "2",
+      "target": "9",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-19",
+      "source": "5",
+      "target": "9",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-20",
+      "source": "6",
+      "target": "9",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-21",
+      "source": "2",
+      "target": "10",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-22",
+      "source": "9",
+      "target": "10",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-23",
+      "source": "6",
+      "target": "11",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-24",
+      "source": "7",
+      "target": "11",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-25",
+      "source": "8",
+      "target": "11",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-26",
+      "source": "9",
+      "target": "11",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-27",
+      "source": "10",
+      "target": "11",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-28",
+      "source": "1",
+      "target": "12",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-29",
+      "source": "6",
+      "target": "12",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-30",
+      "source": "7",
+      "target": "12",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-31",
+      "source": "8",
+      "target": "12",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-32",
+      "source": "11",
+      "target": "12",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-33",
+      "source": "6",
+      "target": "13",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-34",
+      "source": "7",
+      "target": "13",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-35",
+      "source": "9",
+      "target": "13",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-36",
+      "source": "10",
+      "target": "13",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-37",
+      "source": "11",
+      "target": "13",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-38",
+      "source": "5",
+      "target": "14",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-39",
+      "source": "8",
+      "target": "14",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-40",
+      "source": "12",
+      "target": "14",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-41",
+      "source": "13",
+      "target": "14",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-42",
+      "source": "1",
+      "target": "15",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-43",
+      "source": "2",
+      "target": "15",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-44",
+      "source": "5",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-45",
+      "source": "9",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-46",
+      "source": "10",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-47",
+      "source": "11",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-48",
+      "source": "12",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-49",
+      "source": "13",
+      "target": "15",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-50",
+      "source": "1",
+      "target": "16",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-51",
+      "source": "2",
+      "target": "16",
+      "type": "rova",
+      "sign": 1
+    },
+    {
+      "id": "gama-52",
+      "source": "5",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-53",
+      "source": "6",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-54",
+      "source": "11",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-55",
+      "source": "12",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-56",
+      "source": "13",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-57",
+      "source": "14",
+      "target": "16",
+      "type": "hina",
+      "sign": -1
+    },
+    {
+      "id": "gama-58",
+      "source": "15",
+      "target": "16",
+      "type": "rova",
+      "sign": 1
+    }
+  ]
+}

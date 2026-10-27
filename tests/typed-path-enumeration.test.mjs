@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { buildAspFactsFromGraph, normalizeGraphData } from "../src/lib/kliqueasp/graph/graphModel.ts";
-import { buildTypedPathProgram } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
+import { buildTypedPathProgram, hasCompleteModelEnumeration } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
 import { createClingoWasmRunner } from "./helpers/clingoWasm.mjs";
 
 function makeLayeredGraph(depth, branchingFactor, requestedNodeCount = 0) {
@@ -67,6 +67,7 @@ test("il profilo typed-path enumera tutti i cammini, scala il dominio e segnala 
   const complete = await runner.run(program, ["--stats=2"], 0);
   assert.equal(complete.Result, "SATISFIABLE");
   assert.deepEqual(complete.Models, { Number: 8, More: "no" });
+  assert.equal(hasCompleteModelEnumeration(complete), true);
   assert.ok(Number(complete.Time.Total) >= Number(complete.Time.Solve));
   assert.ok(complete.Stats.LP.Atoms > 0);
   assert.ok(complete.Stats.LP.Rules.Original > 0);
@@ -79,6 +80,7 @@ test("il profilo typed-path enumera tutti i cammini, scala il dominio e segnala 
   assert.equal(limited.Result, "SATISFIABLE");
   assert.equal(limited.Models.Number, 3);
   assert.equal(limited.Models.More, "yes", "il profilo non deve presentare un'enumerazione troncata come completa");
+  assert.equal(hasCompleteModelEnumeration(limited), false, "il controllo comune deve respingere il flusso limitato dal worker WASM");
 
   const extendedGraph = normalizeGraphData(makeLayeredGraph(3, 2, 100), config);
   const extendedFacts = buildAspFactsFromGraph(extendedGraph);

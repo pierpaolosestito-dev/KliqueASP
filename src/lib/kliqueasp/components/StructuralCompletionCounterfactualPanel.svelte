@@ -1,7 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { csvCell, downloadCsvText } from "../csvExport";
-  import type { StructuralEdgeCompletionProposal } from "../graph/structuralTasks";
+  import { buildKCoreCompletionWhyNotCsv, buildKCoreMembershipCompletionWhyNotCsv, buildKPlexCompletionWhyNotCsv } from "../graph/structuralCsvExport.ts";
+  import type { KPlexCompletionWhyNot, KCoreCompletionWhyNot, KCoreMembershipCompletionWhyNot, StructuralEdgeCompletionProposal } from "../graph/structuralTasks";
 
   export let running = false;
   export let title = "Completamento controfattuale";
@@ -15,6 +16,12 @@
   export let candidateEnabled = false;
   export let candidateCount = 0;
   export let proposals: StructuralEdgeCompletionProposal[] = [];
+  export let whyNot: KPlexCompletionWhyNot | null = null;
+  export let whyNotMessage = "";
+  export let kCoreWhyNot: KCoreCompletionWhyNot | null = null;
+  export let kCoreWhyNotMessage = "";
+  export let kCoreMembershipWhyNot: KCoreMembershipCompletionWhyNot | null = null;
+  export let kCoreMembershipWhyNotMessage = "";
   export let hasRun = false;
   export let error = "";
   export let timeMs: number | undefined;
@@ -49,6 +56,50 @@
       ...proposal.addedEdges.flatMap((edge) => [edge.sourceNodeId, edge.targetNodeId])
     ])];
     if (nodeIds.length > 0) dispatch("highlight", nodeIds);
+  }
+
+  function highlightWhyNot() {
+    if (!whyNot) return;
+    const nodeIds = [...new Set([
+      ...whyNot.blockers.map((blocker) => blocker.nodeId),
+      ...whyNot.blockers.flatMap((blocker) => blocker.unfillableMissingNeighborIds)
+    ])];
+    if (nodeIds.length > 0) dispatch("highlight", nodeIds);
+  }
+
+  function exportWhyNot() {
+    if (!whyNot) return;
+    downloadCsvText("k_plex_completion_why_not.csv", buildKPlexCompletionWhyNotCsv(whyNot, sourceIdByNodeId));
+  }
+
+  function highlightKCoreWhyNot() {
+    if (!kCoreWhyNot) return;
+    const nodeIds = [...new Set(kCoreWhyNot.blockers.flatMap((blocker) => [
+      blocker.nodeId,
+      ...blocker.currentNeighborIds,
+      ...blocker.additionalCandidateNeighborIds
+    ]))];
+    if (nodeIds.length > 0) dispatch("highlight", nodeIds);
+  }
+
+  function exportKCoreWhyNot() {
+    if (!kCoreWhyNot) return;
+    downloadCsvText("k_core_completion_why_not.csv", buildKCoreCompletionWhyNotCsv(kCoreWhyNot, sourceIdByNodeId));
+  }
+
+  function highlightKCoreMembershipWhyNot() {
+    if (!kCoreMembershipWhyNot) return;
+    const nodeIds = [...new Set(kCoreMembershipWhyNot.peeling.flatMap((step) => [
+      step.nodeId,
+      ...step.survivingNeighborIds
+    ]))];
+    if (nodeIds.length > 0) dispatch("highlight", nodeIds);
+  }
+
+  function exportKCoreMembershipWhyNot() {
+    if (!kCoreMembershipWhyNot) return;
+    downloadCsvText("k_core_membership_completion_why_not.csv",
+      buildKCoreMembershipCompletionWhyNotCsv(kCoreMembershipWhyNot, sourceIdByNodeId));
   }
 
   function exportProposals() {
@@ -142,7 +193,61 @@
     <div class="counterfactual-result">
       {#if proposals.length === 0}
         <strong>Nessun completamento possibile</strong>
-        <p>I candidati autorizzati non bastano a soddisfare il target selezionato.</p>
+        {#if whyNot}
+          <p>Il certificato ASP mostra perché il target {whyNot.targetS}-plex è irraggiungibile con i candidati autorizzati. Ogni nodo può avere al massimo {Math.max(0, whyNot.targetS - 1)} coppie mancanti; i nodi seguenti superano questo limite anche se si aggiungono tutti gli archi candidati disponibili:</p>
+          <ul>
+            {#each whyNot.blockers as blocker}
+              <li>
+                <strong>{sourceIdByNodeId[blocker.nodeId] ?? blocker.nodeId}</strong>: {blocker.unfillableMissingNeighborIds.length} coppie mancanti senza candidato, verso {blocker.unfillableMissingNeighborIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ")}.
+              </li>
+            {/each}
+          </ul>
+          <small>Coppie mancanti non colmabili certificate: {whyNot.unfillableMissingPairs.length}.</small>
+          <div class="why-not-actions">
+            <button type="button" on:click={highlightWhyNot}>Evidenzia nodi e vicini bloccanti</button>
+            <button type="button" on:click={exportWhyNot}>Esporta certificato CSV</button>
+          </div>
+        {:else if kCoreWhyNot}
+          <p>Il certificato ASP mostra perché il target {kCoreWhyNot.targetK}-core è irraggiungibile con i candidati autorizzati. Per questi nodi, anche aggiungendo tutti i candidati pertinenti, il grado interno massimo resta sotto k:</p>
+          <ul>
+            {#each kCoreWhyNot.blockers as blocker}
+              <li>
+                <strong>{sourceIdByNodeId[blocker.nodeId] ?? blocker.nodeId}</strong>: grado attuale {blocker.currentNeighborIds.length}; massimo raggiungibile {blocker.maximumAchievableDegree} &lt; {kCoreWhyNot.targetK}.
+                {#if blocker.additionalCandidateNeighborIds.length > 0}
+                  Vicini aggiungibili: {blocker.additionalCandidateNeighborIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ")}.
+                {:else}
+                  Nessun vicino aggiuntivo autorizzato.
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          <div class="why-not-actions">
+            <button type="button" on:click={highlightKCoreWhyNot}>Evidenzia nodi e vicini bloccanti</button>
+            <button type="button" on:click={exportKCoreWhyNot}>Esporta certificato CSV</button>
+          </div>
+        {:else if kCoreMembershipWhyNot}
+          {@const targetStep = kCoreMembershipWhyNot.peeling.find((step) => step.nodeId === kCoreMembershipWhyNot.targetNodeId)}
+          <p>Anche aggiungendo tutti gli archi candidati autorizzati nel dominio selezionato, {sourceIdByNodeId[kCoreMembershipWhyNot.targetNodeId] ?? kCoreMembershipWhyNot.targetNodeId} viene eliminato dal {kCoreMembershipWhyNot.targetK}-core al round {targetStep?.round}. I round mostrati terminano qui: bastano a provare l'esclusione del target. Poiché ogni sottoinsieme di queste aggiunte produce un grafo contenuto nel grafo massimo esaminato, il nodo non può appartenere al core in nessuno dei completamenti ammessi.</p>
+          <ol>
+            {#each kCoreMembershipWhyNot.peeling as step}
+              <li>
+                Round {step.round}: <strong>{sourceIdByNodeId[step.nodeId] ?? step.nodeId}</strong> ha {step.survivingNeighborIds.length} vicini ancora attivi, meno della soglia {kCoreMembershipWhyNot.targetK}.
+                {#if step.survivingNeighborIds.length > 0}
+                  Vicini: {step.survivingNeighborIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ")}.
+                {/if}
+              </li>
+            {/each}
+          </ol>
+          <div class="why-not-actions">
+            <button type="button" on:click={highlightKCoreMembershipWhyNot}>Evidenzia i round che eliminano il target</button>
+            <button type="button" on:click={exportKCoreMembershipWhyNot}>Esporta certificato CSV</button>
+          </div>
+        {:else}
+          <p>I candidati autorizzati non bastano a soddisfare il target selezionato.</p>
+          {#if whyNotMessage}<small>{whyNotMessage}</small>{/if}
+          {#if kCoreWhyNotMessage}<small>{kCoreWhyNotMessage}</small>{/if}
+          {#if kCoreMembershipWhyNotMessage}<small>{kCoreMembershipWhyNotMessage}</small>{/if}
+        {/if}
       {:else}
         <strong>{proposals.length}</strong> proposta{proposals.length === 1 ? " minima" : " minime"} a costo minimo {#if timeMs !== undefined}<span>· {timeMs.toFixed(1)} ms</span>{/if}
         {#each proposals as proposal, proposalIndex}
@@ -237,6 +342,12 @@
     display: grid;
     gap: 6px;
     min-width: 0;
+  }
+
+  .why-not-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .counterfactual-result > p,

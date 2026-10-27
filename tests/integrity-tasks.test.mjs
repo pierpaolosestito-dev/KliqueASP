@@ -12,6 +12,7 @@ import {
 } from "../src/lib/kliqueasp/graph/integrityTask.ts";
 import { createClingoWasmRunner } from "./helpers/clingoWasm.mjs";
 import { filterLinksByProvenanceScenario } from "../src/lib/kliqueasp/graph/provenance.ts";
+import { hasCompleteModelEnumeration } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
 
 const graphConfig = {
   schemaVersion: 2,
@@ -84,6 +85,7 @@ test("ASP integrity diagnostics preserve source node and edge identifiers", asyn
   const program = `${facts}\n${buildGraphIntegrityProgram(integrityConfig, graph.direction)}`;
   const result = await runner.run(program);
   assert.equal(result.Result, "SATISFIABLE", result.Error ?? JSON.stringify(result));
+  assert.equal(hasCompleteModelEnumeration(result), true, "la lista delle violazioni deve essere completa");
 
   const violations = parseIntegrityViolations(
     result.Call?.[0]?.Witnesses,

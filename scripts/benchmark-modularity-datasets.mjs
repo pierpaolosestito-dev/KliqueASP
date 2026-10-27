@@ -29,7 +29,8 @@ import {
 } from "./modularityGreedyIncumbent.mjs";
 import { findGraphologyLouvainBaseline } from "./modularityGraphologyBaseline.mjs";
 
-const timeoutMs = 20_000;
+const defaultTimeoutMs = 20_000;
+const maximumTimeoutMs = 600_000;
 const maxGroundingProbeNodes = 400;
 const allDatasets = [
   { key: "psychology", name: "Psychology History Graph", dataset: psychologyDataset, config: psychologyConfig },
@@ -146,7 +147,7 @@ async function runDataset(key, strategy = "default", encoding = "aggregate") {
       modularityFacts.facts,
       buildMaximumModularityProgram()
     ].join("\n") + "\n";
-    const runner = await createClingoWasmRunner({ captureWasmMemory: true });
+    const runner = await createClingoWasmRunner({ captureWasmMemory: true, includeExceptionDetails: true });
     console.log(JSON.stringify({
       dataset: item.name,
       phase: "grounding-probe-start",
@@ -173,6 +174,7 @@ async function runDataset(key, strategy = "default", encoding = "aggregate") {
       aspInputBytes: Buffer.byteLength(solverProgram, "utf8"),
       solverMode: "--opt-mode=ignore",
       solverStatus: result?.Result ?? "NO_RESULT",
+      solverError: typeof result?.Error === "string" ? result.Error : null,
       optimumProven: false,
       feasibleWitnessOnly: true,
       witnessPartitionValid: independent.valid,
@@ -482,6 +484,17 @@ if (childIndex >= 0) {
   const requestedDataset = args[0] ?? "all";
   const strategy = args[1] ?? "default";
   const encoding = args[2] ?? "aggregate";
+  const timeoutOptions = args.filter((argument) => argument.startsWith("--timeout-ms="));
+  if (timeoutOptions.length > 1) throw new Error("Specifica --timeout-ms una sola volta.");
+  const timeoutMs = timeoutOptions.length === 0
+    ? defaultTimeoutMs
+    : Number(timeoutOptions[0].slice("--timeout-ms=".length));
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > maximumTimeoutMs) {
+    throw new Error(`--timeout-ms deve essere un intero tra 1 e ${maximumTimeoutMs}.`);
+  }
+  if (args.slice(3).some((argument) => !argument.startsWith("--timeout-ms="))) {
+    throw new Error("Opzione benchmark non riconosciuta; supportata: --timeout-ms=<ms>.");
+  }
   if (!["default", "usc", "bb"].includes(strategy)) {
     throw new Error(`Strategia sconosciuta: ${strategy}; usa default, usc o bb.`);
   }

@@ -515,3 +515,26 @@ test("la sonda di grounding misura un testimone fattibile senza dichiarare l'ott
   assert.ok(Number.isFinite(result.elapsedWallMs) && result.elapsedWallMs > 0);
   assert.ok(result.wasmLinearMemoryBytes.peakBytes >= result.wasmLinearMemoryBytes.currentBytes);
 });
+
+test("la sonda di grounding accetta un timeout esplicito e valida l'intervallo prima del solver", () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/benchmark-modularity-datasets.mjs", import.meta.url));
+  for (const timeout of ["0", "600001", "not-a-number"]) {
+    const child = spawnSync(process.execPath, [
+      "--experimental-strip-types",
+      scriptPath,
+      "psychology",
+      "default",
+      "grounding-probe",
+      `--timeout-ms=${timeout}`
+    ], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: 10000
+    });
+
+    assert.equal(child.error, undefined, child.error?.message);
+    assert.equal(child.status, 1, `timeout=${timeout}`);
+    assert.match(child.stderr, /--timeout-ms deve essere un intero/);
+    assert.doesNotMatch(child.stdout, /"phase":"grounding-probe-start"/);
+  }
+});

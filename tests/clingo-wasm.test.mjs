@@ -14,6 +14,10 @@ import {
 } from "../src/lib/kliqueasp/graph/graphModel.ts";
 import { createClingoWasmRunner } from "./helpers/clingoWasm.mjs";
 import {
+  hasCompleteModelEnumeration,
+  hasCompleteOptimalModelEnumeration
+} from "../src/lib/kliqueasp/graph/structuralTasks.ts";
+import {
   getClingoInvocationOptions,
   parseClingoInvocationStats,
   parseClingoInvocationTiming
@@ -95,6 +99,10 @@ test("il worker clingo-WASM esegue le tre semantiche clique dell'app", async () 
 
     assert.notEqual(result.Result, "ERROR", `${mode}: ${result.Error ?? "solver error"}`);
     assert.equal(result.Solver, "clingo version 5.8.0");
+    assert.equal(mode === "maximum"
+      ? hasCompleteOptimalModelEnumeration(result)
+      : hasCompleteModelEnumeration(result), true,
+    `${mode}: l'app può pubblicare l'elenco solo se l'enumerazione è completa (${JSON.stringify({ Result: result.Result, Models: result.Models })})`);
 
     const parsedCliques = parseWitnessCliques(result.Call?.[0]?.Witnesses, reverseIndex);
     const cliques = mode === "maximum" ? selectMaximumCliques(parsedCliques) : parsedCliques;

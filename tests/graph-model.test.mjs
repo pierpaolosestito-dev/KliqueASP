@@ -5,6 +5,7 @@ import {
   buildCliqueProgram,
   checkNodeRemovalCostCapabilityForCandidates,
   checkGraphTaskRequirements,
+  createAspTemporalEncoding,
   decodeAspStringPayload,
   escapeAspString,
   getGraphEndpointId,
@@ -80,6 +81,25 @@ test("il parser temporale applica il contratto comune e rifiuta date invalide o 
   assert.equal(parseGraphTimeValue("Feb 29, 2024"), null);
 });
 
+test("le metriche temporali distinguono date assolute e unità dichiarate dei timestamp numerici", () => {
+  const undeclared = createAspTemporalEncoding([30_000, 30_500]);
+  assert.equal(undeclared.metricAvailable("seconds"), false);
+  assert.equal(undeclared.encodeMetric(30_500, "seconds"), null);
+
+  const seconds = createAspTemporalEncoding([30_000, 30_500], "seconds");
+  assert.equal(seconds.metricAvailable("seconds"), true);
+  assert.equal(seconds.encodeMetric(30_500, "seconds"), 500);
+  assert.equal(seconds.encodeMetric(30_500, "milliseconds"), 500_000);
+
+  const dates = createAspTemporalEncoding([
+    "2024-01-01T00:00:00.000Z",
+    "2024-01-01T00:00:01.500Z"
+  ]);
+  assert.equal(dates.metricAvailable("milliseconds"), true);
+  assert.equal(dates.encodeMetric("2024-01-01T00:00:01.500Z", "milliseconds"), 1_500);
+  assert.equal(dates.metricAvailable("seconds"), false, "un delta frazionario in secondi non viene arrotondato");
+});
+
 test("intervalli d'arco con timestamp senza fuso non abilitano task ASP temporali", () => {
   const graph = normalizeGraphData({
     nodes: [{ id: "a", type: "person" }, { id: "b", type: "person" }],
@@ -133,7 +153,49 @@ test("i task temporali richiedono intervalli ordinati e un dominio omogeneo in t
   assert.equal(normalizeIntervals([["a", "b", 2025, 2024]]).capabilities.edgeIntervals.available, false);
 });
 
-test("il profilo legacy mantiene normalizzazione e deduplicazione correnti", () => {
+test("graphMapping conserva e valida l'unità dichiarata dei timestamp numerici", () => {
+  const input = {
+    nodes: [{ id: "a", type: "person" }, { id: "b", type: "person" }],
+    edges: [{ id: "e1", source: "a", target: "b", type: "knows", start: 30_000, end: 30_020 }]
+  };
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id", typeField: "$.type" },
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "undirected", identity: "multigraph",
+        validity: { fromField: "$.start", toField: "$.end", numericUnit: "seconds" }
+      }
+    }
+  };
+  const graph = normalizeGraphData(input, config);
+  assert.equal(graph.valid, true, JSON.stringify(graph.diagnostics));
+  assert.equal(graph.temporalNumericUnit, "seconds");
+  const { facts, temporalEncoding } = buildAspFactsFromGraph(graph, undefined, {
+    temporalMetricUnits: ["seconds"]
+  });
+  assert.equal(temporalEncoding.metricAvailable("seconds"), true);
+  assert.match(facts, /asp_time_metric\("seconds",30000,0\)\./);
+
+  for (const numericUnit of ["fortnights", ["seconds"], 42, true, null]) {
+    const invalid = normalizeGraphData(input, {
+      ...config,
+      graphMapping: {
+        ...config.graphMapping,
+        edge: {
+          ...config.graphMapping.edge,
+          validity: { ...config.graphMapping.edge.validity, numericUnit }
+        }
+      }
+    });
+    assert.equal(invalid.valid, false, `numericUnit ${JSON.stringify(numericUnit)} non deve essere coercita`);
+    assert.equal(invalid.temporalNumericUnit, undefined);
+    assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.message.includes("numericUnit")));
+  }
+});
+
+test("il profilo legacy mantiene normalizzazione e deduplicazione correnti", async () => {
   const result = normalizeGraphData({
     nodes: [
       { id: " Node A ", label: "  María   Rossi ", type: "person" },
@@ -158,6 +220,19 @@ test("il profilo legacy mantiene normalizzazione e deduplicazione correnti", () 
   ]);
   assert.equal(result.capabilities.edgeTypes.available, false);
   assert.equal(result.capabilities.undirectedAdjacency.available, true);
+  const compact = buildAspFactsFromGraph(result, undefined, { compact: true });
+  assert.match(compact.facts, /^edge\(1,2;2,1\)\.$/m);
+  assert.doesNotMatch(compact.facts, /^edge_record\(/m,
+    "la compattazione legacy non aggiunge relazioni schema v2");
+  const expanded = buildAspFactsFromGraph(result);
+  const shownPredicates = "#show node/1.\n#show edge/2.";
+  const runner = await createClingoWasmRunner();
+  const expandedResult = await runner.run(`${expanded.facts}\n${shownPredicates}`);
+  const compactResult = await runner.run(`${compact.facts}\n${shownPredicates}`);
+  assert.deepEqual(
+    compactResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort(),
+    expandedResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort()
+  );
 });
 
 test("il profilo legacy conserva gli ID numerici falsy e usa l'etichetta solo per un ID vuoto", () => {
@@ -199,7 +274,38 @@ test("il risolutore dei percorsi copre mapping a oggetti e array", () => {
   assert.equal(getGraphEndpointId("n1"), "n1");
 });
 
-test("schema v2 mappa tipi e conserva la direzione dichiarata", () => {
+test("il registro delle capability restituisce null per task ignoti o con nomi riservati", () => {
+  for (const task of ["unknownTask", "__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    assert.equal(getGraphTaskRequirements(task), null, `task '${task}' non deve risolvere proprietà ereditate`);
+  }
+});
+
+test("i mapping JSONPath ignorano le proprieta ereditate e conservano le chiavi JSON proprie", () => {
+  assert.deepEqual(graphPathValues({}, "$.__proto__"), []);
+  assert.deepEqual(graphPathValues({}, "$.constructor"), []);
+  assert.deepEqual(graphPathValues({}, "$.toString"), []);
+  assert.deepEqual(graphPathValues(Object.create({ kind: "inherited" }), "$.kind"), []);
+
+  const explicitReservedKey = JSON.parse('{"__proto__":{"kind":"declared"}}');
+  assert.deepEqual(graphPathValues(explicitReservedKey, "$.__proto__.kind"), ["declared"]);
+
+  const normalized = normalizeGraphData({
+    nodes: [{ id: "a" }, { id: "b" }],
+    edges: [{ source: "a", target: "b" }]
+  }, {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id", typeField: "$.toString", attributes: { label: "$.constructor" } },
+      edge: { sourceField: "$.source", targetField: "$.target" }
+    }
+  });
+
+  assert.equal(normalized.valid, true);
+  assert.equal(normalized.nodes[0].type, undefined);
+  assert.deepEqual(normalized.nodes[0].analysis.attributes, undefined);
+});
+
+test("schema v2 mappa tipi e conserva la direzione dichiarata", async () => {
   const config = {
     schemaVersion: 2,
     graphMapping: {
@@ -290,6 +396,72 @@ test("schema v2 mappa tipi e conserva la direzione dichiarata", () => {
       reasons: ["mappare intervalli validi e ordinati in un unico dominio temporale su tutti gli archi con graphMapping.edge.validity"]
     }
   );
+
+  const compact = buildAspFactsFromGraph(result, undefined, { compact: true });
+  const shownPredicates = [
+    "node/1", "node_type/2", "node_role/2", "node_group/2", "node_attribute/3", "group/2",
+    "edge/2", "edge_record/1", "edge_source/2", "edge_target/2", "edge_direction/2",
+    "edge_id/2", "edge_type/2", "edge_attribute/3"
+  ].map((predicate) => `#show ${predicate}.`).join("\n");
+  const runner = await createClingoWasmRunner();
+  const expandedResult = await runner.run(`${asp.facts}\n${shownPredicates}`);
+  const compactResult = await runner.run(`${compact.facts}\n${shownPredicates}`);
+  assert.equal(expandedResult.Result, "SATISFIABLE", expandedResult.Error ?? JSON.stringify(expandedResult));
+  assert.equal(compactResult.Result, "SATISFIABLE", compactResult.Error ?? JSON.stringify(compactResult));
+  assert.deepEqual(
+    compactResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort(),
+    expandedResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort()
+  );
+});
+
+test("la serializzazione ASP compatta conserva le relazioni d'arco osservabili", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id", typeField: "$.kind" },
+      edge: {
+        idField: "$.id",
+        sourceField: "$.from",
+        targetField: "$.to",
+        typeField: "$.relation",
+        direction: "undirected",
+        identity: "multigraph",
+        validity: { fromField: "$.start", toField: "$.end" }
+      }
+    }
+  };
+  const graph = normalizeGraphData({
+    nodes: [
+      { id: "A", kind: "person" },
+      { id: "B", kind: "person" },
+      { id: "C", kind: "person" }
+    ],
+    edges: [
+      { id: "edge-A-B", from: "A", to: "B", relation: "mentor", start: 10, end: 20 },
+      { id: "edge-B-C", from: "B", to: "C", relation: "mentor", start: 30, end: 40 }
+    ]
+  }, config);
+  const expanded = buildAspFactsFromGraph(graph);
+  const compact = buildAspFactsFromGraph(graph, undefined, { compact: true });
+  const shownPredicates = [
+    "node/1", "node_type/2", "edge/2", "edge_record/1", "edge_source/2", "edge_target/2",
+    "edge_direction/2", "edge_id/2", "edge_type/2", "edge_valid_from/2", "edge_valid_to/2"
+  ].map((predicate) => `#show ${predicate}.`).join("\n");
+  const runner = await createClingoWasmRunner();
+  const expandedResult = await runner.run(`${expanded.facts}\n${shownPredicates}`);
+  const compactResult = await runner.run(`${compact.facts}\n${shownPredicates}`);
+
+  assert.equal(expandedResult.Result, "SATISFIABLE", expandedResult.Error ?? JSON.stringify(expandedResult));
+  assert.equal(compactResult.Result, "SATISFIABLE", compactResult.Error ?? JSON.stringify(compactResult));
+  assert.deepEqual(
+    compactResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort(),
+    expandedResult.Call?.[0]?.Witnesses?.[0]?.Value?.slice().sort()
+  );
+  assert.match(compact.facts, /klique_edge_endpoints\(1,1,2;2,2,3\)\./);
+  assert.match(compact.facts, /edge_type\(E,"mentor"\) :- edge_record\(E\)\./);
+  assert.doesNotMatch(compact.facts, /^edge\([^()]*\)\.$/m);
+  assert.doesNotMatch(compact.facts, /^edge_source\([^()]*\)\.$/m);
+  assert.doesNotMatch(compact.facts, /^edge_target\([^()]*\)\.$/m);
 });
 
 test("il multigrafo conserva archi paralleli e attribuiti alla fonte", () => {
@@ -744,6 +916,63 @@ test("la serializzazione legacy dei fatti ASP resta identica e sicura per le str
   );
 });
 
+test("i campi opzionali senza mapping non entrano nella rappresentazione ASP schema v2", () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id" },
+      edge: {
+        idField: "$.id",
+        sourceField: "$.source",
+        targetField: "$.target",
+        direction: "undirected",
+        identity: "multigraph"
+      }
+    }
+  };
+  const base = {
+    nodes: [{ id: "a", label: "Ada" }, { id: "b", label: "Bruno" }],
+    edges: [{ id: "e-ab", source: "a", target: "b" }]
+  };
+  const enriched = {
+    nodes: [
+      { id: "a", label: "Ada", type: "person", roles: ["mentor"], groups: ["history"], birth: 1900 },
+      { id: "b", label: "Bruno", type: "place", roles: ["institution"], groups: ["science"], birth: 1910 }
+    ],
+    edges: [{
+      id: "e-ab",
+      source: "a",
+      target: "b",
+      type: "collaborates",
+      direction: "directed",
+      valid_from: 1920,
+      valid_to: 1925,
+      weight: 7,
+      confidence: 0.9,
+      source_ref: "archive-a",
+      polarity: "positive"
+    }]
+  };
+
+  const baseGraph = normalizeGraphData(base, config);
+  const enrichedGraph = normalizeGraphData(enriched, config);
+  assert.equal(baseGraph.valid, true);
+  assert.equal(enrichedGraph.valid, true);
+  assert.deepEqual(enrichedGraph.capabilities, baseGraph.capabilities);
+  assert.deepEqual(
+    enrichedGraph.nodes.map((node) => node.analysis ?? null),
+    baseGraph.nodes.map((node) => node.analysis ?? null)
+  );
+  assert.deepEqual(
+    enrichedGraph.links.map((link) => link.analysis ?? null),
+    baseGraph.links.map((link) => link.analysis ?? null)
+  );
+  assert.equal(
+    buildAspFactsFromGraph(enrichedGraph).facts,
+    buildAspFactsFromGraph(baseGraph).facts
+  );
+});
+
 test("le stringhe ASP codificano in modo sicuro e reversibile i controlli e i caratteri tilde", async () => {
   const original = "carriage\r tab\t line\n null\u0000 tilde ~x000D";
   const encoded = escapeAspString(original);
@@ -779,6 +1008,27 @@ test("le stringhe ASP codificano in modo sicuro e reversibile i controlli e i ca
   );
   assert.equal(graphResult.Result, "SATISFIABLE", graphResult.Error ?? JSON.stringify(graphResult));
   assert.deepEqual(graphResult.Call?.[0]?.Witnesses?.[0]?.Value, ["in(1)", "in(2)", "in(3)"]);
+});
+
+test("schemaVersion accetta solo interi numerici supportati e preserva il default legacy omesso", () => {
+  const input = { nodes: [{ id: "a" }], edges: [] };
+
+  for (const version of [1, 2]) {
+    const graph = normalizeGraphData(input, { schemaVersion: version });
+    assert.equal(graph.valid, true, `schemaVersion ${version}: ${JSON.stringify(graph.diagnostics)}`);
+    assert.equal(graph.schemaVersion, version);
+  }
+
+  const legacy = normalizeGraphData(input);
+  assert.equal(legacy.valid, true);
+  assert.equal(legacy.schemaVersion, 1);
+
+  for (const version of ["1", "2", true, false, [2], 1.5, 0, 3, null, {}]) {
+    const graph = normalizeGraphData(input, { schemaVersion: version });
+    assert.equal(graph.valid, false, `schemaVersion ${JSON.stringify(version)} non deve essere coercita`);
+    assert.ok(graph.diagnostics.some(({ code }) => code === "unsupported-schema-version"),
+      `schemaVersion ${JSON.stringify(version)} deve produrre la diagnosi di versione non supportata`);
+  }
 });
 
 test("mapping incompleti o ambigui non vengono accettati in silenzio", () => {
@@ -912,10 +1162,13 @@ test("chiavi sconosciute nelle configurazioni grafo v2 rifiutano i refusi senza 
     [{ graphIntegrity: { edgeTypeDomains: [{ edgeType: "knows", sourceNodeTypes: ["person"], targetNodeType: ["place"] }] } }, "graphIntegrity.edgeTypeDomains[0].targetNodeType"],
     [{ graphIntegrity: { repairSuggestions: { nodeAttributeReplacments: [] } } }, "graphIntegrity.repairSuggestions.nodeAttributeReplacments"],
     [{ graphAnalysis: { motiff: [] } }, "graphAnalysis.motiff"],
+    [{ graphAnalysis: { motifCount: { partitionSzie: 8 } } }, "graphAnalysis.motifCount.partitionSzie"],
     [{ graphAnalysis: { motifs: [{ id: "m", roles: { person: { nodeTypes: ["person"] } }, edges: [{ sourceRole: "person", targetRole: "person", edgeTyp: "knows" }] }] } }, "graphAnalysis.motifs[0].edges[0].edgeTyp"],
     [{ graphAnalysis: { motifs: [{ id: "m", roles: { person: { nodeTypes: ["person"] } }, edges: [{ sourceRole: "person", targetRole: "person", edgeType: "knows" }], absentEdges: [{ sourceRole: "person", targetRole: "person", edgeTyp: "knows" }], closedWorld: true }] } }, "graphAnalysis.motifs[0].absentEdges[0].edgeTyp"],
     [{ graphAnalysis: { motifs: [{ id: "m", roles: { person: { nodeTypes: ["person"], nodeTypess: ["place"] } }, edges: [{ sourceRole: "person", targetRole: "person", edgeType: "knows" }] }] } }, "graphAnalysis.motifs[0].roles.person.nodeTypess"],
     [{ graphAnalysis: { communities: { minCount: 2, cannotLin: [["a", "b"]] } } }, "graphAnalysis.communities.cannotLin"],
+    [{ graphAnalysis: { communities: { diagnosisCosts: { mustLink: 2, cantLink: 3 } } } }, "graphAnalysis.communities.diagnosisCosts.cantLink"],
+    [{ graphAnalysis: { communities: { topologyCounterfactuals: { edgeEdits: [{ id: "x", action: "remove", edgeId: "e1", cost: 1, cosst: 2 }] } } } }, "graphAnalysis.communities.topologyCounterfactuals.edgeEdits[0].cosst"],
     [{ graphAnalysis: { communities: { attributeBounds: [{ attribute: "rank", value: 1, minPerCommunity: 1, maxPerComunity: 2 }] } } }, "graphAnalysis.communities.attributeBounds[0].maxPerComunity"],
     [{ graphAnalysis: { counterfactuals: { edgeAdditions: [{ id: "candidate", sourceNodeId: "a", targetNodeId: "b", edgeType: "knows", cost: 1, validty: { from: 1, to: 2 } }] } } }, "graphAnalysis.counterfactuals.edgeAdditions[0].validty"],
     [{ graphAnalysis: { provenanceScenarios: { scenarios: [{ id: "archive-a", sources: ["archive-a"], sourcces: ["archive-b"] }], unattributedEdges: "exclude" } } }, "graphAnalysis.provenanceScenarios.scenarios[0].sourcces"]
@@ -982,6 +1235,7 @@ test("chiavi sconosciute nelle configurazioni grafo v2 rifiutano i refusi senza 
       }
     },
     graphAnalysis: {
+      motifCount: { partitionSize: 12, maxDurationMs: 900_000 },
       provenanceScenarios: {
         scenarios: [{ id: "archive-a", label: "Archivio A", sources: ["source"] }],
         unattributedEdges: "exclude"
@@ -1014,11 +1268,20 @@ test("chiavi sconosciute nelle configurazioni grafo v2 rifiutano i refusi senza 
         }
       ],
       communities: {
+        useEdgeWeights: true,
+        resolution: 1.5,
         minCount: 1,
         maxCount: 2,
+        diagnosisCosts: { minimumCommunityCount: 5, mustLink: 2 },
         mustLink: [["a", "b"]],
         cannotLink: [],
-        attributeBounds: [{ attribute: "rank", value: 1, minPerCommunity: 1, maxPerCommunity: 2 }]
+        attributeBounds: [{ attribute: "rank", value: 1, minPerCommunity: 1, maxPerCommunity: 2 }],
+        topologyCounterfactuals: {
+          edgeEdits: [
+            { id: "add-a-b", action: "add", sourceNodeId: "a", targetNodeId: "b", cost: 2, weight: 0.5 },
+            { id: "remove-e1", action: "remove", edgeId: "e1", cost: 1 }
+          ]
+        }
       },
       counterfactuals: {
         edgeAdditions: [{ id: "candidate", sourceNodeId: "a", targetNodeId: "b", edgeType: "knows", cost: 1, validity: { from: 1, to: 2 } }]
@@ -1027,6 +1290,54 @@ test("chiavi sconosciute nelle configurazioni grafo v2 rifiutano i refusi senza 
   });
   assert.equal(valid.valid, true, JSON.stringify(valid.diagnostics));
   assert.deepEqual(valid.diagnostics, []);
+});
+
+test("la configurazione del conteggio partizionato dei motivi è validata e resta opzionale", () => {
+  const input = {
+    nodes: [{ id: "a", type: "person" }, { id: "b", type: "person" }],
+    edges: [{ id: "ab", source: "a", target: "b", type: "knows" }]
+  };
+  const schemaV2 = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id", typeField: "$.type" },
+      edge: { idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type" }
+    }
+  };
+
+  const omitted = normalizeGraphData(input, schemaV2);
+  assert.equal(omitted.valid, true, JSON.stringify(omitted.diagnostics));
+
+  const valid = normalizeGraphData(input, {
+    ...schemaV2,
+    graphAnalysis: { motifCount: { partitionSize: 8 } }
+  });
+  assert.equal(valid.valid, true, JSON.stringify(valid.diagnostics));
+
+  for (const [motifCount, message] of [
+    [null, "graphAnalysis.motifCount deve essere un oggetto"],
+    [{}, "partitionSize deve essere un intero fra 1 e 16"],
+    [{ partitionSize: 0 }, "partitionSize deve essere un intero fra 1 e 16"],
+    [{ partitionSize: 17 }, "partitionSize deve essere un intero fra 1 e 16"],
+    [{ partitionSize: 8, maxDurationMs: 999 }, "maxDurationMs deve essere un intero fra 1000 e 1800000"],
+    [{ partitionSize: 8, maxDurationMs: 1_800_001 }, "maxDurationMs deve essere un intero fra 1000 e 1800000"]
+  ]) {
+    const result = normalizeGraphData(input, {
+      ...schemaV2,
+      graphAnalysis: { motifCount }
+    });
+    assert.equal(result.valid, false, JSON.stringify(motifCount));
+    assert.ok(result.diagnostics.some((diagnostic) =>
+      diagnostic.code === "invalid-graph-config-value" && diagnostic.message.includes(message)
+    ), JSON.stringify(result.diagnostics));
+  }
+
+  const legacy = normalizeGraphData(input, {
+    graphAnalysis: { motifCount: { partitionSize: 8 } }
+  });
+  assert.equal(legacy.valid, false);
+  assert.ok(legacy.diagnostics.some((diagnostic) => diagnostic.message ===
+    "graphAnalysis.motifCount richiede schemaVersion: 2"));
 });
 
 test("gli scenari di provenienza richiedono schema, mapping e riferimenti validi", () => {
@@ -1167,7 +1478,11 @@ test("la configurazione dei motivi rifiuta assenze senza mondo chiuso e combinaz
     [{ ...base, inducedEdgeTypes: [], closedWorld: true }, "inducedEdgeTypes deve contenere almeno un tipo d'arco"],
     [{ ...base, inducedEdgeTypes: [""], closedWorld: true }, "inducedEdgeTypes[0] deve essere una stringa non vuota"],
     [{ ...base, inducedEdgeTypes: ["knows", " knows "], closedWorld: true }, "inducedEdgeTypes non deve contenere tipi duplicati"],
-    [{ ...base, inducedEdgeTypes: ["blocked"], closedWorld: true, temporal: { semantics: "coValid" } }, "non è attualmente ammesso con motif.temporal"]
+    [{ ...base, inducedEdgeTypes: ["blocked"], closedWorld: true, temporal: { semantics: "coValid" } }, "non è attualmente ammesso con motif.temporal"],
+    [{ ...base, temporal: { semantics: "coValid", maximumSpan: { value: 5, unit: "seconds" } } }, "maximumSpan richiede semantics: 'orderedByStart'"],
+    [{ ...base, temporal: { semantics: "orderedByStart", maximumSpan: { value: -1, unit: "seconds" } } }, "maximumSpan richiede semantics: 'orderedByStart'"],
+    [{ ...base, temporal: { semantics: "orderedByStart", maximumSpan: { value: 5, unit: ["seconds"] } } }, "maximumSpan richiede semantics: 'orderedByStart'"],
+    [{ ...base, temporal: { semantics: "orderedByStart", maximumSpan: { value: 5, unit: true } } }, "maximumSpan richiede semantics: 'orderedByStart'"]
   ]) {
     const result = normalizeGraphData(graph, configFor(motif));
     assert.equal(result.valid, false, expectedMessage);
@@ -1410,4 +1725,63 @@ test("gli ID locali degli archi non collidono con ID mappati espliciti", () => {
     ).message, /edge_1_generated_2/);
     assert.deepEqual(Object.values(asp.reverseEdgeIndex), ids);
   }
+});
+
+test("l'assunzione di mondi finiti esaustivi è opt-in e non cambia i fatti ASP", () => {
+  const input = {
+    nodes: [
+      { id: "a", type: "person" },
+      { id: "b", type: "person" }
+    ],
+    edges: [{ id: "ab", source: "a", target: "b", type: "knows", sources: ["archive-a"] }]
+  };
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id", typeField: "$.type" },
+      edge: {
+        idField: "$.id",
+        sourceField: "$.source",
+        targetField: "$.target",
+        typeField: "$.type",
+        direction: "undirected",
+        identity: "multigraph",
+        provenanceField: "$.sources"
+      }
+    }
+  };
+  const deterministic = normalizeGraphData(input, config);
+  const finiteWorlds = normalizeGraphData(input, {
+    ...config,
+    graphAnalysis: {
+      provenanceScenarios: {
+        scenarios: [
+          { id: "archive-a", sources: ["archive-a"] },
+          { id: "archive-b", sources: ["archive-b"] }
+        ],
+        unattributedEdges: "exclude",
+        worldAssumption: "finite-exhaustive-worlds"
+      }
+    }
+  });
+
+  assert.equal(deterministic.valid, true, JSON.stringify(deterministic.diagnostics));
+  assert.equal(finiteWorlds.valid, true, JSON.stringify(finiteWorlds.diagnostics));
+  assert.deepEqual(finiteWorlds.links, deterministic.links);
+  assert.equal(buildAspFactsFromGraph(finiteWorlds).facts, buildAspFactsFromGraph(deterministic).facts);
+
+  const invalid = normalizeGraphData(input, {
+    ...config,
+    graphAnalysis: {
+      provenanceScenarios: {
+        scenarios: [{ id: "archive-a", sources: ["archive-a"] }],
+        unattributedEdges: "exclude",
+        worldAssumption: "probably-exhaustive"
+      }
+    }
+  });
+  assert.equal(invalid.valid, false);
+  assert.ok(invalid.diagnostics.some((diagnostic) =>
+    diagnostic.message.includes("worldAssumption deve essere 'finite-exhaustive-worlds'")
+  ));
 });

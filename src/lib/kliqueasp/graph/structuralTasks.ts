@@ -1,9 +1,37 @@
-import { escapeAspString, getGraphEndpointId, normalizeGraphId } from "./graphModel.ts";
+import { escapeAspString, getGraphEndpointId, normalizeGraphId, parseGraphTemporalValue, type AspTemporalEncoding } from "./graphModel.ts";
 import { formatScaledDecimal, scaleNonNegativeDecimalWeights } from "./exactDecimal.ts";
 import { formatProvenanceReferences, normalizeProvenanceReferences } from "./provenance.ts";
+import { validateCommunityTopologyCounterfactualConfig } from "./communityTopologyCounterfactual.ts";
+import { getOwnRecordValue } from "./recordUtils.ts";
 
 export type StructuralTask = "kPlex" | "maximalKPlex" | "kCore" | "components" | "weakComponents" | "strongComponents" | "path" | "typedPath" | "dominatingSet" | "minimumNodeSeparator" | "minimumCostNodeSeparator" | "minimumEdgeSeparator" | "minimumCostEdgeSeparator" | "communities";
 export type DirectedKCoreMode = "in" | "out" | "mutual";
+
+/** True only when clingo completed the model stream instead of truncating it. */
+export function hasCompleteModelEnumeration(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  const candidate = result as {
+    Result?: unknown;
+    Models?: { More?: unknown } | null;
+  };
+  return (candidate.Result === "SATISFIABLE" || candidate.Result === "OPTIMUM FOUND") &&
+    candidate.Models?.More === "no";
+}
+
+/** True only when an optimization run proved its optimum and exhausted all returned models. */
+export function hasCompleteOptimalModelEnumeration(result: unknown): boolean {
+  return hasCompleteModelEnumeration(result) &&
+    typeof result === "object" && result !== null &&
+    !Array.isArray(result) && (result as { Result?: unknown }).Result === "OPTIMUM FOUND";
+}
+
+/** Validates the unique k-core result, including the trivial empty candidate domain. */
+export function hasCompleteKCoreScenarioResult(result: unknown, candidateNodeCount: number): boolean {
+  if (!Number.isSafeInteger(candidateNodeCount) || candidateNodeCount < 0) return false;
+  return candidateNodeCount === 0
+    ? hasCompleteModelEnumeration(result)
+    : hasCompleteOptimalModelEnumeration(result);
+}
 
 export function getStructuralSolverOptions(
   task: StructuralTask,
@@ -310,7 +338,7 @@ export interface MaximumKPlexAspSearchResult {
   complete: boolean;
   maximumSize: number;
   queryCount: number;
-  result?: { Result?: string; [key: string]: unknown };
+  result?: { Result?: string; Models?: { More?: unknown }; [key: string]: unknown };
   solverStatus?: string;
 }
 
@@ -331,6 +359,48 @@ export interface KPlexCompletionProposal {
   totalCost: number;
   addedEdges: Array<Pick<KPlexCompletionCandidate,
     "id" | "sourceNodeId" | "targetNodeId" | "edgeType" | "cost">>;
+}
+
+export interface KPlexCompletionWhyNotBlocker {
+  nodeId: string;
+  unfillableMissingNeighborIds: string[];
+}
+
+export interface KPlexCompletionWhyNot {
+  targetS: number;
+  cohortNodeIds: string[];
+  candidateEdgeIds: string[];
+  unfillableMissingPairs: Array<[string, string]>;
+  blockers: KPlexCompletionWhyNotBlocker[];
+}
+
+export interface KCoreCompletionWhyNotBlocker {
+  nodeId: string;
+  currentNeighborIds: string[];
+  additionalCandidateNeighborIds: string[];
+  maximumAchievableDegree: number;
+}
+
+export interface KCoreCompletionWhyNot {
+  targetK: number;
+  cohortNodeIds: string[];
+  candidateEdgeIds: string[];
+  blockers: KCoreCompletionWhyNotBlocker[];
+}
+
+export interface KCoreMembershipCompletionWhyNotStep {
+  nodeId: string;
+  round: number;
+  survivingNeighborIds: string[];
+}
+
+export interface KCoreMembershipCompletionWhyNot {
+  targetK: number;
+  targetNodeId: string;
+  candidateNodeIds: string[];
+  candidateEdgeIds: string[];
+  peelingScope: "full" | "target_prefix";
+  peeling: KCoreMembershipCompletionWhyNotStep[];
 }
 
 export interface KCoreMembershipCompletionProposal extends KPlexCompletionProposal {
@@ -426,6 +496,788 @@ export function buildKPlexCompletionCounterfactualProgram(
     "#show cf_add_edge/1."
   ].join("\n");
   return { candidates, program };
+}
+
+/** Produces an ASP certificate for why a fixed cohort cannot reach a target s-plex. */
+export function buildKPlexCompletionWhyNotProgram(
+  s: number,
+  cohortNodeIndices: number[],
+  candidatesInput: unknown
+): { candidates: KPlexCompletionCandidate[]; program: string } {
+  validateIntegerParameter("s", s, 1);
+  if (!Array.isArray(cohortNodeIndices) || cohortNodeIndices.length === 0 ||
+    cohortNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(cohortNodeIndices).size !== cohortNodeIndices.length) {
+    throw new TypeError("Il cohort deve contenere indici ASP positivi, univoci e non vuoti");
+  }
+  const cohort = new Set(cohortNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del cohort selezionato`);
+    }
+  }
+  const cohortFacts = [...cohort].sort((left, right) => left - right)
+    .map((node) => `cf_plex_diag_cohort(${node}).`);
+  const candidateFacts = candidates.map((candidate) =>
+    `cf_plex_diag_candidate(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode}).`
+  );
+  const program = [
+    ...cohortFacts,
+    ...candidateFacts,
+    "cf_plex_diag_candidate_pair(U,V) :- cf_plex_diag_candidate(_,U,V).",
+    "cf_plex_diag_candidate_pair(V,U) :- cf_plex_diag_candidate(_,U,V).",
+    "cf_plex_diag_adjacent(U,V) :- edge(U,V).",
+    `cf_plex_diag_unfillable_pair(U,V) :- cf_plex_diag_cohort(U), cf_plex_diag_cohort(V), U < V, not cf_plex_diag_adjacent(U,V), not cf_plex_diag_candidate_pair(U,V).`,
+    "cf_plex_diag_unfillable_neighbor(U,V) :- cf_plex_diag_unfillable_pair(U,V).",
+    "cf_plex_diag_unfillable_neighbor(V,U) :- cf_plex_diag_unfillable_pair(U,V).",
+    `cf_plex_diag_blocker(V) :- cf_plex_diag_cohort(V), #count { U : cf_plex_diag_unfillable_neighbor(V,U) } >= ${s}.`,
+    "#show cf_plex_diag_unfillable_pair/2.",
+    "#show cf_plex_diag_blocker/1."
+  ].join("\n");
+  return { candidates, program };
+}
+
+/** Parses ASP's why-not answer set and checks it against an independent graph calculation. */
+export function parseKPlexCompletionWhyNot(
+  witnesses: unknown,
+  s: number,
+  cohortNodeIndices: number[],
+  observedEdges: Array<{ sourceNode: number; targetNode: number }>,
+  candidatesInput: unknown,
+  nodeIdByIndex: ReadonlyMap<number, string>
+): KPlexCompletionWhyNot {
+  validateIntegerParameter("s", s, 1);
+  if (!Array.isArray(cohortNodeIndices) || cohortNodeIndices.length === 0 ||
+    cohortNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(cohortNodeIndices).size !== cohortNodeIndices.length) {
+    throw new TypeError("Il cohort deve contenere indici ASP positivi, univoci e non vuoti");
+  }
+  if (!Array.isArray(observedEdges)) throw new TypeError("Gli archi osservati devono essere un array");
+  const cohort = new Set(cohortNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del cohort selezionato`);
+    }
+  }
+  const pairKey = (left: number, right: number) => left < right ? `${left}:${right}` : `${right}:${left}`;
+  const observed = new Set<string>();
+  for (const edge of observedEdges) {
+    if (!Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1) {
+      throw new TypeError("Gli archi osservati devono riferirsi a indici ASP positivi");
+    }
+    if (edge.sourceNode !== edge.targetNode && cohort.has(edge.sourceNode) && cohort.has(edge.targetNode)) {
+      observed.add(pairKey(edge.sourceNode, edge.targetNode));
+    }
+  }
+  const fillable = new Set(candidates.map((candidate) => pairKey(candidate.sourceNode, candidate.targetNode)));
+  const expectedUnfillable = new Set<string>();
+  const unfillableNeighbors = new Map([...cohort].map((node) => [node, new Set<number>()]));
+  const sortedCohort = [...cohort].sort((left, right) => left - right);
+  for (let leftIndex = 0; leftIndex < sortedCohort.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sortedCohort.length; rightIndex += 1) {
+      const left = sortedCohort[leftIndex];
+      const right = sortedCohort[rightIndex];
+      const key = pairKey(left, right);
+      if (observed.has(key) || fillable.has(key)) continue;
+      expectedUnfillable.add(key);
+      unfillableNeighbors.get(left)?.add(right);
+      unfillableNeighbors.get(right)?.add(left);
+    }
+  }
+  const expectedBlockers = new Set([...cohort].filter((node) =>
+    (unfillableNeighbors.get(node)?.size ?? 0) >= s
+  ));
+  if (expectedBlockers.size === 0) {
+    throw new Error("Il risultato UNSAT del completamento non concorda con il calcolo indipendente del k-plex");
+  }
+
+  if (!Array.isArray(witnesses) || witnesses.length !== 1 ||
+    witnesses[0] === null || typeof witnesses[0] !== "object") {
+    throw new Error("clingo non ha restituito un answer set why-not unico e verificabile");
+  }
+  const witness = witnesses[0] as Record<string, unknown>;
+  if (!Array.isArray(witness.Value) || witness.Value.some((atom) => typeof atom !== "string")) {
+    throw new Error("Il witness why-not di clingo non contiene atomi validi");
+  }
+  const actualUnfillable = new Set<string>();
+  const actualBlockers = new Set<number>();
+  for (const atom of witness.Value as string[]) {
+    const pairMatch = /^cf_plex_diag_unfillable_pair\((\d+),(\d+)\)$/.exec(atom);
+    if (pairMatch) {
+      const left = Number(pairMatch[1]);
+      const right = Number(pairMatch[2]);
+      if (left >= right || !cohort.has(left) || !cohort.has(right)) {
+        throw new Error("Il witness why-not contiene una coppia mancante non canonica o fuori cohort");
+      }
+      const key = pairKey(left, right);
+      if (actualUnfillable.has(key)) throw new Error("Il witness why-not duplica una coppia non completabile");
+      actualUnfillable.add(key);
+      continue;
+    }
+    const blockerMatch = /^cf_plex_diag_blocker\((\d+)\)$/.exec(atom);
+    if (blockerMatch) {
+      const blocker = Number(blockerMatch[1]);
+      if (!cohort.has(blocker) || actualBlockers.has(blocker)) {
+        throw new Error("Il witness why-not contiene un nodo bloccante duplicato o fuori cohort");
+      }
+      actualBlockers.add(blocker);
+      continue;
+    }
+    throw new Error(`Atomo inatteso nel witness why-not: ${atom}`);
+  }
+  if (actualUnfillable.size !== expectedUnfillable.size ||
+    [...expectedUnfillable].some((key) => !actualUnfillable.has(key))) {
+    throw new Error("Il witness why-not ASP non elenca esattamente tutte le coppie mancanti non completabili");
+  }
+  if (actualBlockers.size !== expectedBlockers.size ||
+    [...expectedBlockers].some((node) => !actualBlockers.has(node))) {
+    throw new Error("Il witness why-not ASP non elenca esattamente i nodi che violano la soglia s");
+  }
+  const mapNodeId = (index: number) => {
+    const nodeId = nodeIdByIndex.get(index);
+    if (typeof nodeId !== "string" || nodeId === "") {
+      throw new Error(`Il mapping ASP del nodo ${index} non e verificabile`);
+    }
+    return nodeId;
+  };
+  const unfillableMissingPairs = [...expectedUnfillable].map((key) => {
+    const [left, right] = key.split(":").map(Number);
+    return [mapNodeId(left), mapNodeId(right)] as [string, string];
+  });
+  const blockers = [...expectedBlockers].sort((left, right) => left - right).map((node) => ({
+    nodeId: mapNodeId(node),
+    unfillableMissingNeighborIds: [...(unfillableNeighbors.get(node) ?? [])]
+      .sort((left, right) => left - right)
+      .map(mapNodeId)
+  }));
+  return {
+    targetS: s,
+    cohortNodeIds: sortedCohort.map(mapNodeId),
+    candidateEdgeIds: candidates.map((candidate) => candidate.id),
+    unfillableMissingPairs,
+    blockers
+  };
+}
+
+/** Produces an ASP certificate for why a fixed cohort cannot reach a target minimum degree. */
+export function buildKCoreCompletionWhyNotProgram(
+  k: number,
+  cohortNodeIndices: number[],
+  candidatesInput: unknown
+): { candidates: StructuralEdgeCompletionCandidate[]; program: string } {
+  validateIntegerParameter("k", k, 0);
+  if (!Array.isArray(cohortNodeIndices) || cohortNodeIndices.length === 0 ||
+    cohortNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(cohortNodeIndices).size !== cohortNodeIndices.length) {
+    throw new TypeError("Il cohort deve contenere indici ASP positivi, univoci e non vuoti");
+  }
+  const cohort = new Set(cohortNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del cohort selezionato`);
+    }
+  }
+  const cohortFacts = [...cohort].sort((left, right) => left - right)
+    .map((node) => `cf_core_diag_cohort(${node}).`);
+  const candidateFacts = candidates.map((candidate) =>
+    `cf_core_diag_candidate(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode}).`
+  );
+  const program = [
+    ...cohortFacts,
+    ...candidateFacts,
+    "cf_core_diag_candidate_pair(U,V) :- cf_core_diag_candidate(_,U,V).",
+    "cf_core_diag_candidate_pair(V,U) :- cf_core_diag_candidate(_,U,V).",
+    "cf_core_diag_adjacent(U,V) :- edge(U,V).",
+    "cf_core_diag_potential_neighbor(V,U) :- cf_core_diag_adjacent(V,U).",
+    "cf_core_diag_potential_neighbor(V,U) :- cf_core_diag_candidate_pair(V,U).",
+    "cf_core_diag_current_degree(V,D) :- cf_core_diag_cohort(V), D = #count { U : cf_core_diag_cohort(U), U != V, cf_core_diag_adjacent(V,U) }.",
+    "cf_core_diag_maximum_degree(V,D) :- cf_core_diag_cohort(V), D = #count { U : cf_core_diag_cohort(U), U != V, cf_core_diag_potential_neighbor(V,U) }.",
+    `cf_core_diag_blocker(V) :- cf_core_diag_cohort(V), cf_core_diag_maximum_degree(V,D), D < ${k}.`,
+    "#show cf_core_diag_current_degree/2.",
+    "#show cf_core_diag_maximum_degree/2.",
+    "#show cf_core_diag_blocker/1."
+  ].join("\n");
+  return { candidates, program };
+}
+
+/** Parses ASP's k-core why-not answer set and checks every degree against the current graph. */
+export function parseKCoreCompletionWhyNot(
+  witnesses: unknown,
+  k: number,
+  cohortNodeIndices: number[],
+  observedEdges: Array<{ sourceNode: number; targetNode: number }>,
+  candidatesInput: unknown,
+  nodeIdByIndex: ReadonlyMap<number, string>
+): KCoreCompletionWhyNot {
+  validateIntegerParameter("k", k, 0);
+  if (!Array.isArray(cohortNodeIndices) || cohortNodeIndices.length === 0 ||
+    cohortNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(cohortNodeIndices).size !== cohortNodeIndices.length) {
+    throw new TypeError("Il cohort deve contenere indici ASP positivi, univoci e non vuoti");
+  }
+  if (!Array.isArray(observedEdges)) throw new TypeError("Gli archi osservati devono essere un array");
+  const cohort = new Set(cohortNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del cohort selezionato`);
+    }
+  }
+  const currentNeighbors = new Map([...cohort].map((node) => [node, new Set<number>()]));
+  for (const edge of observedEdges) {
+    if (!Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1) {
+      throw new TypeError("Gli archi osservati devono riferirsi a indici ASP positivi");
+    }
+    if (edge.sourceNode === edge.targetNode || !cohort.has(edge.sourceNode) || !cohort.has(edge.targetNode)) continue;
+    currentNeighbors.get(edge.sourceNode)?.add(edge.targetNode);
+    currentNeighbors.get(edge.targetNode)?.add(edge.sourceNode);
+  }
+  const maximumNeighbors = new Map([...currentNeighbors].map(([node, neighbors]) => [node, new Set(neighbors)]));
+  for (const candidate of candidates) {
+    maximumNeighbors.get(candidate.sourceNode)?.add(candidate.targetNode);
+    maximumNeighbors.get(candidate.targetNode)?.add(candidate.sourceNode);
+  }
+  const expectedBlockers = new Set([...cohort].filter((node) =>
+    (maximumNeighbors.get(node)?.size ?? 0) < k
+  ));
+  if (expectedBlockers.size === 0) {
+    throw new Error("Il risultato UNSAT del completamento non concorda con il calcolo indipendente del k-core");
+  }
+  if (!Array.isArray(witnesses) || witnesses.length !== 1 ||
+    witnesses[0] === null || typeof witnesses[0] !== "object") {
+    throw new Error("clingo non ha restituito un answer set why-not unico e verificabile");
+  }
+  const witness = witnesses[0] as Record<string, unknown>;
+  if (!Array.isArray(witness.Value) || witness.Value.some((atom) => typeof atom !== "string")) {
+    throw new Error("Il witness why-not di clingo non contiene atomi validi");
+  }
+  const currentDegrees = new Map<number, number>();
+  const maximumDegrees = new Map<number, number>();
+  const actualBlockers = new Set<number>();
+  for (const atom of witness.Value as string[]) {
+    const currentMatch = /^cf_core_diag_current_degree\((\d+),(\d+)\)$/.exec(atom);
+    if (currentMatch) {
+      const node = Number(currentMatch[1]);
+      const degree = Number(currentMatch[2]);
+      if (!cohort.has(node) || currentDegrees.has(node)) throw new Error("Grado corrente duplicato o fuori cohort nel witness why-not");
+      currentDegrees.set(node, degree);
+      continue;
+    }
+    const maximumMatch = /^cf_core_diag_maximum_degree\((\d+),(\d+)\)$/.exec(atom);
+    if (maximumMatch) {
+      const node = Number(maximumMatch[1]);
+      const degree = Number(maximumMatch[2]);
+      if (!cohort.has(node) || maximumDegrees.has(node)) throw new Error("Grado massimo duplicato o fuori cohort nel witness why-not");
+      maximumDegrees.set(node, degree);
+      continue;
+    }
+    const blockerMatch = /^cf_core_diag_blocker\((\d+)\)$/.exec(atom);
+    if (blockerMatch) {
+      const node = Number(blockerMatch[1]);
+      if (!cohort.has(node) || actualBlockers.has(node)) throw new Error("Nodo blocker duplicato o fuori cohort nel witness why-not");
+      actualBlockers.add(node);
+      continue;
+    }
+    throw new Error(`Atomo inatteso nel witness why-not: ${atom}`);
+  }
+  for (const node of cohort) {
+    const actualCurrent = currentDegrees.get(node);
+    const actualMaximum = maximumDegrees.get(node);
+    if (actualCurrent !== currentNeighbors.get(node)?.size || actualMaximum !== maximumNeighbors.get(node)?.size) {
+      throw new Error("Il witness why-not ASP riporta gradi non coerenti con il grafo e i candidati");
+    }
+  }
+  if (currentDegrees.size !== cohort.size || maximumDegrees.size !== cohort.size ||
+    actualBlockers.size !== expectedBlockers.size ||
+    [...expectedBlockers].some((node) => !actualBlockers.has(node))) {
+    throw new Error("Il witness why-not ASP non elenca esattamente i blocker del target k-core");
+  }
+  const mapNodeId = (index: number) => {
+    const nodeId = nodeIdByIndex.get(index);
+    if (typeof nodeId !== "string" || nodeId === "") throw new Error(`Il mapping ASP del nodo ${index} non e verificabile`);
+    return nodeId;
+  };
+  const sortedCohort = [...cohort].sort((left, right) => left - right);
+  const blockers = [...expectedBlockers].sort((left, right) => left - right).map((node) => {
+    const current = currentNeighbors.get(node) ?? new Set<number>();
+    const maximum = maximumNeighbors.get(node) ?? new Set<number>();
+    return {
+      nodeId: mapNodeId(node),
+      currentNeighborIds: [...current].sort((left, right) => left - right).map(mapNodeId),
+      additionalCandidateNeighborIds: [...maximum].filter((neighbor) => !current.has(neighbor))
+        .sort((left, right) => left - right).map(mapNodeId),
+      maximumAchievableDegree: maximum.size
+    };
+  });
+  return {
+    targetK: k,
+    cohortNodeIds: sortedCohort.map(mapNodeId),
+    candidateEdgeIds: candidates.map((candidate) => candidate.id),
+    blockers
+  };
+}
+
+/** Tests whether all declared additions still leave a target outside the fixed-domain k-core. */
+export function buildKCoreMembershipCompletionWhyNotProgram(
+  k: number,
+  targetNodeIndex: number,
+  candidateNodeIndices: number[],
+  candidatesInput: unknown
+): { candidates: StructuralEdgeCompletionCandidate[]; program: string } {
+  validateIntegerParameter("k", k, 0);
+  if (!Number.isSafeInteger(targetNodeIndex) || targetNodeIndex < 1) {
+    throw new TypeError("Il nodo obiettivo deve avere un indice ASP positivo");
+  }
+  if (!Array.isArray(candidateNodeIndices) || candidateNodeIndices.length === 0 ||
+    candidateNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(candidateNodeIndices).size !== candidateNodeIndices.length ||
+    !candidateNodeIndices.includes(targetNodeIndex)) {
+    throw new TypeError("Il dominio candidato deve essere non vuoto, univoco e contenere il nodo obiettivo");
+  }
+  const cohort = new Set(candidateNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del dominio candidato`);
+    }
+  }
+  const cohortFacts = [...cohort].sort((left, right) => left - right)
+    .map((node) => `cf_kcm_diag_node(${node}).`);
+  const candidateFacts = candidates.map((candidate) =>
+    `cf_kcm_diag_candidate(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode}).`
+  );
+  const program = [
+    ...cohortFacts,
+    ...candidateFacts,
+    `cf_kcm_diag_target(${targetNodeIndex}).`,
+    "cf_kcm_diag_candidate_pair(U,V) :- cf_kcm_diag_candidate(_,U,V).",
+    "cf_kcm_diag_candidate_pair(V,U) :- cf_kcm_diag_candidate(_,U,V).",
+    "cf_kcm_diag_neighbor(V,U) :- cf_kcm_diag_node(V), cf_kcm_diag_node(U), U != V, edge(V,U).",
+    "cf_kcm_diag_neighbor(V,U) :- cf_kcm_diag_node(V), cf_kcm_diag_node(U), U != V, edge(U,V).",
+    "cf_kcm_diag_neighbor(V,U) :- cf_kcm_diag_candidate_pair(V,U).",
+    `cf_kcm_diag_step(0..${cohort.size}).`,
+    `cf_kcm_diag_last(${cohort.size}).`,
+    "cf_kcm_diag_alive(V,0) :- cf_kcm_diag_node(V).",
+    `cf_kcm_diag_peeled_at(V,T+1) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_alive(V,T), #count { U : cf_kcm_diag_alive(U,T), U != V, cf_kcm_diag_neighbor(V,U) } < ${k}.`,
+    "cf_kcm_diag_alive(V,T+1) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_alive(V,T), not cf_kcm_diag_peeled_at(V,T+1).",
+    "cf_kcm_diag_peel_support(V,T+1,U) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_peeled_at(V,T+1), cf_kcm_diag_alive(U,T), U != V, cf_kcm_diag_neighbor(V,U).",
+    "cf_kcm_diag_peeled(V) :- cf_kcm_diag_peeled_at(V,_).",
+    ":- cf_kcm_diag_target(V), cf_kcm_diag_alive(V,N), cf_kcm_diag_last(N).",
+    "#show cf_kcm_diag_peeled_at/2.",
+    "#show cf_kcm_diag_peel_support/3."
+  ].join("\n");
+  return { candidates, program };
+}
+
+function computeKCoreMembershipExpectedPeeling(
+  k: number,
+  candidateNodeIndices: number[],
+  edgeIndexPairs: ReadonlyArray<readonly [number, number]>
+): { peeling: KCoreMembershipCompletionWhyNotStep[]; remaining: Set<number> } {
+  const cohort = new Set(candidateNodeIndices);
+  const neighbors = new Map([...cohort].map((node) => [node, new Set<number>()]));
+  for (const [left, right] of edgeIndexPairs) {
+    if (left === right || !cohort.has(left) || !cohort.has(right)) continue;
+    neighbors.get(left)?.add(right);
+    neighbors.get(right)?.add(left);
+  }
+
+  const active = new Set(cohort);
+  const peeling: KCoreMembershipCompletionWhyNotStep[] = [];
+  for (let round = 1; round <= cohort.size; round += 1) {
+    const wave = [...active].filter((node) =>
+      [...(neighbors.get(node) ?? [])].filter((neighbor) => active.has(neighbor)).length < k
+    ).sort((left, right) => left - right);
+    if (wave.length === 0) break;
+    for (const node of wave) {
+      const survivingNeighborIds = [...(neighbors.get(node) ?? [])]
+        .filter((neighbor) => active.has(neighbor))
+        .sort((left, right) => left - right)
+        .map(String);
+      peeling.push({ nodeId: String(node), round, survivingNeighborIds });
+    }
+    for (const node of wave) active.delete(node);
+  }
+  return { peeling, remaining: active };
+}
+
+/** Verifies either the full-candidate peeling or its exact prefix through target elimination. */
+export function parseKCoreMembershipCompletionWhyNot(
+  witnesses: unknown,
+  k: number,
+  targetNodeIndex: number,
+  candidateNodeIndices: number[],
+  observedEdges: Array<{ sourceNode: number; targetNode: number }>,
+  candidatesInput: unknown,
+  nodeIdByIndex: ReadonlyMap<number, string>,
+  options: { stopAfterTargetRemoval?: boolean } = {}
+): KCoreMembershipCompletionWhyNot {
+  validateIntegerParameter("k", k, 0);
+  if (!Number.isSafeInteger(targetNodeIndex) || targetNodeIndex < 1 ||
+    !Array.isArray(candidateNodeIndices) || candidateNodeIndices.length === 0 ||
+    candidateNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(candidateNodeIndices).size !== candidateNodeIndices.length ||
+    !candidateNodeIndices.includes(targetNodeIndex)) {
+    throw new TypeError("Il dominio candidato deve essere valido, univoco e contenere il nodo obiettivo");
+  }
+  if (!Array.isArray(observedEdges)) throw new TypeError("Gli archi osservati devono essere un array");
+  const cohort = new Set(candidateNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del dominio candidato`);
+    }
+  }
+  const edgeByKey = new Map<string, [number, number]>();
+  const addPair = (left: number, right: number) => {
+    if (left === right || !cohort.has(left) || !cohort.has(right)) return;
+    edgeByKey.set(`${Math.min(left, right)}\u0000${Math.max(left, right)}`, [
+      Math.min(left, right), Math.max(left, right)
+    ]);
+  };
+  for (const edge of observedEdges) {
+    if (!Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1) {
+      throw new TypeError("Gli archi osservati devono riferirsi a indici ASP positivi");
+    }
+    addPair(edge.sourceNode, edge.targetNode);
+  }
+  for (const candidate of candidates) addPair(candidate.sourceNode, candidate.targetNode);
+
+  const expectedProfile = computeKCoreMembershipExpectedPeeling(k, [...cohort], [...edgeByKey.values()]);
+  const expectedPeeling = expectedProfile.peeling;
+  if (expectedProfile.remaining.has(targetNodeIndex)) {
+    throw new Error("Il risultato UNSAT dell'appartenenza non concorda con il k-core del grafo che usa tutti i candidati");
+  }
+  const targetRemovalRound = expectedPeeling.find((step) => Number(step.nodeId) === targetNodeIndex)?.round;
+  if (targetRemovalRound === undefined) {
+    throw new Error("Il peeling indipendente non ha individuato il round di eliminazione del target");
+  }
+  const expectedCertificatePeeling = options.stopAfterTargetRemoval
+    ? expectedPeeling.filter((step) => step.round <= targetRemovalRound)
+    : expectedPeeling;
+
+  if (!Array.isArray(witnesses) || witnesses.length !== 1 ||
+    witnesses[0] === null || typeof witnesses[0] !== "object") {
+    throw new Error("clingo non ha restituito un answer set why-not unico e verificabile");
+  }
+  const witness = witnesses[0] as Record<string, unknown>;
+  if (!Array.isArray(witness.Value) || witness.Value.some((atom) => typeof atom !== "string")) {
+    throw new Error("Il witness why-not di clingo non contiene atomi validi");
+  }
+  const actualPeeling = new Map<number, { round: number; neighbors: Set<number> }>();
+  for (const atom of witness.Value as string[]) {
+    const peeledMatch = /^cf_kcm_diag_peeled_at\((\d+),(\d+)\)$/.exec(atom);
+    if (peeledMatch) {
+      const node = Number(peeledMatch[1]);
+      const round = Number(peeledMatch[2]);
+      if (!cohort.has(node) || round < 1 || round > cohort.size || actualPeeling.has(node)) {
+        throw new Error("Il witness why-not contiene un nodo o round di peeling duplicato o fuori dominio");
+      }
+      actualPeeling.set(node, { round, neighbors: new Set<number>() });
+      continue;
+    }
+    const supportMatch = /^cf_kcm_diag_peel_support\((\d+),(\d+),(\d+)\)$/.exec(atom);
+    if (supportMatch) {
+      const node = Number(supportMatch[1]);
+      const round = Number(supportMatch[2]);
+      const neighbor = Number(supportMatch[3]);
+      const peeled = actualPeeling.get(node);
+      if (!peeled || peeled.round !== round || !cohort.has(neighbor) || neighbor === node || peeled.neighbors.has(neighbor)) {
+        throw new Error("Il witness why-not contiene supporti di peeling duplicati o non coerenti col round");
+      }
+      peeled.neighbors.add(neighbor);
+      continue;
+    }
+    throw new Error(`Atomo inatteso nel witness why-not k-core membership: ${atom}`);
+  }
+  const expectedByNode = new Map(expectedCertificatePeeling.map((step) => [Number(step.nodeId), step]));
+  if (actualPeeling.size !== expectedByNode.size ||
+    [...expectedByNode].some(([node, expected]) => {
+      const actual = actualPeeling.get(node);
+      return !actual || actual.round !== expected.round ||
+        [...actual.neighbors].sort((left, right) => left - right).join(",") !==
+        expected.survivingNeighborIds.map(Number).sort((left, right) => left - right).join(",");
+    })) {
+    throw new Error(options.stopAfterTargetRemoval
+      ? "Il witness why-not ASP non corrisponde ai round indipendenti fino all'eliminazione del target"
+      : "Il witness why-not ASP non corrisponde all'intera sequenza indipendente di peeling");
+  }
+  const mapNodeId = (index: number) => {
+    const nodeId = nodeIdByIndex.get(index);
+    if (typeof nodeId !== "string" || nodeId === "") throw new Error(`Il mapping ASP del nodo ${index} non e verificabile`);
+    return nodeId;
+  };
+  const peeling = expectedCertificatePeeling.map((step) => ({
+    nodeId: mapNodeId(Number(step.nodeId)),
+    round: step.round,
+    survivingNeighborIds: step.survivingNeighborIds.map((nodeIndex) => mapNodeId(Number(nodeIndex)))
+  }));
+  return {
+    targetK: k,
+    targetNodeId: mapNodeId(targetNodeIndex),
+    candidateNodeIds: [...cohort].sort((left, right) => left - right).map(mapNodeId),
+    candidateEdgeIds: candidates.map((candidate) => candidate.id),
+    peelingScope: options.stopAfterTargetRemoval ? "target_prefix" : "full",
+    peeling
+  };
+}
+
+export interface KCoreMembershipWhyNotSolverResult {
+  Result?: string;
+  Error?: unknown;
+  Models?: { More?: unknown };
+  Call?: Array<{ Witnesses?: unknown }>;
+  [key: string]: unknown;
+}
+
+const MAX_KCORE_WHY_NOT_ROUNDS_PER_QUERY = 32;
+
+/** Builds a bounded synchronous peeling horizon so long target prefixes need fewer solver invocations. */
+function buildKCoreMembershipPeelingBatchProgram(
+  k: number,
+  activeNodeIndices: number[],
+  edgeIndexPairs: ReadonlyArray<readonly [number, number]>,
+  roundLimit: number
+): string {
+  const active = [...new Set(activeNodeIndices)].sort((left, right) => left - right);
+  const activeSet = new Set(active);
+  const neighbors = new Set<string>();
+  for (const [left, right] of edgeIndexPairs) {
+    if (left === right || !activeSet.has(left) || !activeSet.has(right)) continue;
+    neighbors.add(`cf_kcm_diag_neighbor(${left},${right}).`);
+    neighbors.add(`cf_kcm_diag_neighbor(${right},${left}).`);
+  }
+  return [
+    ...active.map((node) => `cf_kcm_diag_node(${node}).`),
+    ...[...neighbors].sort(),
+    `cf_kcm_diag_step(0..${roundLimit}).`,
+    `cf_kcm_diag_last(${roundLimit}).`,
+    "cf_kcm_diag_alive(V,0) :- cf_kcm_diag_node(V).",
+    `cf_kcm_diag_peeled_at(V,T+1) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_alive(V,T), #count { U : cf_kcm_diag_alive(U,T), U != V, cf_kcm_diag_neighbor(V,U) } < ${k}.`,
+    "cf_kcm_diag_alive(V,T+1) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_alive(V,T), not cf_kcm_diag_peeled_at(V,T+1).",
+    "cf_kcm_diag_peel_support(V,T+1,U) :- cf_kcm_diag_step(T), cf_kcm_diag_last(N), T < N, cf_kcm_diag_peeled_at(V,T+1), cf_kcm_diag_alive(U,T), U != V, cf_kcm_diag_neighbor(V,U).",
+    "#show cf_kcm_diag_peeled_at/2.",
+    "#show cf_kcm_diag_peel_support/3."
+  ].join("\n");
+}
+
+/** Builds and verifies a full-candidate k-core why-not certificate with bounded ASP peeling horizons. */
+export async function solveKCoreMembershipCompletionWhyNotByRounds(
+  k: number,
+  targetNodeIndex: number,
+  candidateNodeIndices: number[],
+  observedEdges: Array<{ sourceNode: number; targetNode: number }>,
+  candidatesInput: unknown,
+  nodeIdByIndex: ReadonlyMap<number, string>,
+  solveRound: (program: string) => Promise<KCoreMembershipWhyNotSolverResult>,
+  options: {
+    stopAfterTargetRemoval?: boolean;
+    maxRoundsPerQuery?: number;
+    adaptiveBatching?: boolean;
+  } = {}
+): Promise<KCoreMembershipCompletionWhyNot> {
+  validateIntegerParameter("k", k, 0);
+  if (!Number.isSafeInteger(targetNodeIndex) || targetNodeIndex < 1 ||
+    !Array.isArray(candidateNodeIndices) || candidateNodeIndices.length === 0 ||
+    candidateNodeIndices.some((index) => !Number.isSafeInteger(index) || index < 1) ||
+    new Set(candidateNodeIndices).size !== candidateNodeIndices.length ||
+    !candidateNodeIndices.includes(targetNodeIndex)) {
+    throw new TypeError("Il dominio candidato deve essere valido, univoco e contenere il nodo obiettivo");
+  }
+  if (!Array.isArray(observedEdges)) throw new TypeError("Gli archi osservati devono essere un array");
+  if (typeof solveRound !== "function") throw new TypeError("solveRound deve essere una funzione");
+  const maxRoundsPerQueryCap = options.maxRoundsPerQuery ?? 1;
+  if (!Number.isSafeInteger(maxRoundsPerQueryCap) || maxRoundsPerQueryCap < 1 ||
+    maxRoundsPerQueryCap > MAX_KCORE_WHY_NOT_ROUNDS_PER_QUERY) {
+    throw new RangeError(`maxRoundsPerQuery deve essere un intero fra 1 e ${MAX_KCORE_WHY_NOT_ROUNDS_PER_QUERY}`);
+  }
+  if (options.adaptiveBatching !== undefined && typeof options.adaptiveBatching !== "boolean") {
+    throw new TypeError("adaptiveBatching deve essere booleano");
+  }
+
+  const cohort = new Set(candidateNodeIndices);
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  for (const candidate of candidates) {
+    if (!cohort.has(candidate.sourceNode) || !cohort.has(candidate.targetNode)) {
+      throw new TypeError(`edgeAdditions.${candidate.id} deve collegare due nodi del dominio candidato`);
+    }
+  }
+  const edgeByKey = new Map<string, [number, number]>();
+  const addPair = (sourceNode: number, targetNode: number) => {
+    if (sourceNode === targetNode || !cohort.has(sourceNode) || !cohort.has(targetNode)) return;
+    const left = Math.min(sourceNode, targetNode);
+    const right = Math.max(sourceNode, targetNode);
+    edgeByKey.set(`${left}\u0000${right}`, [left, right]);
+  };
+  for (const edge of observedEdges) {
+    if (edge === null || typeof edge !== "object" ||
+      !Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1) {
+      throw new TypeError("Gli archi osservati devono riferirsi a indici ASP positivi");
+    }
+    addPair(edge.sourceNode, edge.targetNode);
+  }
+  for (const candidate of candidates) addPair(candidate.sourceNode, candidate.targetNode);
+
+  const edgeIndexPairs = [...edgeByKey.values()];
+  let plannedTargetRemovalRound: number | undefined;
+  let maxRoundsPerQuery = maxRoundsPerQueryCap;
+  if (options.stopAfterTargetRemoval || options.adaptiveBatching) {
+    const expectedProfile = computeKCoreMembershipExpectedPeeling(k, [...cohort], edgeIndexPairs);
+    if (options.stopAfterTargetRemoval && expectedProfile.remaining.has(targetNodeIndex)) {
+      throw new Error("Il risultato UNSAT dell'appartenenza non concorda con il k-core del grafo che usa tutti i candidati");
+    }
+    if (options.stopAfterTargetRemoval) {
+      plannedTargetRemovalRound = expectedProfile.peeling
+        .find((step) => Number(step.nodeId) === targetNodeIndex)?.round;
+      if (plannedTargetRemovalRound === undefined) {
+        throw new Error("Il peeling indipendente non ha individuato il round di eliminazione del target");
+      }
+    }
+    if (options.adaptiveBatching) {
+      const targetPrefixRound = plannedTargetRemovalRound ?? Number.POSITIVE_INFINITY;
+      const peeledPerRound = new Map<number, number>();
+      for (const step of expectedProfile.peeling) {
+        if (step.round > targetPrefixRound) continue;
+        peeledPerRound.set(step.round, (peeledPerRound.get(step.round) ?? 0) + 1);
+      }
+      if ([...peeledPerRound.values()].some((count) => count > 1)) {
+        maxRoundsPerQuery = 1;
+      }
+    }
+  }
+  const active = new Set(cohort);
+  const certificateAtoms: string[] = [];
+  let round = 1;
+  while (active.size > 0) {
+    const activeIndices = [...active].sort((left, right) => left - right);
+    const remainingRounds = options.stopAfterTargetRemoval && plannedTargetRemovalRound !== undefined
+      ? plannedTargetRemovalRound - round + 1
+      : cohort.size - round + 1;
+    const roundLimit = Math.min(maxRoundsPerQuery, remainingRounds);
+    if (roundLimit < 1) throw new Error("Il piano ASP ha superato il round indipendente di rimozione del target.");
+    const program = roundLimit === 1
+      ? [
+          buildKCorePeelingRoundFacts(activeIndices, edgeIndexPairs, new Map(), "undirected"),
+          buildKCorePeelingRoundProgram(k, activeIndices, "", "undirected")
+        ].join("\n\n")
+      : buildKCoreMembershipPeelingBatchProgram(k, activeIndices, edgeIndexPairs, roundLimit);
+    const result = await solveRound(`${program}\n`);
+    if (result?.Result !== "SATISFIABLE") {
+      const detail = result?.Result === "ERROR" && typeof result.Error === "string"
+        ? result.Error
+        : result?.Result ?? "risposta vuota";
+      throw new Error(`Il solver non ha completato il round ${round} di peeling (${detail}).`);
+    }
+    if (result.Models?.More !== "no") {
+      throw new Error(`Il solver non ha provato la completezza del round ${round} di peeling.`);
+    }
+    const witnesses = result.Call?.[0]?.Witnesses;
+    if (!Array.isArray(witnesses) || witnesses.length !== 1 ||
+      witnesses[0] === null || typeof witnesses[0] !== "object") {
+      throw new Error(`Il solver non ha restituito un witness unico per il round ${round} di peeling.`);
+    }
+    const value = (witnesses[0] as Record<string, unknown>).Value;
+    if (!Array.isArray(value) || value.some((atom) => typeof atom !== "string")) {
+      throw new Error(`Il witness del round ${round} di peeling non contiene atomi validi.`);
+    }
+    const atoms = roundLimit === 1
+      ? (value as string[]).map((atom) => {
+          const peeled = /^peeled\((\d+)\)$/.exec(atom);
+          if (peeled) return `cf_kcm_diag_peeled_at(${peeled[1]},1)`;
+          const support = /^peel_support\((\d+),(\d+)\)$/.exec(atom);
+          return support ? `cf_kcm_diag_peel_support(${support[1]},1,${support[2]})` : atom;
+        })
+      : value as string[];
+
+    const peeledByLocalRound = new Map<number, Set<number>>();
+    const supportByLocalRound = new Map<number, Set<string>>();
+    for (const atom of atoms) {
+      const peeledMatch = /^cf_kcm_diag_peeled_at\((\d+),(\d+)\)$/.exec(atom);
+      if (peeledMatch) {
+        const node = Number(peeledMatch[1]);
+        const localRound = Number(peeledMatch[2]);
+        if (!active.has(node) || localRound < 1 || localRound > roundLimit) {
+          throw new Error(`Il witness del batch ${round} contiene un nodo o round fuori dal dominio attivo.`);
+        }
+        const wave = peeledByLocalRound.get(localRound) ?? new Set<number>();
+        if (wave.has(node)) throw new Error(`Il witness del batch ${round} duplica un nodo eliminato.`);
+        wave.add(node);
+        peeledByLocalRound.set(localRound, wave);
+        continue;
+      }
+      const supportMatch = /^cf_kcm_diag_peel_support\((\d+),(\d+),(\d+)\)$/.exec(atom);
+      if (supportMatch) {
+        const node = Number(supportMatch[1]);
+        const localRound = Number(supportMatch[2]);
+        const neighbor = Number(supportMatch[3]);
+        const key = `${node}\u0000${neighbor}`;
+        if (!active.has(node) || !active.has(neighbor) || node === neighbor ||
+          localRound < 1 || localRound > roundLimit) {
+          throw new Error(`Il witness del batch ${round} contiene un supporto fuori dal dominio attivo.`);
+        }
+        const supports = supportByLocalRound.get(localRound) ?? new Set<string>();
+        if (supports.has(key)) throw new Error(`Il witness del batch ${round} duplica un supporto.`);
+        supports.add(key);
+        supportByLocalRound.set(localRound, supports);
+        continue;
+      }
+      throw new Error(`Atomo inatteso nel witness del batch di peeling ${round}: ${atom}`);
+    }
+    for (const [localRound, supports] of supportByLocalRound) {
+      const peeled = peeledByLocalRound.get(localRound) ?? new Set<number>();
+      if ([...supports].some((key) => !peeled.has(Number(key.split("\u0000")[0])))) {
+        throw new Error(`Il witness del batch ${round} attribuisce supporti a nodi non eliminati.`);
+      }
+    }
+    const firstEmptyLocalRound = Array.from({ length: roundLimit }, (_, index) => index + 1)
+      .find((localRound) => (peeledByLocalRound.get(localRound)?.size ?? 0) === 0);
+    if (firstEmptyLocalRound !== undefined &&
+      [...peeledByLocalRound.keys()].some((localRound) => localRound > firstEmptyLocalRound)) {
+      throw new Error(`Il witness del batch ${round} riprende il peeling dopo un round senza eliminazioni.`);
+    }
+    const targetLocalRound = [...peeledByLocalRound].find(([, peeled]) => peeled.has(targetNodeIndex))?.[0];
+    const processedLocalRound = options.stopAfterTargetRemoval && targetLocalRound !== undefined
+      ? targetLocalRound
+      : Math.min(firstEmptyLocalRound ?? roundLimit + 1, roundLimit);
+    for (const [localRound, peeled] of peeledByLocalRound) {
+      if (localRound > processedLocalRound) continue;
+      const globalRound = round + localRound - 1;
+      for (const node of peeled) certificateAtoms.push(`cf_kcm_diag_peeled_at(${node},${globalRound})`);
+      const supports = supportByLocalRound.get(localRound) ?? new Set<string>();
+      for (const key of supports) {
+        const [node, neighbor] = key.split("\u0000");
+        certificateAtoms.push(`cf_kcm_diag_peel_support(${node},${globalRound},${neighbor})`);
+      }
+    }
+
+    for (const localRound of Array.from({ length: processedLocalRound }, (_, index) => index + 1)) {
+      for (const node of peeledByLocalRound.get(localRound) ?? []) active.delete(node);
+    }
+    if (options.stopAfterTargetRemoval && targetLocalRound !== undefined) break;
+    if (firstEmptyLocalRound !== undefined || active.size === 0) break;
+    if (round >= cohort.size && active.size > 0) {
+      throw new Error("Il peeling ASP non ha raggiunto un punto fisso entro il numero di nodi candidati.");
+    }
+    round += processedLocalRound;
+  }
+
+  return parseKCoreMembershipCompletionWhyNot(
+    [{ Value: certificateAtoms }],
+    k,
+    targetNodeIndex,
+    candidateNodeIndices,
+    observedEdges,
+    candidates,
+    nodeIdByIndex,
+    options
+  );
 }
 
 /** Finds minimum-cost additions that raise the minimum internal degree of a fixed cohort to k. */
@@ -650,7 +1502,7 @@ export async function searchMaximumKPlexWithAsp(
   edges: Array<{ source: unknown; target: unknown }>,
   group: string,
   enumerateAllOptima: boolean,
-  solve: (program: string, modelLimit: number) => Promise<{ Result?: string; [key: string]: unknown }>
+  solve: (program: string, modelLimit: number) => Promise<{ Result?: string; Models?: { More?: unknown }; [key: string]: unknown }>
 ): Promise<MaximumKPlexAspSearchResult> {
   validateIntegerParameter("s", s, 1);
   const upperBound = getMaximumKPlexCardinalityUpperBound(s, candidateNodeIds, edges);
@@ -680,8 +1532,15 @@ export async function searchMaximumKPlexWithAsp(
   if (enumerateAllOptima) {
     const result = await solve(buildKPlexExactSizeProgram(s, lowerBound, group), 0);
     queryCount += 1;
-    if (result.Result !== "SATISFIABLE") {
-      return { complete: false, maximumSize: lowerBound, queryCount, solverStatus: result.Result ?? "EMPTY" };
+    if (result.Result !== "SATISFIABLE" || result.Models?.More !== "no") {
+      return {
+        complete: false,
+        maximumSize: lowerBound,
+        queryCount,
+        solverStatus: result.Result === "SATISFIABLE"
+          ? "INCOMPLETE_ENUMERATION"
+          : result.Result ?? "EMPTY"
+      };
     }
     bestFeasibleResult = result;
   }
@@ -1041,6 +1900,25 @@ export function buildMinimumDominatingSetProgram(candidateGroup = "", targetGrou
   ].join("\n\n");
 }
 
+/** Explains infeasibility by identifying targets with no candidate that can cover them. */
+export function buildDominatingSetFeasibilityProgram(candidateGroup = "", targetGroup = ""): string {
+  const candidateRule = candidateGroup
+    ? `candidate_node(V) :- node(V), group(V, ${escapeAspString(candidateGroup)}).`
+    : "candidate_node(V) :- node(V).";
+  const targetRule = targetGroup
+    ? `target_node(V) :- node(V), group(V, ${escapeAspString(targetGroup)}).`
+    : "target_node(V) :- node(V).";
+  return [
+    candidateRule,
+    targetRule,
+    "candidate_can_cover(V) :- target_node(V), candidate_node(V).",
+    "candidate_can_cover(V) :- target_node(V), candidate_node(U), U != V, edge(U,V).",
+    "uncoverable_target(V) :- target_node(V), not candidate_can_cover(V).",
+    "#show target_node/1.",
+    "#show uncoverable_target/1."
+  ].join("\n\n");
+}
+
 /** Minimum set of eligible non-terminal nodes whose removal disconnects two terminals. */
 export function buildMinimumNodeSeparatorProgram(
   startNode: number,
@@ -1283,27 +2161,27 @@ export function buildEdgeProvenanceByIdentity(links: StructuralEdgeLike[]): Reco
 
 /** Maps provenance only to declared source IDs for components whose witnesses expose those IDs. */
 export function buildEdgeProvenanceBySourceId(links: StructuralEdgeLike[]): Record<string, string> {
-  const provenanceBySourceId: Record<string, string> = {};
+  const provenanceEntries: Array<[string, string]> = [];
   for (const link of links) {
     const sourceId = link.sourceId ?? link.analysis?.id;
     if (sourceId === undefined || sourceId === null || String(sourceId).trim() === "") continue;
     const provenance = formatProvenanceReferences(link.analysis?.provenance);
-    if (provenance) provenanceBySourceId[String(sourceId)] = provenance;
+    if (provenance) provenanceEntries.push([String(sourceId), provenance]);
   }
-  return provenanceBySourceId;
+  return Object.fromEntries(provenanceEntries);
 }
 
 /** Maps declared provenance as reference arrays for lossless machine-readable exports. */
 export function buildEdgeProvenanceReferencesBySourceId(links: StructuralEdgeLike[]): Record<string, string[]> {
-  const provenanceBySourceId: Record<string, string[]> = {};
+  const provenanceEntries: Array<[string, string[]]> = [];
   for (const link of links) {
     const sourceId = link.sourceId ?? link.analysis?.id;
     if (sourceId === undefined || sourceId === null || String(sourceId).trim() === "") continue;
     const references = normalizeProvenanceReferences(link.analysis?.provenance);
     if (!references?.length) continue;
-    provenanceBySourceId[String(sourceId)] = references;
+    provenanceEntries.push([String(sourceId), references]);
   }
-  return provenanceBySourceId;
+  return Object.fromEntries(provenanceEntries);
 }
 
 /** Formats each distinct witness ID with its optional declared provenance reference. */
@@ -1312,7 +2190,7 @@ export function summarizeEdgeProvenance(
   provenanceBySourceId: Record<string, string>
 ): string {
   return [...new Set(edgeIds)].flatMap((edgeId) => {
-    const provenance = provenanceBySourceId[edgeId];
+    const provenance = getOwnRecordValue<string>(provenanceBySourceId, edgeId);
     return provenance ? [`${edgeId}: ${provenance}`] : [];
   }).join(" | ");
 }
@@ -1451,6 +2329,12 @@ export interface ModularityFacts {
   facts: string;
   candidateCount: number;
   edgeCount: number;
+  /** Candidate ASP indexes used to create these facts. */
+  candidateNodeIndexes: number[];
+  /** Edge weights and original 1-based positions after the shared exact scaling. */
+  normalizedEdges: Array<{ source: number; target: number; weight: number; globalEdgeIndex: number }>;
+  /** Exact scaled degree for each candidate ASP index. */
+  nodeDegrees: Array<{ nodeIndex: number; degree: number }>;
   /** ASP facts assigning each candidate to its undirected input component. */
   connectedComponentFacts: string;
   connectedComponentCount: number;
@@ -1473,8 +2357,16 @@ export interface ModularityFacts {
   pairwiseObjectiveUnavailableReason?: string;
 }
 
+export interface ModularityComponentFacts {
+  facts: ModularityFacts;
+  /** Maps each local 1-based ASP edge index back to the full projected edge list. */
+  globalEdgeIndexByLocalEdgeIndex: number[];
+}
+
 /** Pairwise objective grounding grows cubically with the candidate count. */
 export const MAX_PAIRWISE_MODULARITY_CANDIDATES = 18;
+/** Bounds the exact Cartesian expansion shown by the browser for all optima. */
+export const MAX_FACTORED_MODULARITY_OPTIMA = 10_000;
 
 /**
  * Rewrites 4*M*L_C - D_C^2 as a constant diagonal term plus pair terms for
@@ -1669,6 +2561,14 @@ export function buildModularityFacts(
     facts: `${lines.join("\n")}\n`,
     candidateCount: candidates.length,
     edgeCount: edges.length,
+    candidateNodeIndexes: [...candidates],
+    normalizedEdges: edges.map((edge, index) => ({
+      source: edge.source,
+      target: edge.target,
+      weight: pairwiseEdgeWeights[index],
+      globalEdgeIndex: index + 1
+    })),
+    nodeDegrees: [...degreeByNode].map(([nodeIndex, degree]) => ({ nodeIndex, degree })),
     connectedComponentFacts,
     connectedComponentCount,
     totalWeight,
@@ -1689,6 +2589,129 @@ export function buildModularityFacts(
   };
 }
 
+/**
+ * Creates exact independent modularity subproblems for disconnected positive-
+ * weight components. Every subproblem retains the global M and gamma in its
+ * objective, so its optimum score is the component's additive contribution to
+ * the original objective. When `groupZeroVolumeNodesForSingleOptimum` is true,
+ * all zero-volume nodes form one neutral subproblem. This preserves one exact
+ * optimum; callers must leave it false when they need every optimum because
+ * zero-volume nodes can be assigned neutrally across positive components.
+ */
+export function factorModularityFactsByPositiveWeightComponents(
+  facts: ModularityFacts,
+  includePairwiseObjective = false,
+  groupZeroVolumeNodesForSingleOptimum = false
+): ModularityComponentFacts[] | null {
+  if (facts.totalWeight <= 0 || facts.resolutionNumerator <= 0 ||
+    facts.candidateNodeIndexes.length < 2 || facts.normalizedEdges.length === 0) return null;
+  const candidateSet = new Set(facts.candidateNodeIndexes);
+  const degreeByNode = new Map(facts.nodeDegrees.map(({ nodeIndex, degree }) => [nodeIndex, degree]));
+  if (candidateSet.size !== facts.candidateNodeIndexes.length ||
+    facts.candidateNodeIndexes.some((nodeIndex) => {
+      const degree = degreeByNode.get(nodeIndex);
+      return !Number.isSafeInteger(degree) || degree! < 0;
+    }) || facts.normalizedEdges.some((edge) =>
+      !candidateSet.has(edge.source) || !candidateSet.has(edge.target) ||
+      !Number.isSafeInteger(edge.weight) || edge.weight < 0
+    )) return null;
+  const zeroVolumeNodes = facts.candidateNodeIndexes.filter((nodeIndex) => degreeByNode.get(nodeIndex) === 0);
+  if (zeroVolumeNodes.length > 0 && !groupZeroVolumeNodesForSingleOptimum) return null;
+  const positiveVolumeNodes = facts.candidateNodeIndexes.filter((nodeIndex) => (degreeByNode.get(nodeIndex) ?? 0) > 0);
+  if (positiveVolumeNodes.length === 0) return null;
+
+  const neighborsByNode = new Map(positiveVolumeNodes.map((nodeIndex) => [nodeIndex, new Set<number>()]));
+  for (const edge of facts.normalizedEdges) {
+    if (edge.weight <= 0) continue;
+    if (edge.source === edge.target) continue;
+    neighborsByNode.get(edge.source)!.add(edge.target);
+    neighborsByNode.get(edge.target)!.add(edge.source);
+  }
+
+  const componentByNode = new Map<number, number>();
+  const components: number[][] = [];
+  for (const start of [...positiveVolumeNodes].sort((left, right) => left - right)) {
+    if (componentByNode.has(start)) continue;
+    const componentId = start;
+    const component: number[] = [];
+    componentByNode.set(start, componentId);
+    const pending = [start];
+    while (pending.length > 0) {
+      const node = pending.pop()!;
+      component.push(node);
+      for (const neighbor of neighborsByNode.get(node)!) {
+        if (componentByNode.has(neighbor)) continue;
+        componentByNode.set(neighbor, componentId);
+        pending.push(neighbor);
+      }
+    }
+    components.push(component.sort((left, right) => left - right));
+  }
+  if (zeroVolumeNodes.length > 0) components.push([...zeroVolumeNodes].sort((left, right) => left - right));
+  if (components.length < 2) return null;
+
+  return components.map((componentNodes) => {
+    const componentNodeSet = new Set(componentNodes);
+    const componentEdges = facts.normalizedEdges.filter((edge) =>
+      componentNodeSet.has(edge.source) && componentNodeSet.has(edge.target)
+    );
+    const componentWeights = componentEdges.map(({ weight }) => weight);
+    const componentDegrees = new Map(componentNodes.map((nodeIndex) => [nodeIndex, degreeByNode.get(nodeIndex)!]));
+    const localEdgeRecords: ModularityEdgeRecord[] = componentEdges.map(({ source, target }) => ({ source, target }));
+    const localLines = [
+      `modularity_m(${facts.totalWeight}).`,
+      `modularity_resolution(${facts.resolutionNumerator},${facts.resolutionDenominator}).`,
+      ...componentNodes.map((nodeIndex) => `modularity_candidate(${nodeIndex}).`),
+      ...componentNodes.map((nodeIndex) => `modularity_degree(${nodeIndex},${componentDegrees.get(nodeIndex)}).`),
+      ...componentEdges.flatMap((edge, localIndex) => [
+        `modularity_edge(${localIndex + 1},${edge.source},${edge.target}).`,
+        ...(facts.weighted ? [`modularity_edge_weight(${localIndex + 1},${edge.weight}).`] : [])
+      ])
+    ];
+    const containsOnlyZeroVolumeNodes = componentNodes.every((nodeIndex) => degreeByNode.get(nodeIndex) === 0);
+    const pairwise = includePairwiseObjective && !containsOnlyZeroVolumeNodes &&
+      componentNodes.length <= MAX_PAIRWISE_MODULARITY_CANDIDATES
+      ? buildPairwiseModularityObjective(
+          componentNodes,
+          localEdgeRecords,
+          componentWeights,
+          componentDegrees,
+          facts.totalWeight,
+          facts.resolutionNumerator,
+          facts.resolutionDenominator
+        )
+      : undefined;
+    const componentFacts: ModularityFacts = {
+      facts: `${localLines.join("\n")}\n`,
+      candidateCount: componentNodes.length,
+      edgeCount: componentEdges.length,
+      candidateNodeIndexes: [...componentNodes],
+      normalizedEdges: componentEdges.map((edge) => ({ ...edge })),
+      nodeDegrees: componentNodes.map((nodeIndex) => ({ nodeIndex, degree: componentDegrees.get(nodeIndex)! })),
+      connectedComponentFacts: componentNodes
+        .map((nodeIndex) => `modularity_component(${nodeIndex},${componentNodes[0]}).`)
+        .join("\n") + "\n",
+      connectedComponentCount: 1,
+      totalWeight: facts.totalWeight,
+      weighted: facts.weighted,
+      weightScaleFactor: facts.weightScaleFactor,
+      displayTotalWeight: facts.displayTotalWeight,
+      resolutionNumerator: facts.resolutionNumerator,
+      resolutionDenominator: facts.resolutionDenominator,
+      displayResolution: facts.displayResolution,
+      ...(pairwise && "facts" in pairwise
+        ? { pairwiseObjectiveFacts: pairwise.facts, pairwiseObjectiveOffset: pairwise.offset }
+        : pairwise
+          ? { pairwiseObjectiveUnavailableReason: pairwise.reason }
+          : {})
+    };
+    return {
+      facts: componentFacts,
+      globalEdgeIndexByLocalEdgeIndex: componentEdges.map(({ globalEdgeIndex }) => globalEdgeIndex)
+    };
+  });
+}
+
 export interface ModularityCommunityOptions {
   weighted?: boolean;
   /**
@@ -1704,6 +2727,8 @@ export interface ModularityCommunityOptions {
   cannotLinkPairs?: Array<[number, number]>;
   attributeBounds?: Array<{
     nodeIndexes: number[];
+    attributeName?: string;
+    attributeValue?: string | number | boolean;
     minPerCommunity?: number;
     maxPerCommunity?: number;
   }>;
@@ -1728,6 +2753,11 @@ export function validateCommunityConfiguration(
   }
 
   const config = value as Record<string, unknown>;
+  const topologyCounterfactualError = validateCommunityTopologyCounterfactualConfig(
+    config.topologyCounterfactuals,
+    config.useEdgeWeights === true
+  );
+  if (topologyCounterfactualError) return topologyCounterfactualError;
   for (const name of ["minCount", "maxCount"] as const) {
     const count = config[name];
     if (count !== undefined && (typeof count !== "number" || !Number.isInteger(count) || count < 0)) {
@@ -1736,6 +2766,18 @@ export function validateCommunityConfiguration(
   }
   if (config.useEdgeWeights !== undefined && typeof config.useEdgeWeights !== "boolean") {
     return "graphAnalysis.communities.useEdgeWeights deve essere booleano.";
+  }
+  if (config.diagnosisCosts !== undefined) {
+    if (config.diagnosisCosts === null || typeof config.diagnosisCosts !== "object" || Array.isArray(config.diagnosisCosts)) {
+      return "graphAnalysis.communities.diagnosisCosts deve essere un oggetto di costi per categoria.";
+    }
+    const diagnosisCosts = config.diagnosisCosts as Record<string, unknown>;
+    for (const name of ["minimumCommunityCount", "maximumCommunityCount", "mustLink", "cannotLink", "attributeBound"] as const) {
+      const cost = diagnosisCosts[name];
+      if (cost !== undefined && (!Number.isSafeInteger(cost) || Number(cost) <= 0)) {
+        return `graphAnalysis.communities.diagnosisCosts.${name} deve essere un intero positivo sicuro.`;
+      }
+    }
   }
   if (config.resolution !== undefined &&
     (typeof config.resolution !== "number" || !Number.isFinite(config.resolution) || config.resolution <= 0)) {
@@ -1815,6 +2857,8 @@ export function validateCommunityConfiguration(
 
 export interface ResolvedCommunityAttributeBound {
   nodeIndexes: number[];
+  attributeName?: string;
+  attributeValue?: string | number | boolean;
   minPerCommunity?: number;
   maxPerCommunity?: number;
 }
@@ -1823,7 +2867,9 @@ export interface ResolvedCommunityAttributeBound {
 export function resolveCommunityAttributeBounds(
   configuredBounds: unknown,
   candidateNodes: Array<{ id: string; analysis?: Record<string, unknown> }>,
-  indexByNodeId: ReadonlyMap<string, number>
+  indexByNodeId: ReadonlyMap<string, number>,
+  allowUnsatisfiableMinimum = false,
+  includeAttributeIdentity = false
 ): ResolvedCommunityAttributeBound[] {
   if (configuredBounds === undefined) return [];
   if (!Array.isArray(configuredBounds)) {
@@ -1839,6 +2885,9 @@ export function resolveCommunityAttributeBounds(
     }
     const attributeName = bound.attribute.trim();
     const value = bound.value;
+    if (!((typeof value === "string") || (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean")) {
+      throw new Error(`graphAnalysis.communities.attributeBounds[${boundIndex}].value deve essere una stringa, un numero finito o un booleano esplicito.`);
+    }
     const matchingNodes = candidateNodes.filter((node) => {
       const attributes = node.analysis?.attributes;
       return attributes !== null && typeof attributes === "object" && !Array.isArray(attributes) &&
@@ -1851,7 +2900,7 @@ export function resolveCommunityAttributeBounds(
       typeof maximum !== "number" || !Number.isInteger(maximum) || maximum < 0) {
       throw new Error(`graphAnalysis.communities.attributeBounds[${boundIndex}] contiene limiti non validi.`);
     }
-    if (minimum > matchingNodes.length) {
+    if (minimum > matchingNodes.length && !allowUnsatisfiableMinimum) {
       throw new Error(
         `graphAnalysis.communities.attributeBounds[${boundIndex}] richiede almeno ${minimum} nodi con ${attributeName}=${JSON.stringify(value)} per comunità, ma la proiezione candidata ne contiene ${matchingNodes.length}.`
       );
@@ -1862,6 +2911,7 @@ export function resolveCommunityAttributeBounds(
     }
     return {
       nodeIndexes: nodeIndexes as number[],
+      ...(includeAttributeIdentity ? { attributeName, attributeValue: value } : {}),
       ...(minimum > 0 ? { minPerCommunity: minimum } : {}),
       ...(maximum > 0 ? { maxPerCommunity: maximum } : {})
     };
@@ -2023,6 +3073,45 @@ export function buildMaximumModularityProgram(options: ModularityCommunityOption
       : [])
   ];
   return lines.filter(Boolean).join("\n\n");
+}
+
+/**
+ * Builds exact optimum probes for whether a node pair can be together or
+ * separate in a globally optimal community partition. The disconnected-
+ * component rule is an exact pruning for the unconstrained base query, but the
+ * pair probes add community constraints; omit only that redundant pruning so
+ * both queries retain exactly the same feasible optima as the base problem.
+ */
+export function buildCommunityPairMembershipPrograms(
+  options: ModularityCommunityOptions,
+  pair: [number, number]
+): { together: string; separate: string } {
+  if (!Array.isArray(pair) || pair.length !== 2 || pair.some((node) => !Number.isSafeInteger(node) || node < 1)) {
+    throw new RangeError("La coppia deve contenere due indici ASP positivi e sicuri");
+  }
+  const [first, second] = pair;
+  if (first === second) throw new RangeError("La coppia deve riferirsi a due nodi distinti");
+  if (options.enforceConnectedPositiveVolumeCommunities) {
+    throw new RangeError("Le query di co-appartenenza non supportano il vincolo di connettivitÃ  positiva configurato");
+  }
+
+  const normalizedPair: [number, number] = first < second ? [first, second] : [second, first];
+  const {
+    separateDisconnectedComponents: _separateDisconnectedComponents,
+    ...semanticOptions
+  } = options;
+  return {
+    together: buildMaximumModularityProgram({
+      ...semanticOptions,
+      includeContributions: false,
+      mustLinkPairs: [...(semanticOptions.mustLinkPairs ?? []), normalizedPair]
+    }),
+    separate: buildMaximumModularityProgram({
+      ...semanticOptions,
+      includeContributions: false,
+      cannotLinkPairs: [...(semanticOptions.cannotLinkPairs ?? []), normalizedPair]
+    })
+  };
 }
 
 /**
@@ -2274,12 +3363,29 @@ export function buildBoundedPathNoRouteProgram(
   return rules.filter(Boolean).join("\n\n");
 }
 
+export type TypedPathTemporalSemantics = "coValid" | "orderedByStart";
+
 export interface TypedPathOptions {
   startNode: number;
   goalNode: number;
   edgeTypeSequence: string[];
   direction: "undirected" | "directed";
   group?: string;
+  temporalSemantics?: "static" | TypedPathTemporalSemantics;
+  strictTemporalOrder?: boolean;
+}
+
+function assertStaticTypedPathOptions(options: TypedPathOptions): void {
+  if ((options.temporalSemantics !== undefined && options.temporalSemantics !== "static") ||
+    options.strictTemporalOrder === true) {
+    throw new TypeError("Questo builder supporta soltanto cammini tipizzati statici");
+  }
+}
+
+/** Merges observed and explicitly declared candidate types for typed-path queries. */
+export function mergeTypedPathEdgeTypes(observedTypes: readonly unknown[], candidateTypes: readonly unknown[] = []): string[] {
+  return [...new Set([...observedTypes, ...candidateTypes]
+    .flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []))].sort();
 }
 
 /** Finds one simple path whose edge types match an exact ordered sequence. */
@@ -2298,6 +3404,16 @@ export function buildTypedPathProgram(options: TypedPathOptions): string {
   }
   if (options.direction !== "undirected" && options.direction !== "directed") {
     throw new RangeError("direction deve essere undirected oppure directed");
+  }
+  const temporalSemantics = options.temporalSemantics ?? "static";
+  if (temporalSemantics !== "static" && temporalSemantics !== "coValid" && temporalSemantics !== "orderedByStart") {
+    throw new RangeError("temporalSemantics deve essere static, coValid oppure orderedByStart");
+  }
+  if (options.strictTemporalOrder !== undefined && typeof options.strictTemporalOrder !== "boolean") {
+    throw new TypeError("strictTemporalOrder deve essere booleano");
+  }
+  if (options.strictTemporalOrder === true && temporalSemantics !== "orderedByStart") {
+    throw new RangeError("strictTemporalOrder si applica soltanto alla semantica orderedByStart");
   }
 
   const domain = candidateDomain(options.group ?? "");
@@ -2319,13 +3435,35 @@ export function buildTypedPathProgram(options: TypedPathOptions): string {
       : []),
     ":- typed_path_transition(Step,_,_), not typed_path_edge(Step,_).",
     "#show typed_path_node/2.",
-    "#show typed_path_edge/2."
+    "#show typed_path_edge/2.",
+    ...(temporalSemantics === "coValid" ? [
+      "typed_path_candidate_time(T) :- typed_path_edge(_,E), edge_valid_from(E,T).",
+      "typed_path_candidate_time(T) :- typed_path_edge(_,E), edge_valid_to(E,T).",
+      "typed_path_active(Step,T) :- typed_path_edge(Step,E), edge_valid_from(E,From), edge_valid_to(E,To), typed_path_candidate_time(T), From <= T, T <= To.",
+      "typed_path_missing_step(T) :- typed_path_transition(Step,_,_), typed_path_candidate_time(T), not typed_path_active(Step,T).",
+      "typed_path_common_time(T) :- typed_path_candidate_time(T), not typed_path_missing_step(T).",
+      "1 { typed_path_time(T) : typed_path_common_time(T) } 1.",
+      ":- typed_path_time(T), typed_path_common_time(S), S < T.",
+      "typed_path_edge_support(Step,E) :- typed_path_time(T), typed_path_active(Step,T), typed_path_edge(Step,E), edge_valid_from(E,From), edge_valid_to(E,To), From <= T, T <= To.",
+      "#show typed_path_time/1.",
+      "#show typed_path_edge_support/2."
+    ] : temporalSemantics === "orderedByStart" ? [
+      "typed_path_ordered_candidate(Step,E,From) :- typed_path_edge(Step,E), edge_valid_from(E,From), edge_valid_to(E,To), From <= To.",
+      "1 { typed_path_ordered_support(Step,E,From) : typed_path_ordered_candidate(Step,E,From) } 1 :- typed_path_transition(Step,_,_).",
+      ...options.edgeTypeSequence.slice(0, -1).map((_, index) =>
+        `:- typed_path_ordered_support(${index + 1},_,T1), typed_path_ordered_support(${index + 2},_,T2), T1 ${options.strictTemporalOrder === true ? ">=" : ">"} T2.`
+      ),
+      "typed_path_edge_support(Step,E) :- typed_path_ordered_support(Step,E,_).",
+      "#show typed_path_ordered_support/3.",
+      "#show typed_path_edge_support/2."
+    ] : [])
   ];
   return lines.filter(Boolean).join("\n\n");
 }
 
 /** Explains an absent simple typed path using exact-sequence walk reachability by prefix. */
 export function buildTypedPathNoRouteProgram(options: TypedPathOptions): string {
+  assertStaticTypedPathOptions(options);
   validateIntegerParameter("startNode", options.startNode, 1);
   validateIntegerParameter("goalNode", options.goalNode, 1);
   if (options.startNode === options.goalNode) {
@@ -2366,9 +3504,343 @@ export function buildTypedPathNoRouteProgram(options: TypedPathOptions): string 
   return lines.filter(Boolean).join("\n\n");
 }
 
+/** Finds a maximum-length temporal typed walk after the simple-path query is infeasible. */
+export function buildTypedPathTemporalNoRouteProgram(
+  options: TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics }
+): string {
+  if (options.temporalSemantics !== "coValid" && options.temporalSemantics !== "orderedByStart") {
+    throw new TypeError("Il why-not temporale richiede la semantica coValid oppure orderedByStart");
+  }
+  buildTypedPathProgram(options);
+  const finalStep = options.edgeTypeSequence.length;
+  const domain = candidateDomain(options.group ?? "");
+  const rules = [
+    domain.declaration.trimEnd(),
+    `candidate_node(V) :- ${domain.predicate}(V).`,
+    `temporal_typed_path_start(${options.startNode}).`,
+    `temporal_typed_path_goal(${options.goalNode}).`,
+    `temporal_typed_path_final_step(${finalStep}).`,
+    `temporal_typed_path_position(0..${finalStep}).`,
+    ...options.edgeTypeSequence.map((type, index) => `temporal_typed_path_required_type(${index + 1},${escapeAspString(type.trim())}).`),
+    ...options.edgeTypeSequence.map((_, index) => `temporal_typed_path_transition(${index + 1},${index},${index + 1}).`),
+    "1 { temporal_typed_path_depth(D) : temporal_typed_path_position(D) } 1.",
+    "temporal_typed_path_node(0,S) :- temporal_typed_path_start(S).",
+    "1 { temporal_typed_path_node(P,V) : candidate_node(V) } 1 :- temporal_typed_path_depth(D), temporal_typed_path_position(P), P > 0, P <= D.",
+    "temporal_typed_path_valid_edge(E) :- edge_record(E), edge_valid_from(E,From), edge_valid_to(E,To), From <= To.",
+    "temporal_typed_path_edge_candidate(Step,E) :- temporal_typed_path_transition(Step,Previous,Next), temporal_typed_path_depth(D), Step <= D, temporal_typed_path_node(Previous,U), temporal_typed_path_node(Next,V), candidate_node(U), candidate_node(V), temporal_typed_path_required_type(Step,T), edge_type(E,T), edge_source(E,U), edge_target(E,V), temporal_typed_path_valid_edge(E).",
+    ...(options.direction === "undirected"
+      ? ["temporal_typed_path_edge_candidate(Step,E) :- temporal_typed_path_transition(Step,Previous,Next), temporal_typed_path_depth(D), Step <= D, temporal_typed_path_node(Previous,U), temporal_typed_path_node(Next,V), candidate_node(U), candidate_node(V), temporal_typed_path_required_type(Step,T), edge_type(E,T), edge_source(E,V), edge_target(E,U), temporal_typed_path_valid_edge(E)."]
+      : []),
+    "1 { temporal_typed_path_edge(Step,E) : temporal_typed_path_edge_candidate(Step,E) } 1 :- temporal_typed_path_transition(Step,_,_), temporal_typed_path_depth(D), Step <= D.",
+    "temporal_typed_path_goal_reachable :- temporal_typed_path_depth(D), temporal_typed_path_final_step(D), temporal_typed_path_node(D,G), temporal_typed_path_goal(G).",
+    "#maximize { D@3 : temporal_typed_path_depth(D) }.",
+    "#maximize { 1@2 : temporal_typed_path_goal_reachable }.",
+    ...(options.temporalSemantics === "coValid" ? [
+      "temporal_typed_path_common_start(T) :- temporal_typed_path_depth(D), D > 0, T = #max { Start : temporal_typed_path_edge(Step,E), Step <= D, edge_valid_from(E,Start) }.",
+      "temporal_typed_path_common_end(T) :- temporal_typed_path_depth(D), D > 0, T = #min { End : temporal_typed_path_edge(Step,E), Step <= D, edge_valid_to(E,End) }.",
+      ":- temporal_typed_path_common_start(From), temporal_typed_path_common_end(To), From > To.",
+      "#minimize { T@1,T : temporal_typed_path_common_start(T); 0@1,no_common_time : temporal_typed_path_position(0) }.",
+      "#show temporal_typed_path_common_start/1."
+    ] : [
+      ...options.edgeTypeSequence.slice(0, -1).map((_, index) =>
+        `:- temporal_typed_path_edge(${index + 1},E1), temporal_typed_path_edge(${index + 2},E2), edge_valid_from(E1,T1), edge_valid_from(E2,T2), T1 ${options.strictTemporalOrder === true ? ">=" : ">"} T2.`
+      ),
+      "temporal_typed_path_ordered_start(Step,E,Start) :- temporal_typed_path_edge(Step,E), edge_valid_from(E,Start), edge_valid_to(E,End), Start <= End.",
+      "#show temporal_typed_path_ordered_start/3."
+    ]),
+    "#show temporal_typed_path_depth/1.",
+    "#show temporal_typed_path_node/2.",
+    "#show temporal_typed_path_edge/2.",
+    "#show temporal_typed_path_goal_reachable/0."
+  ];
+  return rules.filter(Boolean).join("\n\n");
+}
+
+export interface TypedPathCounterfactualEdgeRecord {
+  recordIndex: number;
+  sourceNode: number;
+  targetNode: number;
+  edgeType: string;
+}
+
+export interface TypedPathCounterfactualProposal {
+  totalCost: number;
+  path: TypedPathResult | TypedPathTemporalResult;
+  addedEdges: Array<Pick<KPlexCompletionCandidate,
+    "id" | "sourceNodeId" | "targetNodeId" | "edgeType" | "cost">>;
+}
+
+export interface TypedPathCompletionCandidate extends KPlexCompletionCandidate {
+  /** Encoded interval endpoints, present only for a temporal path query. */
+  validityFrom?: number;
+  validityTo?: number;
+}
+
+/** Finds a minimum-cost subset of declared edges that enables a fixed typed path. */
+export function buildTypedPathCompletionCounterfactualProgram(
+  options: TypedPathOptions,
+  candidatesInput: unknown,
+  temporalEncoding?: AspTemporalEncoding
+): { candidates: TypedPathCompletionCandidate[]; program: string } {
+  const temporalSemantics = options.temporalSemantics ?? "static";
+  if (temporalSemantics === "static") assertStaticTypedPathOptions(options);
+  const pathProgram = buildTypedPathProgram(options);
+  if (!Array.isArray(candidatesInput)) {
+    throw new TypeError("graphAnalysis.counterfactuals.edgeAdditions deve essere un array");
+  }
+  if (temporalSemantics === "static" && candidatesInput.some((candidate) => candidate !== null && typeof candidate === "object" &&
+    !Array.isArray(candidate) && (candidate as Record<string, unknown>).validity !== undefined)) {
+    throw new TypeError("Il controfattuale di cammino tipizzato non usa intervalli temporali; rimuovi validity dai candidati");
+  }
+  const validatedCandidates = validateKPlexCompletionCandidates(candidatesInput);
+  const candidates: TypedPathCompletionCandidate[] = validatedCandidates.map((candidate, index) => {
+    if (temporalSemantics === "static") return candidate;
+    const raw = candidatesInput[index] as Record<string, unknown>;
+    const validity = raw.validity;
+    if (validity === null || typeof validity !== "object" || Array.isArray(validity)) {
+      throw new TypeError(`edgeAdditions[${index}].validity deve dichiarare from e to per un cammino temporale`);
+    }
+    const interval = validity as Record<string, unknown>;
+    const from = parseGraphTemporalValue(interval.from);
+    const to = parseGraphTemporalValue(interval.to);
+    if (!from || !to || from.domain !== to.domain || from.value > to.value) {
+      throw new TypeError(`edgeAdditions[${index}].validity deve contenere estremi validi, ordinati e dello stesso dominio temporale`);
+    }
+    if (!temporalEncoding) {
+      throw new TypeError("La codifica temporale del grafo è obbligatoria per i candidati del cammino temporale");
+    }
+    if (temporalEncoding.domain !== from.domain) {
+      throw new TypeError(`edgeAdditions[${index}].validity deve usare lo stesso dominio temporale degli archi osservati`);
+    }
+    const validityFrom = temporalEncoding.encode(interval.from);
+    const validityTo = temporalEncoding.encode(interval.to);
+    if (validityFrom === null || validityTo === null || validityFrom > validityTo) {
+      throw new RangeError(`edgeAdditions[${index}].validity non è inclusa nella codifica temporale ASP del grafo`);
+    }
+    return { ...candidate, validityFrom, validityTo };
+  });
+  const candidateFacts = candidates.map((candidate) => temporalSemantics === "static"
+    ? `cf_typed_path_candidate(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode},${escapeAspString(candidate.edgeType)},${candidate.cost}).`
+    : `cf_typed_path_candidate(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode},${escapeAspString(candidate.edgeType)},${candidate.cost},${candidate.validityFrom},${candidate.validityTo}).`
+  );
+  const candidateRules = [
+    temporalSemantics === "static"
+      ? "{ cf_typed_path_add_edge(E) } :- cf_typed_path_candidate(E,_,_,_,_)."
+      : "{ cf_typed_path_add_edge(E) } :- cf_typed_path_candidate(E,_,_,_,_,_,_).",
+    "edge_record(E) :- cf_typed_path_add_edge(E).",
+    temporalSemantics === "static"
+      ? "edge_source(E,U) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,U,_,_,_)."
+      : "edge_source(E,U) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,U,_,_,_,_,_).",
+    temporalSemantics === "static"
+      ? "edge_target(E,V) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,V,_,_)."
+      : "edge_target(E,V) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,V,_,_,_,_).",
+    temporalSemantics === "static"
+      ? "edge_type(E,T) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,T,_)."
+      : "edge_type(E,T) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,T,_,_,_).",
+    ...(temporalSemantics === "static" ? [] : [
+      "edge_valid_from(E,From) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,_,_,From,_).",
+      "edge_valid_to(E,To) :- cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,_,_,_,To)."
+    ]),
+    temporalSemantics === "static"
+      ? "#minimize { Cost,E : cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,_,Cost) }."
+      : "#minimize { Cost,E : cf_typed_path_add_edge(E), cf_typed_path_candidate(E,_,_,_,Cost,_,_) }.",
+    "#show cf_typed_path_add_edge/1."
+  ];
+  return { candidates, program: [pathProgram, ...candidateFacts, ...candidateRules].join("\n\n") };
+}
+
+/** Diagnoses a temporal typed-path completion over the supergraph containing every declared candidate. */
+export function buildTypedPathTemporalCompletionWhyNotProgram(
+  options: TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+  candidatesInput: unknown,
+  temporalEncoding: AspTemporalEncoding
+): { candidates: TypedPathCompletionCandidate[]; program: string } {
+  if (options.temporalSemantics !== "coValid" && options.temporalSemantics !== "orderedByStart") {
+    throw new TypeError("Il why-not temporale di completion richiede coValid oppure orderedByStart");
+  }
+  const compiled = buildTypedPathCompletionCounterfactualProgram(options, candidatesInput, temporalEncoding);
+  const candidateFacts = compiled.candidates.flatMap((candidate) => {
+    if (!Number.isSafeInteger(candidate.validityFrom) || !Number.isSafeInteger(candidate.validityTo) ||
+      candidate.validityFrom! > candidate.validityTo!) {
+      throw new TypeError(`L'arco candidato '${candidate.id}' non ha un intervallo temporale ASP valido`);
+    }
+    return [
+      `cf_typed_path_temporal_why_not_candidate(${candidate.recordIndex}).`,
+      `edge_record(${candidate.recordIndex}).`,
+      `edge_source(${candidate.recordIndex},${candidate.sourceNode}).`,
+      `edge_target(${candidate.recordIndex},${candidate.targetNode}).`,
+      `edge_type(${candidate.recordIndex},${escapeAspString(candidate.edgeType)}).`,
+      `edge_valid_from(${candidate.recordIndex},${candidate.validityFrom}).`,
+      `edge_valid_to(${candidate.recordIndex},${candidate.validityTo}).`
+    ];
+  });
+  const program = [
+    buildTypedPathTemporalNoRouteProgram(options),
+    ...candidateFacts,
+    "#show cf_typed_path_temporal_why_not_candidate/1."
+  ].filter(Boolean).join("\n\n");
+  return { candidates: compiled.candidates, program };
+}
+
+/** Independently verifies optimal typed-path witnesses and maps selected candidates. */
+export function parseTypedPathCompletionCounterfactuals(
+  witnesses: unknown,
+  options: TypedPathOptions,
+  candidates: TypedPathCompletionCandidate[],
+  observedEdges: TypedPathCounterfactualEdgeRecord[],
+  reverseNodeIndex: Record<number, string>,
+  reverseEdgeIndex: Record<number, string>,
+  temporalContext?: {
+    edgeRecords: TypedPathTemporalEdgeRecord[];
+    decodeTemporalValue: (value: number) => number | undefined;
+  }
+): TypedPathCounterfactualProposal[] {
+  const temporalSemantics = options.temporalSemantics ?? "static";
+  if (temporalSemantics === "static") {
+    try {
+      assertStaticTypedPathOptions(options);
+    } catch {
+      return [];
+    }
+  } else if (!temporalContext || (temporalSemantics !== "coValid" && temporalSemantics !== "orderedByStart")) return [];
+  buildTypedPathProgram(options);
+  const byRecord = new Map(candidates.map((candidate) => [candidate.recordIndex, candidate]));
+  if (byRecord.size !== candidates.length) return [];
+  const edgeByRecord = new Map<number, TypedPathCounterfactualEdgeRecord>(
+    observedEdges.map((edge) => [edge.recordIndex, edge])
+  );
+  if (edgeByRecord.size !== observedEdges.length || observedEdges.some((edge) =>
+    !Number.isSafeInteger(edge.recordIndex) || edge.recordIndex < 1 ||
+    !Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+    !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1 ||
+    typeof edge.edgeType !== "string" || edge.edgeType.trim() === "")) return [];
+  for (const candidate of candidates) {
+    if (edgeByRecord.has(candidate.recordIndex)) return [];
+    edgeByRecord.set(candidate.recordIndex, {
+      recordIndex: candidate.recordIndex,
+      sourceNode: candidate.sourceNode,
+      targetNode: candidate.targetNode,
+      edgeType: candidate.edgeType
+    });
+  }
+  const edgeIdentityByRecord: Record<number, string> = { ...reverseEdgeIndex };
+  for (const candidate of candidates) edgeIdentityByRecord[candidate.recordIndex] = `candidate:${candidate.id}`;
+  const results: TypedPathCounterfactualProposal[] = [];
+  const seen = new Set<string>();
+  let bestCost: number | undefined;
+
+  for (const witness of Array.isArray(witnesses) ? witnesses : []) {
+    if (witness === null || typeof witness !== "object") continue;
+    const record = witness as Record<string, unknown>;
+    const atoms = Array.isArray(record.Value) ? record.Value : [];
+    const selectedIndexes = atoms.flatMap((atom) => {
+      if (typeof atom !== "string") return [];
+      const match = /^cf_typed_path_add_edge\((\d+)\)$/.exec(atom);
+      return match ? [Number(match[1])] : [];
+    });
+    if (new Set(selectedIndexes).size !== selectedIndexes.length || selectedIndexes.some((index) => !byRecord.has(index))) continue;
+    const added = selectedIndexes.map((index) => byRecord.get(index)!);
+    const totalCost = added.reduce((sum, candidate) => sum + candidate.cost, 0);
+    if (!Number.isSafeInteger(totalCost)) continue;
+    const costs = record.Costs;
+    if (candidates.length > 0 && (!Array.isArray(costs) || costs.length === 0 || typeof costs[0] !== "number")) continue;
+    if (Array.isArray(costs) && costs.length > 0 && costs[0] !== totalCost) continue;
+
+    let validPath = true;
+    let path: TypedPathResult | TypedPathTemporalResult | null;
+    if (temporalSemantics === "static") {
+      path = parseWitnessTypedPath([record], reverseNodeIndex, edgeIdentityByRecord, options.edgeTypeSequence.length);
+    } else {
+      const selectedCandidates = added.map((candidate) => candidate.recordIndex);
+      if (new Set(selectedCandidates).size !== selectedCandidates.length) continue;
+      const temporalRecords = temporalContext!.edgeRecords.filter((edge) => !byRecord.has(edge.recordIndex));
+      for (const candidate of added) {
+        if (!Number.isSafeInteger(candidate.validityFrom) || !Number.isSafeInteger(candidate.validityTo) ||
+          candidate.validityFrom! > candidate.validityTo!) {
+          validPath = false;
+          break;
+        }
+        temporalRecords.push({
+          recordIndex: candidate.recordIndex,
+          sourceNode: candidate.sourceNode,
+          targetNode: candidate.targetNode,
+          edgeType: candidate.edgeType,
+          validityFrom: candidate.validityFrom!,
+          validityTo: candidate.validityTo!
+        });
+        edgeIdentityByRecord[candidate.recordIndex] = `candidate:${candidate.id}`;
+      }
+      if (!validPath) continue;
+      path = parseWitnessTemporalTypedPath(
+        [record], reverseNodeIndex, edgeIdentityByRecord, temporalRecords,
+        options as TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+        temporalContext!.decodeTemporalValue
+      );
+    }
+    if (!path || path.nodeIds[0] !== reverseNodeIndex[options.startNode] ||
+      path.nodeIds[path.nodeIds.length - 1] !== reverseNodeIndex[options.goalNode] ||
+      new Set(path.nodeIds).size !== path.nodeIds.length) continue;
+    const usedCandidates = new Set<number>();
+    const nodeIndexById = new Map(Object.entries(reverseNodeIndex).map(([index, id]) => [id, Number(index)]));
+    for (let step = 0; step < options.edgeTypeSequence.length; step += 1) {
+      const sourceNode = nodeIndexById.get(path.nodeIds[step]);
+      const targetNode = nodeIndexById.get(path.nodeIds[step + 1]);
+      if (sourceNode === undefined || targetNode === undefined) { validPath = false; break; }
+      const expectedType = options.edgeTypeSequence[step].trim();
+      const usedIdentities = new Set(path.edgeIdsByStep[step]);
+      const matchingRecords = [...edgeByRecord.values()].filter((edge) => {
+        const forward = edge.sourceNode === Number(sourceNode) && edge.targetNode === Number(targetNode);
+        const reverse = options.direction === "undirected" &&
+          edge.sourceNode === Number(targetNode) && edge.targetNode === Number(sourceNode);
+        const identity = edgeIdentityByRecord[edge.recordIndex];
+        if ((forward || reverse) && edge.edgeType === expectedType && identity && usedIdentities.has(identity)) {
+          if (byRecord.has(edge.recordIndex)) usedCandidates.add(edge.recordIndex);
+          return true;
+        }
+        return false;
+      });
+      if (matchingRecords.length === 0 || [...usedIdentities].some((identity) =>
+        !matchingRecords.some((edge) => edgeIdentityByRecord[edge.recordIndex] === identity))) {
+        validPath = false;
+        break;
+      }
+    }
+    if (!validPath || usedCandidates.size !== added.length || added.some((candidate) => !usedCandidates.has(candidate.recordIndex))) continue;
+    const key = [...selectedIndexes].sort((left, right) => left - right).join(",");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (bestCost === undefined || totalCost < bestCost) bestCost = totalCost;
+    if (totalCost > bestCost) continue;
+    results.push({
+      totalCost,
+      path,
+      addedEdges: added.map(({ id, sourceNodeId, targetNodeId, edgeType, cost }) => ({
+        id, sourceNodeId, targetNodeId, edgeType, cost
+      }))
+    });
+  }
+  return results.filter((proposal) => proposal.totalCost === bestCost).sort((left, right) =>
+    left.addedEdges.map((edge) => edge.id).join("\u0000").localeCompare(right.addedEdges.map((edge) => edge.id).join("\u0000")));
+}
+
 export interface TypedPathResult {
   nodeIds: string[];
   edgeIdsByStep: string[][];
+}
+
+export interface TypedPathTemporalEdgeRecord {
+  recordIndex: number;
+  sourceNode: number;
+  targetNode: number;
+  edgeType: string;
+  validityFrom: number;
+  validityTo: number;
+}
+
+export interface TypedPathTemporalResult extends TypedPathResult {
+  temporalSemantics: TypedPathTemporalSemantics;
+  commonTimeValue?: number;
+  startTimeValuesByStep?: number[];
 }
 
 export interface TypedPathNoRouteCertificate {
@@ -2377,6 +3849,32 @@ export interface TypedPathNoRouteCertificate {
   goalReachableAsWalk: boolean;
   firstEmptyStep?: number;
 }
+
+export interface TypedPathTemporalNoRouteCertificate {
+  edgeTypeSequence: string[];
+  temporalSemantics: TypedPathTemporalSemantics;
+  walk: TypedPathResult;
+  maximumPrefixLength: number;
+  goalReachableAsWalk: boolean;
+  firstBlockedStep?: number;
+  repeatedNodeIds: string[];
+  commonTimeValue?: number;
+  startTimeValuesByStep?: number[];
+}
+
+export interface TypedPathStaticCounterfactualWhyNot extends TypedPathNoRouteCertificate {
+  /** Explicit candidates included in the maximal hypothetical supergraph. */
+  candidateEdgeIds: string[];
+}
+
+export interface TypedPathTemporalCounterfactualWhyNot extends TypedPathTemporalNoRouteCertificate {
+  /** Explicit temporal candidates included in the maximal hypothetical supergraph. */
+  candidateEdgeIds: string[];
+}
+
+export type TypedPathCounterfactualWhyNot =
+  | TypedPathStaticCounterfactualWhyNot
+  | TypedPathTemporalCounterfactualWhyNot;
 
 /** Reads one typed-path witness and maps nodes and supporting edge records to stable IDs. */
 export function parseWitnessTypedPath(
@@ -2418,6 +3916,167 @@ export function parseWitnessTypedPath(
   );
   if (edgeIdsByStep.some((edgeIds) => edgeIds.length === 0)) return null;
   return { nodeIds: nodeIds as string[], edgeIdsByStep };
+}
+
+/** Independently validates a temporal typed-path witness against every mapped edge record. */
+export function parseWitnessTemporalTypedPath(
+  witnesses: unknown,
+  reverseNodeIndex: Record<number, string>,
+  reverseEdgeIndex: Record<number, string>,
+  edgeRecords: TypedPathTemporalEdgeRecord[],
+  options: TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+  decodeTemporalValue: (value: number) => number | undefined
+): TypedPathTemporalResult | null {
+  try {
+    buildTypedPathProgram(options);
+  } catch {
+    return null;
+  }
+  const witness = Array.isArray(witnesses) ? witnesses[0] : undefined;
+  const value = witness !== null && typeof witness === "object"
+    ? (witness as Record<string, unknown>).Value
+    : undefined;
+  if (!Array.isArray(value) || !value.every((atom) => typeof atom === "string")) return null;
+  const atoms = value as string[];
+  const basePath = parseWitnessTypedPath([witness], reverseNodeIndex, reverseEdgeIndex, options.edgeTypeSequence.length);
+  if (!basePath || new Set(basePath.nodeIds).size !== basePath.nodeIds.length) return null;
+  if (basePath.nodeIds[0] !== reverseNodeIndex[options.startNode] ||
+    basePath.nodeIds.at(-1) !== reverseNodeIndex[options.goalNode]) return null;
+  const nodeAtoms: Array<[number, number]> = [];
+  for (const atom of atoms) {
+    if (!atom.startsWith("typed_path_node(")) continue;
+    const match = /^typed_path_node\((\d+),(\d+)\)$/.exec(atom);
+    if (!match) return null;
+    nodeAtoms.push([Number(match[1]), Number(match[2])]);
+  }
+  if (nodeAtoms.length !== options.edgeTypeSequence.length + 1 ||
+    new Set(nodeAtoms.map(([position]) => position)).size !== nodeAtoms.length ||
+    nodeAtoms.some(([position, node]) => position < 0 || position > options.edgeTypeSequence.length ||
+      reverseNodeIndex[node] !== basePath.nodeIds[position])) return null;
+
+  const nodeIndexById = new Map(Object.entries(reverseNodeIndex).map(([index, id]) => [id, Number(index)]));
+  const nodeIndexes = basePath.nodeIds.map((id) => nodeIndexById.get(id));
+  if (nodeIndexes.some((index) => index === undefined)) return null;
+
+  const recordByIndex = new Map<number, TypedPathTemporalEdgeRecord>();
+  const identityByRecord = new Map<number, string>();
+  for (const edge of edgeRecords) {
+    const identity = reverseEdgeIndex[edge.recordIndex];
+    if (!Number.isSafeInteger(edge.recordIndex) || edge.recordIndex < 1 || recordByIndex.has(edge.recordIndex) ||
+      !Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 || !reverseNodeIndex[edge.sourceNode] ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1 || !reverseNodeIndex[edge.targetNode] ||
+      typeof edge.edgeType !== "string" || !edge.edgeType.trim() ||
+      !Number.isSafeInteger(edge.validityFrom) || !Number.isSafeInteger(edge.validityTo) ||
+      edge.validityFrom > edge.validityTo || typeof identity !== "string" || identity.length === 0) return null;
+    recordByIndex.set(edge.recordIndex, edge);
+    identityByRecord.set(edge.recordIndex, identity);
+  }
+  if (new Set(identityByRecord.values()).size !== identityByRecord.size) return null;
+
+  const routeRecordsByStep: number[][] = [];
+  for (let step = 0; step < options.edgeTypeSequence.length; step += 1) {
+    const source = nodeIndexes[step]!;
+    const target = nodeIndexes[step + 1]!;
+    const expectedType = options.edgeTypeSequence[step].trim();
+    routeRecordsByStep.push([...recordByIndex.values()].filter((edge) => {
+      const endpointsMatch = edge.sourceNode === source && edge.targetNode === target ||
+        options.direction === "undirected" && edge.sourceNode === target && edge.targetNode === source;
+      return endpointsMatch && edge.edgeType === expectedType;
+    }).map((edge) => edge.recordIndex).sort((left, right) => left - right));
+    if (routeRecordsByStep[step].length === 0) return null;
+  }
+
+  const parsePairAtoms = (prefix: string, expression: RegExp): Array<[number, number]> | null => {
+    const found: Array<[number, number]> = [];
+    for (const atom of atoms) {
+      if (!atom.startsWith(prefix)) continue;
+      const match = expression.exec(atom);
+      if (!match) return null;
+      found.push([Number(match[1]), Number(match[2])]);
+    }
+    return found.length === new Set(found.map(([step, record]) => `${step}:${record}`)).size ? found : null;
+  };
+  const routeAtoms = parsePairAtoms("typed_path_edge(", /^typed_path_edge\((\d+),(\d+)\)$/);
+  if (!routeAtoms) return null;
+  const expectedRouteAtoms = routeRecordsByStep.flatMap((records, step) => records.map((record) => [step + 1, record] as [number, number]));
+  if (routeAtoms.length !== expectedRouteAtoms.length || routeAtoms.some(([step, record]) =>
+    !expectedRouteAtoms.some(([expectedStep, expectedRecord]) => step === expectedStep && record === expectedRecord))) return null;
+
+  const supportAtoms = parsePairAtoms("typed_path_edge_support(", /^typed_path_edge_support\((\d+),(\d+)\)$/);
+  if (!supportAtoms || supportAtoms.some(([step, record]) =>
+    !Number.isSafeInteger(step) || step < 1 || step > options.edgeTypeSequence.length ||
+    !routeRecordsByStep[step - 1].includes(record))) return null;
+
+  if (options.temporalSemantics === "coValid") {
+    if (atoms.some((atom) => atom.startsWith("typed_path_ordered_support("))) return null;
+    const timeAtoms = atoms.flatMap((atom) => {
+      if (!atom.startsWith("typed_path_time(")) return [];
+      const match = /^typed_path_time\((-?\d+)\)$/.exec(atom);
+      return match ? [Number(match[1])] : [Number.NaN];
+    });
+    if (timeAtoms.length !== 1 || !Number.isSafeInteger(timeAtoms[0])) return null;
+    const candidateTimes = [...new Set(routeRecordsByStep.flatMap((records) => records.flatMap((record) => {
+      const edge = recordByIndex.get(record)!;
+      return [edge.validityFrom, edge.validityTo];
+    })))].sort((left, right) => left - right);
+    const earliestCommonTime = candidateTimes.find((time) => routeRecordsByStep.every((records) =>
+      records.some((record) => {
+        const edge = recordByIndex.get(record)!;
+        return edge.validityFrom <= time && time <= edge.validityTo;
+      })
+    ));
+    if (earliestCommonTime === undefined || timeAtoms[0] !== earliestCommonTime) return null;
+    const expectedSupports = routeRecordsByStep.flatMap((records, step) => records
+      .filter((record) => {
+        const edge = recordByIndex.get(record)!;
+        return edge.validityFrom <= earliestCommonTime && earliestCommonTime <= edge.validityTo;
+      })
+      .map((record) => [step + 1, record] as [number, number]));
+    if (supportAtoms.length !== expectedSupports.length || supportAtoms.some(([step, record]) =>
+      !expectedSupports.some(([expectedStep, expectedRecord]) => step === expectedStep && record === expectedRecord))) return null;
+    const commonTimeValue = decodeTemporalValue(earliestCommonTime);
+    if (!Number.isSafeInteger(commonTimeValue)) return null;
+    return {
+      nodeIds: basePath.nodeIds,
+      edgeIdsByStep: expectedSupports.reduce<string[][]>((steps, [step, record]) => {
+        (steps[step - 1] ??= []).push(identityByRecord.get(record)!);
+        return steps;
+      }, Array.from({ length: options.edgeTypeSequence.length }, () => [])),
+      temporalSemantics: "coValid",
+      commonTimeValue
+    };
+  }
+
+  if (atoms.some((atom) => atom.startsWith("typed_path_time("))) return null;
+  const orderedSupports: Array<{ step: number; record: number; start: number }> = [];
+  for (const atom of atoms) {
+    if (!atom.startsWith("typed_path_ordered_support(")) continue;
+    const match = /^typed_path_ordered_support\((\d+),(\d+),(-?\d+)\)$/.exec(atom);
+    if (!match) return null;
+    orderedSupports.push({ step: Number(match[1]), record: Number(match[2]), start: Number(match[3]) });
+  }
+  if (orderedSupports.length !== options.edgeTypeSequence.length ||
+    new Set(orderedSupports.map((item) => item.step)).size !== options.edgeTypeSequence.length) return null;
+  orderedSupports.sort((left, right) => left.step - right.step);
+  for (let step = 0; step < orderedSupports.length; step += 1) {
+    const selected = orderedSupports[step];
+    const edge = recordByIndex.get(selected.record);
+    if (selected.step !== step + 1 || !edge || !routeRecordsByStep[step].includes(selected.record) ||
+      selected.start !== edge.validityFrom || edge.validityFrom > edge.validityTo ||
+      (step > 0 && (options.strictTemporalOrder === true
+        ? orderedSupports[step - 1].start >= selected.start
+        : orderedSupports[step - 1].start > selected.start))) return null;
+  }
+  if (supportAtoms.length !== orderedSupports.length || supportAtoms.some(([step, record]) =>
+    !orderedSupports.some((item) => item.step === step && item.record === record))) return null;
+  const startTimeValuesByStep = orderedSupports.map((item) => decodeTemporalValue(item.start));
+  if (startTimeValuesByStep.some((time) => !Number.isSafeInteger(time))) return null;
+  return {
+    nodeIds: basePath.nodeIds,
+    edgeIdsByStep: orderedSupports.map((item) => [identityByRecord.get(item.record)!]),
+    temporalSemantics: "orderedByStart",
+    startTimeValuesByStep: startTimeValuesByStep as number[]
+  };
 }
 
 /** Parses each exact-prefix reachability layer, including empty layers, back to node IDs. */
@@ -2467,6 +4126,486 @@ export function parseTypedPathNoRouteCertificate(
     reachableByStep,
     goalReachableAsWalk,
     ...(firstEmptyStep === undefined ? {} : { firstEmptyStep })
+  };
+}
+
+/** Verifies the longest temporal walk and its blocker against independent interval reachability. */
+export function parseTypedPathTemporalNoRouteCertificate(
+  witnesses: unknown,
+  options: TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+  edgeRecords: TypedPathTemporalEdgeRecord[],
+  candidateNodeIdsInput: readonly string[],
+  reverseNodeIndex: Record<number, string>,
+  reverseEdgeIndex: Record<number, string>,
+  decodeTemporalValue: (value: number) => number | undefined
+): TypedPathTemporalNoRouteCertificate | null {
+  try {
+    buildTypedPathTemporalNoRouteProgram(options);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(edgeRecords) || !Array.isArray(candidateNodeIdsInput)) return null;
+  const witness = Array.isArray(witnesses) ? witnesses.at(-1) : undefined;
+  const value = witness !== null && typeof witness === "object"
+    ? (witness as Record<string, unknown>).Value
+    : undefined;
+  if (!Array.isArray(value) || !value.every((atom) => typeof atom === "string")) return null;
+  const atoms = value as string[];
+  const parseAtoms = (prefix: string, expression: RegExp): number[][] | null => {
+    const parsed: number[][] = [];
+    for (const atom of atoms) {
+      if (!atom.startsWith(prefix)) continue;
+      const match = expression.exec(atom);
+      if (!match) return null;
+      parsed.push(match.slice(1).map(Number));
+    }
+    return parsed;
+  };
+  const depthAtoms = parseAtoms("temporal_typed_path_depth(", /^temporal_typed_path_depth\((\d+)\)$/);
+  const nodeAtoms = parseAtoms("temporal_typed_path_node(", /^temporal_typed_path_node\((\d+),(\d+)\)$/);
+  const edgeAtoms = parseAtoms("temporal_typed_path_edge(", /^temporal_typed_path_edge\((\d+),(\d+)\)$/);
+  const commonStartAtoms = parseAtoms("temporal_typed_path_common_start(", /^temporal_typed_path_common_start\((-?\d+)\)$/);
+  const orderedStartAtoms = parseAtoms("temporal_typed_path_ordered_start(", /^temporal_typed_path_ordered_start\((\d+),(\d+),(-?\d+)\)$/);
+  if (!depthAtoms || !nodeAtoms || !edgeAtoms || !commonStartAtoms || !orderedStartAtoms ||
+    depthAtoms.length !== 1 || !Number.isSafeInteger(depthAtoms[0][0])) return null;
+  const maximumPrefixLength = depthAtoms[0][0];
+  const sequence = options.edgeTypeSequence.map((type) => type.trim());
+  if (maximumPrefixLength < 0 || maximumPrefixLength > sequence.length) return null;
+
+  const nodeByStep = new Map<number, number>();
+  for (const [step, node] of nodeAtoms) {
+    if (!Number.isSafeInteger(step) || step < 0 || step > maximumPrefixLength ||
+      !Number.isSafeInteger(node) || node < 1 || nodeByStep.has(step) || !reverseNodeIndex[node]) return null;
+    nodeByStep.set(step, node);
+  }
+  if (nodeByStep.size !== maximumPrefixLength + 1 ||
+    Array.from({ length: maximumPrefixLength + 1 }, (_, step) => step).some((step) => !nodeByStep.has(step)) ||
+    nodeByStep.get(0) !== options.startNode) return null;
+
+  const candidateNodeIds = new Set(candidateNodeIdsInput);
+  const knownNodeIds = new Set(Object.values(reverseNodeIndex));
+  if (candidateNodeIds.size !== candidateNodeIdsInput.length ||
+    candidateNodeIdsInput.some((nodeId) => typeof nodeId !== "string" || !knownNodeIds.has(nodeId)) ||
+    !candidateNodeIds.has(reverseNodeIndex[options.startNode])) return null;
+  const nodeIndexById = new Map(Object.entries(reverseNodeIndex).map(([index, nodeId]) => [nodeId, Number(index)]));
+  const edgeByRecord = new Map<number, TypedPathTemporalEdgeRecord>();
+  const identityByRecord = new Map<number, string>();
+  for (const edge of edgeRecords) {
+    const identity = reverseEdgeIndex[edge.recordIndex];
+    if (!Number.isSafeInteger(edge.recordIndex) || edge.recordIndex < 1 || edgeByRecord.has(edge.recordIndex) ||
+      !Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 || !reverseNodeIndex[edge.sourceNode] ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1 || !reverseNodeIndex[edge.targetNode] ||
+      typeof edge.edgeType !== "string" || !edge.edgeType.trim() ||
+      !Number.isSafeInteger(edge.validityFrom) || !Number.isSafeInteger(edge.validityTo) ||
+      edge.validityFrom > edge.validityTo || typeof identity !== "string" || identity.length === 0) return null;
+    edgeByRecord.set(edge.recordIndex, edge);
+    identityByRecord.set(edge.recordIndex, identity);
+  }
+  if (new Set(identityByRecord.values()).size !== identityByRecord.size) return null;
+
+  const selectedEdgesByStep = new Map<number, number>();
+  for (const [step, edge] of edgeAtoms) {
+    if (!Number.isSafeInteger(step) || step < 1 || step > maximumPrefixLength ||
+      !Number.isSafeInteger(edge) || !edgeByRecord.has(edge) || selectedEdgesByStep.has(step)) return null;
+    selectedEdgesByStep.set(step, edge);
+  }
+  if (selectedEdgesByStep.size !== maximumPrefixLength ||
+    Array.from({ length: maximumPrefixLength }, (_, index) => index + 1).some((step) => !selectedEdgesByStep.has(step))) return null;
+
+  const recordForStep = new Map<number, TypedPathTemporalEdgeRecord>();
+  const nodeIds = Array.from({ length: maximumPrefixLength + 1 }, (_, step) => reverseNodeIndex[nodeByStep.get(step)!]);
+  const edgeIdsByStep: string[][] = [];
+  const routeStarts: number[] = [];
+  for (let step = 1; step <= maximumPrefixLength; step += 1) {
+    const edge = edgeByRecord.get(selectedEdgesByStep.get(step)!)!;
+    const sourceNode = nodeByStep.get(step - 1)!;
+    const targetNode = nodeByStep.get(step)!;
+    const endpointsMatch = edge.sourceNode === sourceNode && edge.targetNode === targetNode ||
+      options.direction === "undirected" && edge.sourceNode === targetNode && edge.targetNode === sourceNode;
+    if (!endpointsMatch || edge.edgeType.trim() !== sequence[step - 1] ||
+      !candidateNodeIds.has(reverseNodeIndex[targetNode])) return null;
+    recordForStep.set(step, edge);
+    edgeIdsByStep.push([identityByRecord.get(edge.recordIndex)!]);
+    routeStarts.push(edge.validityFrom);
+  }
+
+  const goalAtoms = atoms.filter((atom) => atom === "temporal_typed_path_goal_reachable").length;
+  if (goalAtoms > 1) return null;
+  const goalReachableAsWalkFromASP = goalAtoms === 1;
+  let maximumReachablePrefix = 0;
+  let goalReachableAsWalk = false;
+  let expectedCommonStart: number | undefined;
+  let expectedOrderedLayers: Array<Map<number, number>> = [];
+
+  const adjacencyByTypeAndSource = new Map<string, Map<number, TypedPathTemporalEdgeRecord[]>>();
+  const addArc = (type: string, source: number, edge: TypedPathTemporalEdgeRecord) => {
+    const bySource = adjacencyByTypeAndSource.get(type) ?? new Map<number, TypedPathTemporalEdgeRecord[]>();
+    const outgoing = bySource.get(source) ?? [];
+    outgoing.push(edge);
+    bySource.set(source, outgoing);
+    adjacencyByTypeAndSource.set(type, bySource);
+  };
+  for (const edge of edgeByRecord.values()) {
+    if (!candidateNodeIds.has(reverseNodeIndex[edge.targetNode])) continue;
+    if (candidateNodeIds.has(reverseNodeIndex[edge.sourceNode])) addArc(edge.edgeType.trim(), edge.sourceNode, edge);
+    if (options.direction === "undirected" && edge.sourceNode !== edge.targetNode &&
+      candidateNodeIds.has(reverseNodeIndex[edge.targetNode]) && candidateNodeIds.has(reverseNodeIndex[edge.sourceNode])) {
+      addArc(edge.edgeType.trim(), edge.targetNode, edge);
+    }
+  }
+
+  if (options.temporalSemantics === "coValid") {
+    if (commonStartAtoms.length !== (maximumPrefixLength > 0 ? 1 : 0) || orderedStartAtoms.length !== 0) return null;
+    let expansions = 0;
+    const maximumExpansions = 1_000_000;
+    const addNondominatedInterval = (frontier: Array<{ from: number; to: number }>, candidate: { from: number; to: number }) => {
+      if (frontier.some((item) => item.from <= candidate.from && item.to >= candidate.to)) return;
+      for (let index = frontier.length - 1; index >= 0; index -= 1) {
+        const item = frontier[index];
+        if (candidate.from <= item.from && candidate.to >= item.to) frontier.splice(index, 1);
+      }
+      frontier.push(candidate);
+    };
+    let current = new Map<number, Array<{ from: number; to: number }>>([
+      [options.startNode, [{ from: Number.NEGATIVE_INFINITY, to: Number.POSITIVE_INFINITY }]]
+    ]);
+    const layers: Array<Map<number, Array<{ from: number; to: number }>>> = [current];
+    for (let step = 1; step <= sequence.length; step += 1) {
+      const next = new Map<number, Array<{ from: number; to: number }>>();
+      const bySource = adjacencyByTypeAndSource.get(sequence[step - 1]);
+      for (const [source, intervals] of current) {
+        for (const edge of bySource?.get(source) ?? []) {
+          for (const interval of intervals) {
+            expansions += 1;
+            if (expansions > maximumExpansions) return null;
+            const from = Math.max(interval.from, edge.validityFrom);
+            const to = Math.min(interval.to, edge.validityTo);
+            if (from > to) continue;
+            const frontier = next.get(edge.targetNode) ?? [];
+            addNondominatedInterval(frontier, { from, to });
+            next.set(edge.targetNode, frontier);
+          }
+        }
+      }
+      if (next.size === 0) break;
+      current = next;
+      layers.push(current);
+    }
+    maximumReachablePrefix = layers.length - 1;
+    goalReachableAsWalk = maximumReachablePrefix === sequence.length && layers.at(-1)!.has(options.goalNode);
+    const optimalLayer = goalReachableAsWalk ? layers.at(-1)! : layers[maximumReachablePrefix];
+    const optimalNodes = goalReachableAsWalk ? [options.goalNode] : [...optimalLayer.keys()];
+    expectedCommonStart = Math.min(...optimalNodes.flatMap((node) =>
+      (optimalLayer.get(node) ?? []).map((interval) => interval.from).filter(Number.isFinite)
+    ));
+    if (!Number.isSafeInteger(expectedCommonStart)) expectedCommonStart = undefined;
+    if (maximumPrefixLength > 0) {
+      const commonStart = commonStartAtoms[0]?.[0];
+      const commonEnd = Math.min(...[...recordForStep.values()].map((edge) => edge.validityTo));
+      if (!Number.isSafeInteger(commonStart) || !Number.isSafeInteger(commonEnd) || commonStart > commonEnd ||
+        commonStart !== Math.max(...routeStarts) || commonStart !== expectedCommonStart) return null;
+    }
+  } else {
+    if (commonStartAtoms.length !== 0 || orderedStartAtoms.length !== maximumPrefixLength) return null;
+    let current = new Map<number, number>([[options.startNode, Number.NEGATIVE_INFINITY]]);
+    expectedOrderedLayers = [current];
+    for (let step = 1; step <= sequence.length; step += 1) {
+      const next = new Map<number, number>();
+      const bySource = adjacencyByTypeAndSource.get(sequence[step - 1]);
+      for (const [source, earliestPreviousStart] of current) {
+        for (const edge of bySource?.get(source) ?? []) {
+          const start = edge.validityFrom;
+          if (step > 1 && (options.strictTemporalOrder === true
+            ? earliestPreviousStart >= start
+            : earliestPreviousStart > start)) continue;
+          const previous = next.get(edge.targetNode);
+          if (previous === undefined || start < previous) next.set(edge.targetNode, start);
+        }
+      }
+      if (next.size === 0) break;
+      current = next;
+      expectedOrderedLayers.push(current);
+    }
+    maximumReachablePrefix = expectedOrderedLayers.length - 1;
+    goalReachableAsWalk = maximumReachablePrefix === sequence.length && expectedOrderedLayers.at(-1)!.has(options.goalNode);
+    if (maximumPrefixLength > 0) {
+      const starts = new Map(orderedStartAtoms.map(([step, edge, start]) => [`${step}:${edge}`, start]));
+      if (starts.size !== maximumPrefixLength) return null;
+      for (let step = 1; step <= maximumPrefixLength; step += 1) {
+        const edgeIndex = selectedEdgesByStep.get(step)!;
+        const edge = edgeByRecord.get(edgeIndex)!;
+        if (starts.get(`${step}:${edgeIndex}`) !== edge.validityFrom ||
+          !expectedOrderedLayers[step].has(edge.targetNode)) return null;
+        if (step > 1 && (options.strictTemporalOrder === true
+          ? routeStarts[step - 2] >= edge.validityFrom
+          : routeStarts[step - 2] > edge.validityFrom)) return null;
+      }
+    }
+  }
+
+  if (maximumPrefixLength !== maximumReachablePrefix || goalReachableAsWalkFromASP !== goalReachableAsWalk ||
+    goalReachableAsWalk && (nodeIds.at(-1) !== reverseNodeIndex[options.goalNode] ||
+      new Set(nodeIds).size === nodeIds.length)) return null;
+  if (options.temporalSemantics === "coValid" && maximumPrefixLength === 0 && commonStartAtoms.length !== 0) return null;
+  const repeatedNodeIds = [...new Set(nodeIds.filter((nodeId, index) => nodeIds.indexOf(nodeId) !== index))].sort();
+  if (nodeIds.some((nodeId, step) => {
+    if (step === 0) return false;
+    if (options.temporalSemantics === "coValid") {
+      const commonStart = commonStartAtoms[0]?.[0];
+      const commonEnd = Math.min(...[...recordForStep.values()].map((edge) => edge.validityTo));
+      const edge = recordForStep.get(step)!;
+      return !Number.isSafeInteger(commonStart) || commonStart < edge.validityFrom || commonStart > edge.validityTo ||
+        commonStart > commonEnd;
+    }
+    return false;
+  })) return null;
+
+  const startTimeValuesByStep = options.temporalSemantics === "orderedByStart"
+    ? routeStarts.map((start) => decodeTemporalValue(start))
+    : undefined;
+  const commonTimeValue = options.temporalSemantics === "coValid" && maximumPrefixLength > 0
+    ? decodeTemporalValue(commonStartAtoms[0][0])
+    : undefined;
+  if (startTimeValuesByStep?.some((time) => !Number.isSafeInteger(time)) ||
+    commonTimeValue !== undefined && !Number.isSafeInteger(commonTimeValue)) return null;
+  const firstBlockedStep = maximumPrefixLength < sequence.length ? maximumPrefixLength + 1 : undefined;
+  return {
+    edgeTypeSequence: [...sequence],
+    temporalSemantics: options.temporalSemantics,
+    walk: { nodeIds, edgeIdsByStep },
+    maximumPrefixLength,
+    goalReachableAsWalk,
+    ...(firstBlockedStep === undefined ? {} : { firstBlockedStep }),
+    repeatedNodeIds,
+    ...(commonTimeValue === undefined ? {} : { commonTimeValue }),
+    ...(startTimeValuesByStep === undefined ? {} : { startTimeValuesByStep: startTimeValuesByStep as number[] })
+  };
+}
+
+/** Parses and independently checks the temporal maximum-prefix witness over observed and candidate edges. */
+export function parseTypedPathTemporalCompletionWhyNotCertificate(
+  witnesses: unknown,
+  options: TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+  candidatesInput: unknown,
+  observedEdges: TypedPathTemporalEdgeRecord[],
+  candidateNodeIdsInput: readonly string[],
+  reverseNodeIndex: Record<number, string>,
+  reverseEdgeIndex: Record<number, string>,
+  decodeTemporalValue: (value: number) => number | undefined
+): TypedPathTemporalCounterfactualWhyNot | null {
+  if (options.temporalSemantics !== "coValid" && options.temporalSemantics !== "orderedByStart") return null;
+  try {
+    buildTypedPathTemporalNoRouteProgram(options);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(candidatesInput) || !Array.isArray(observedEdges) || !Array.isArray(candidateNodeIdsInput)) return null;
+
+  let validated: KPlexCompletionCandidate[];
+  try {
+    validated = validateKPlexCompletionCandidates(candidatesInput);
+  } catch {
+    return null;
+  }
+  const candidates: TypedPathCompletionCandidate[] = validated.map((candidate, index) => {
+    const raw = candidatesInput[index] as Record<string, unknown>;
+    if (!Number.isSafeInteger(raw.validityFrom) || !Number.isSafeInteger(raw.validityTo) ||
+      Number(raw.validityFrom) > Number(raw.validityTo)) return { ...candidate, validityFrom: undefined, validityTo: undefined };
+    return { ...candidate, validityFrom: Number(raw.validityFrom), validityTo: Number(raw.validityTo) };
+  });
+  if (candidates.some((candidate) => candidate.validityFrom === undefined || candidate.validityTo === undefined)) return null;
+
+  const witness = Array.isArray(witnesses) ? witnesses.at(-1) : undefined;
+  if (witness === null || typeof witness !== "object") return null;
+  const values = (witness as Record<string, unknown>).Value;
+  if (!Array.isArray(values) || !values.every((atom) => typeof atom === "string")) return null;
+  const candidateByRecord = new Map(candidates.map((candidate) => [candidate.recordIndex, candidate]));
+  const shownCandidateRecords = new Set<number>();
+  for (const atom of values as string[]) {
+    if (!atom.startsWith("cf_typed_path_temporal_why_not_candidate(")) continue;
+    const match = /^cf_typed_path_temporal_why_not_candidate\((\d+)\)$/.exec(atom);
+    if (!match) return null;
+    const recordIndex = Number(match[1]);
+    if (!candidateByRecord.has(recordIndex) || shownCandidateRecords.has(recordIndex)) return null;
+    shownCandidateRecords.add(recordIndex);
+  }
+  if (shownCandidateRecords.size !== candidates.length || candidates.some((candidate) =>
+    !shownCandidateRecords.has(candidate.recordIndex))) return null;
+
+  const nodeIdSet = new Set(candidateNodeIdsInput);
+  const knownNodeIds = new Set(Object.values(reverseNodeIndex));
+  if (nodeIdSet.size !== candidateNodeIdsInput.length || candidateNodeIdsInput.some((nodeId) =>
+    typeof nodeId !== "string" || !knownNodeIds.has(nodeId))) return null;
+  const edgeRecordsByIndex = new Map<number, TypedPathTemporalEdgeRecord>();
+  for (const edge of observedEdges) {
+    if (edgeRecordsByIndex.has(edge.recordIndex) || candidateByRecord.has(edge.recordIndex)) return null;
+    edgeRecordsByIndex.set(edge.recordIndex, edge);
+  }
+  const candidateEdges: TypedPathTemporalEdgeRecord[] = [];
+  for (const candidate of candidates) {
+    const sourceId = reverseNodeIndex[candidate.sourceNode];
+    const targetId = reverseNodeIndex[candidate.targetNode];
+    if (!sourceId || !targetId || !nodeIdSet.has(sourceId) || !nodeIdSet.has(targetId) ||
+      edgeRecordsByIndex.has(candidate.recordIndex) ||
+      Object.prototype.hasOwnProperty.call(reverseEdgeIndex, candidate.recordIndex)) return null;
+    candidateEdges.push({
+      recordIndex: candidate.recordIndex,
+      sourceNode: candidate.sourceNode,
+      targetNode: candidate.targetNode,
+      edgeType: candidate.edgeType,
+      validityFrom: candidate.validityFrom!,
+      validityTo: candidate.validityTo!
+    });
+  }
+  const edgeIdentityByRecord: Record<number, string> = { ...reverseEdgeIndex };
+  for (const candidate of candidates) edgeIdentityByRecord[candidate.recordIndex] = `candidate:${candidate.id}`;
+  const certificate = parseTypedPathTemporalNoRouteCertificate(
+    witnesses,
+    options,
+    [...observedEdges, ...candidateEdges],
+    candidateNodeIdsInput,
+    reverseNodeIndex,
+    edgeIdentityByRecord,
+    decodeTemporalValue
+  );
+  if (!certificate) return null;
+  return {
+    ...certificate,
+    candidateEdgeIds: candidates.map(({ id }) => id).sort((left, right) => left.localeCompare(right))
+  };
+}
+
+/** Diagnoses an infeasible completion against all eligible declared candidates at once. */
+export function buildTypedPathCompletionWhyNotProgram(
+  options: TypedPathOptions,
+  candidatesInput: unknown
+): { candidates: KPlexCompletionCandidate[]; program: string } {
+  const candidates = validateKPlexCompletionCandidates(candidatesInput);
+  const candidateFacts = candidates.flatMap((candidate) => [
+    `cf_typed_path_why_not_candidate(${candidate.recordIndex}).`,
+    `edge_record(${candidate.recordIndex}).`,
+    `edge_source(${candidate.recordIndex},${candidate.sourceNode}).`,
+    `edge_target(${candidate.recordIndex},${candidate.targetNode}).`,
+    `edge_type(${candidate.recordIndex},${escapeAspString(candidate.edgeType)}).`
+  ]);
+  const program = [
+    buildTypedPathNoRouteProgram(options),
+    ...candidateFacts,
+    "#show cf_typed_path_why_not_candidate/1."
+  ].filter(Boolean).join("\n\n");
+  return { candidates, program };
+}
+
+/** Parses the prefix witness and checks it against independent typed reachability. */
+export function parseTypedPathCompletionWhyNotCertificate(
+  witnesses: unknown,
+  options: TypedPathOptions,
+  candidatesInput: unknown,
+  observedEdges: TypedPathCounterfactualEdgeRecord[],
+  candidateNodeIdsInput: readonly string[],
+  reverseNodeIndex: Record<number, string>
+): TypedPathStaticCounterfactualWhyNot | null {
+  let candidates: KPlexCompletionCandidate[];
+  try {
+    buildTypedPathNoRouteProgram(options);
+    candidates = validateKPlexCompletionCandidates(candidatesInput);
+  } catch {
+    return null;
+  }
+  const certificate = parseTypedPathNoRouteCertificate(witnesses, reverseNodeIndex, options.edgeTypeSequence);
+  const witness = Array.isArray(witnesses) ? witnesses[0] : undefined;
+  if (!certificate || witness === null || typeof witness !== "object" || !Array.isArray(observedEdges) ||
+    !Array.isArray(candidateNodeIdsInput)) return null;
+
+  const candidateByRecord = new Map(candidates.map((candidate) => [candidate.recordIndex, candidate]));
+  if (candidateByRecord.size !== candidates.length) return null;
+  const shownCandidateRecords = new Set<number>();
+  for (const atom of Array.isArray((witness as Record<string, unknown>).Value)
+    ? (witness as Record<string, unknown>).Value as unknown[]
+    : []) {
+    if (typeof atom !== "string") continue;
+    const match = /^cf_typed_path_why_not_candidate\((\d+)\)$/.exec(atom);
+    if (!match) continue;
+    const recordIndex = Number(match[1]);
+    if (!candidateByRecord.has(recordIndex) || shownCandidateRecords.has(recordIndex)) return null;
+    shownCandidateRecords.add(recordIndex);
+  }
+  if (shownCandidateRecords.size !== candidates.length || candidates.some((candidate) =>
+    !shownCandidateRecords.has(candidate.recordIndex))) return null;
+
+  const edgeByRecord = new Map<number, TypedPathCounterfactualEdgeRecord>();
+  for (const edge of observedEdges) {
+    if (!Number.isSafeInteger(edge.recordIndex) || edge.recordIndex < 1 || edgeByRecord.has(edge.recordIndex) ||
+      !Number.isSafeInteger(edge.sourceNode) || edge.sourceNode < 1 ||
+      !Number.isSafeInteger(edge.targetNode) || edge.targetNode < 1 ||
+      !reverseNodeIndex[edge.sourceNode] || !reverseNodeIndex[edge.targetNode] ||
+      typeof edge.edgeType !== "string" || !edge.edgeType.trim() || candidateByRecord.has(edge.recordIndex)) return null;
+    edgeByRecord.set(edge.recordIndex, { ...edge, edgeType: edge.edgeType.trim() });
+  }
+  for (const candidate of candidates) {
+    if (edgeByRecord.has(candidate.recordIndex)) return null;
+    edgeByRecord.set(candidate.recordIndex, {
+      recordIndex: candidate.recordIndex,
+      sourceNode: candidate.sourceNode,
+      targetNode: candidate.targetNode,
+      edgeType: candidate.edgeType
+    });
+  }
+
+  const candidateNodeIds = new Set(candidateNodeIdsInput.filter((nodeId) => typeof nodeId === "string" && nodeId.length > 0));
+  const knownNodeIds = new Set(Object.values(reverseNodeIndex));
+  if (candidateNodeIds.size !== candidateNodeIdsInput.length ||
+    candidateNodeIdsInput.some((nodeId) => !knownNodeIds.has(nodeId))) return null;
+  const nodeIndexById = new Map(Object.entries(reverseNodeIndex).map(([index, nodeId]) => [nodeId, Number(index)]));
+  const startNodeId = reverseNodeIndex[options.startNode];
+  const goalNodeId = reverseNodeIndex[options.goalNode];
+  if (!startNodeId || !goalNodeId) return null;
+  if (candidates.some((candidate) => {
+    const sourceId = reverseNodeIndex[candidate.sourceNode];
+    const targetId = reverseNodeIndex[candidate.targetNode];
+    return !sourceId || !targetId || !candidateNodeIds.has(sourceId) || !candidateNodeIds.has(targetId);
+  })) return null;
+
+  const targetsByTypeAndSource = new Map<string, Map<number, Set<number>>>();
+  const addArc = (edgeType: string, sourceNode: number, targetNode: number) => {
+    const targetsBySource = targetsByTypeAndSource.get(edgeType) ?? new Map<number, Set<number>>();
+    const targets = targetsBySource.get(sourceNode) ?? new Set<number>();
+    targets.add(targetNode);
+    targetsBySource.set(sourceNode, targets);
+    targetsByTypeAndSource.set(edgeType, targetsBySource);
+  };
+  for (const edge of edgeByRecord.values()) {
+    addArc(edge.edgeType, edge.sourceNode, edge.targetNode);
+    if (options.direction === "undirected") addArc(edge.edgeType, edge.targetNode, edge.sourceNode);
+  }
+
+  const expectedLayers: string[][] = [candidateNodeIds.has(startNodeId) ? [startNodeId] : []];
+  for (let stepIndex = 0; stepIndex < options.edgeTypeSequence.length; stepIndex += 1) {
+    const next = new Set<string>();
+    const expectedType = options.edgeTypeSequence[stepIndex].trim();
+    const targetsBySource = targetsByTypeAndSource.get(expectedType);
+    for (const sourceId of expectedLayers[stepIndex]) {
+      const sourceIndex = nodeIndexById.get(sourceId);
+      if (sourceIndex === undefined) return null;
+      for (const targetIndex of targetsBySource?.get(sourceIndex) ?? []) {
+        const targetId = reverseNodeIndex[targetIndex];
+        if (targetId && candidateNodeIds.has(targetId)) next.add(targetId);
+      }
+    }
+    expectedLayers.push([...next].sort());
+  }
+
+  if (certificate.reachableByStep.length !== expectedLayers.length ||
+    certificate.reachableByStep.some((layer, index) =>
+      layer.step !== index || layer.nodeIds.join("\u0000") !== expectedLayers[index].join("\u0000"))) return null;
+  const goalReachableAsWalk = expectedLayers[expectedLayers.length - 1].includes(goalNodeId);
+  if (certificate.goalReachableAsWalk !== goalReachableAsWalk) return null;
+  const firstEmptyStep = expectedLayers.findIndex((layer, index) => index > 0 && layer.length === 0);
+  if (certificate.firstEmptyStep !== (firstEmptyStep === -1 ? undefined : firstEmptyStep)) return null;
+
+  return {
+    ...certificate,
+    candidateEdgeIds: candidates.map((candidate) => candidate.id).sort((left, right) => left.localeCompare(right))
   };
 }
 
@@ -2748,6 +4887,76 @@ export interface DominatingSetWitnessExplanation {
   coveragePairs: Array<[string, string]>;
 }
 
+export interface DominatingSetFeasibilityCertificate {
+  targetNodeIds: string[];
+  uncoverableTargetNodeIds: string[];
+}
+
+/** Independently checks that a why-not witness is exact for its candidate/target domains and edge projection. */
+export function verifyDominatingSetFeasibilityCertificate(
+  certificate: DominatingSetFeasibilityCertificate,
+  candidateNodeIds: readonly string[],
+  targetNodeIds: readonly string[],
+  edges: readonly (readonly [string, string])[]
+): string[] | null {
+  const normalizeUniqueIds = (nodeIds: readonly string[]) =>
+    [...new Set(nodeIds.map((nodeId) => normalizeGraphId(nodeId)))];
+  const candidates = new Set(normalizeUniqueIds(candidateNodeIds));
+  const targets = normalizeUniqueIds(targetNodeIds);
+  const certificateTargets = new Set(normalizeUniqueIds(certificate.targetNodeIds));
+  const candidateCanCover = new Set(candidates);
+  for (const [left, right] of edges) {
+    const normalizedLeft = normalizeGraphId(left);
+    const normalizedRight = normalizeGraphId(right);
+    if (candidates.has(normalizedLeft)) candidateCanCover.add(normalizedRight);
+    if (candidates.has(normalizedRight)) candidateCanCover.add(normalizedLeft);
+  }
+  const expectedUncoverable = targets.filter((targetId) => !candidateCanCover.has(targetId));
+  const certificateUncoverable = new Set(normalizeUniqueIds(certificate.uncoverableTargetNodeIds));
+  if (targets.length === 0 || expectedUncoverable.length === 0 ||
+    certificateTargets.size !== targets.length ||
+    targets.some((nodeId) => !certificateTargets.has(nodeId)) ||
+    certificateUncoverable.size !== expectedUncoverable.length ||
+    expectedUncoverable.some((nodeId) => !certificateUncoverable.has(nodeId))) {
+    return null;
+  }
+  return expectedUncoverable;
+}
+
+/** Parses the ASP why-not witness for targets unreachable from the candidate domain. */
+export function parseDominatingSetFeasibilityCertificate(
+  witnesses: unknown,
+  reverseIndex: Record<number, string>
+): DominatingSetFeasibilityCertificate | null {
+  const witness = (Array.isArray(witnesses) ? witnesses : []).find((item) =>
+    item !== null && typeof item === "object" && Array.isArray((item as Record<string, unknown>).Value)
+  ) as Record<string, unknown> | undefined;
+  if (!witness || !Array.isArray(witness.Value)) return null;
+
+  const targetNodeIds: string[] = [];
+  const uncoverableTargetNodeIds: string[] = [];
+  for (const atom of witness.Value) {
+    if (typeof atom !== "string") continue;
+    const targetMatch = /^target_node\((\d+)\)$/.exec(atom);
+    const uncoverableMatch = /^uncoverable_target\((\d+)\)$/.exec(atom);
+    const match = targetMatch ?? uncoverableMatch;
+    if (!match) continue;
+    const nodeId = reverseIndex[Number(match[1])];
+    if (typeof nodeId !== "string" || nodeId === "") return null;
+    (targetMatch ? targetNodeIds : uncoverableTargetNodeIds).push(nodeId);
+  }
+
+  const uniqueSorted = (nodeIds: string[]) => [...new Set(nodeIds)].sort((left, right) => left.localeCompare(right));
+  const normalizedTargets = uniqueSorted(targetNodeIds);
+  const normalizedUncoverable = uniqueSorted(uncoverableTargetNodeIds);
+  const targetSet = new Set(normalizedTargets);
+  if (normalizedUncoverable.some((nodeId) => !targetSet.has(nodeId))) return null;
+  return {
+    targetNodeIds: normalizedTargets,
+    uncoverableTargetNodeIds: normalizedUncoverable
+  };
+}
+
 /** Parses a minimum dominating-set witness and the selected node covering each target. */
 export function parseWitnessDominatingSetExplanations(
   witnesses: unknown,
@@ -2933,10 +5142,15 @@ function parseWitnessNodePartitions(
     .sort((left, right) => left[0]?.localeCompare(right[0] ?? "") ?? 0);
 }
 
-export interface ModularityPartition {
+/** Result fields reconstructed from the ASP witness by parseWitnessModularityPartitions. */
+export interface ParsedModularityPartition {
   communities: string[][];
   scaledScore: number;
   communityContributions?: ModularityCommunityContribution[];
+}
+
+/** Full application view after host-side attribute counts are attached. */
+export interface ModularityPartition extends ParsedModularityPartition {
   attributeBoundCounts?: ModularityAttributeBoundCount[];
 }
 
@@ -2977,9 +5191,9 @@ export function mapModularityContributionsToRecords(
 export function parseWitnessModularityPartitions(
   witnesses: unknown,
   reverseIndex: Record<number, string>
-): ModularityPartition[] {
+): ParsedModularityPartition[] {
   const seen = new Set<string>();
-  const partitions: ModularityPartition[] = [];
+  const partitions: ParsedModularityPartition[] = [];
 
   for (const witness of Array.isArray(witnesses) ? witnesses : []) {
     const witnessRecord = witness !== null && typeof witness === "object"
@@ -3069,10 +5283,166 @@ export function parseWitnessModularityPartitions(
   return partitions;
 }
 
-export function selectMaximumModularityPartitions(partitions: ModularityPartition[]): ModularityPartition[] {
+export function selectMaximumModularityPartitions(partitions: ParsedModularityPartition[]): ParsedModularityPartition[] {
   if (partitions.length === 0) return [];
   const maximumScore = Math.max(...partitions.map((partition) => partition.scaledScore));
   return partitions.filter((partition) => partition.scaledScore === maximumScore);
+}
+
+/** Combines local optimum sets into the exact Cartesian product of global optima. */
+export function combineModularityComponentPartitions(
+  components: readonly ModularityComponentFacts[],
+  partitionsByComponent: readonly (readonly ParsedModularityPartition[])[]
+): ParsedModularityPartition[] {
+  if (components.length === 0 || components.length !== partitionsByComponent.length ||
+    partitionsByComponent.some((partitions) => partitions.length === 0)) {
+    throw new TypeError("Ogni componente ASP deve avere almeno un insieme di ottimi completi");
+  }
+
+  let combined: ParsedModularityPartition[] = [{ communities: [], scaledScore: 0 }];
+  for (let componentIndex = 0; componentIndex < components.length; componentIndex += 1) {
+    const component = components[componentIndex];
+    const localPartitions = partitionsByComponent[componentIndex];
+    const next = new Map<string, ParsedModularityPartition>();
+    for (const prefix of combined) {
+      for (const local of localPartitions) {
+        const scaledScore = prefix.scaledScore + local.scaledScore;
+        if (!Number.isSafeInteger(scaledScore)) {
+          throw new RangeError("La somma dei contributi di modularità non è un intero sicuro");
+        }
+        const communities = [
+          ...prefix.communities.map((community) => [...community]),
+          ...local.communities.map((community) => [...community])
+        ].sort((left, right) => (left[0] ?? "").localeCompare(right[0] ?? ""));
+        const partitionKey = communities.map((community) => community.join("\u0000")).join("\u0001");
+        let communityContributions: ModularityCommunityContribution[] | undefined;
+        if (componentIndex === 0) {
+          communityContributions = local.communityContributions?.map((contribution) => ({
+            ...contribution,
+            edgeIndexes: contribution.edgeIndexes.map((localEdgeIndex) => {
+              const globalEdgeIndex = component.globalEdgeIndexByLocalEdgeIndex[localEdgeIndex - 1];
+              if (!Number.isSafeInteger(globalEdgeIndex) || globalEdgeIndex < 1) {
+                throw new TypeError("Un contributo ASP non si mappa a un arco della proiezione globale");
+              }
+              return globalEdgeIndex;
+            })
+          }));
+        } else if (prefix.communityContributions !== undefined || local.communityContributions !== undefined) {
+          if (!prefix.communityContributions || !local.communityContributions) {
+            throw new TypeError("I componenti devono esporre tutti o nessuno i contributi di modularità");
+          }
+          const remappedContributions = local.communityContributions.map((contribution) => ({
+            ...contribution,
+            edgeIndexes: contribution.edgeIndexes.map((localEdgeIndex) => {
+              const globalEdgeIndex = component.globalEdgeIndexByLocalEdgeIndex[localEdgeIndex - 1];
+              if (!Number.isSafeInteger(globalEdgeIndex) || globalEdgeIndex < 1) {
+                throw new TypeError("Un contributo ASP non si mappa a un arco della proiezione globale");
+              }
+              return globalEdgeIndex;
+            })
+          }));
+          communityContributions = [...prefix.communityContributions, ...remappedContributions];
+        }
+        next.set(partitionKey, {
+          communities,
+          scaledScore,
+          ...(communityContributions ? { communityContributions } : {})
+        });
+      }
+    }
+    combined = [...next.values()];
+  }
+  return combined;
+}
+
+/**
+ * Solves eligible disconnected positive-weight components independently.
+ * Single-optimum requests may place zero-volume nodes in one neutral subproblem;
+ * complete-enumeration requests fall back to the aggregate encoding because
+ * those nodes can join positive communities without changing modularity.
+ */
+export async function solveModularityByPositiveWeightComponents(
+  facts: ModularityFacts,
+  reverseIndex: Record<number, string>,
+  options: {
+    enumerateAllOptima?: boolean;
+    includeContributions?: boolean;
+    solve: (program: string, solverOptions: string[]) => Promise<unknown>;
+  }
+): Promise<{
+  partitions: ParsedModularityPartition[];
+  result: { Result: "OPTIMUM FOUND"; Models: { More: "no" | "yes" }; Call: Array<{ Witnesses: unknown[] }> };
+} | null> {
+  const components = factorModularityFactsByPositiveWeightComponents(
+    facts,
+    true,
+    options.enumerateAllOptima !== true
+  );
+  if (!components) return null;
+
+  const partitionsByComponent: ParsedModularityPartition[][] = [];
+  let combinedOptimumCount = 1n;
+  const solverOptions = getStructuralSolverOptions("communities", options.enumerateAllOptima === true);
+  for (const [componentIndex, component] of components.entries()) {
+    const localProgram = buildMaximumModularityProgram({
+      weighted: facts.weighted,
+      includeContributions: options.includeContributions === true,
+      ...(component.facts.pairwiseObjectiveOffset === undefined
+        ? {}
+        : { pairwiseObjectiveOffset: component.facts.pairwiseObjectiveOffset })
+    });
+    const result = await options.solve(
+      [component.facts.facts.trim(), component.facts.pairwiseObjectiveFacts?.trim(), localProgram]
+        .filter(Boolean)
+        .join("\n\n") + "\n",
+      solverOptions
+    );
+    const resultRecord = result !== null && typeof result === "object" && !Array.isArray(result)
+      ? result as Record<string, unknown>
+      : {};
+    if (resultRecord.Result === "ERROR") {
+      throw new Error(typeof resultRecord.Error === "string"
+        ? resultRecord.Error
+        : `Errore ASP nella componente ${componentIndex + 1}.`);
+    }
+    if (resultRecord.Result !== "OPTIMUM FOUND") {
+      throw new Error(`L'ottimo ASP della componente ${componentIndex + 1} non è stato provato (${String(resultRecord.Result ?? "risposta vuota")}).`);
+    }
+    if (options.enumerateAllOptima === true && !hasCompleteOptimalModelEnumeration(result)) {
+      throw new Error(`L'enumerazione degli ottimi della componente ${componentIndex + 1} è incompleta.`);
+    }
+    const localOptima = selectMaximumModularityPartitions(
+      parseWitnessModularityPartitions(
+        (resultRecord.Call as Array<{ Witnesses?: unknown }> | undefined)?.[0]?.Witnesses,
+        reverseIndex
+      )
+    );
+    if (localOptima.length === 0) {
+      throw new Error(`La componente ${componentIndex + 1} non ha restituito un witness di modularità leggibile.`);
+    }
+    partitionsByComponent.push(localOptima);
+    if (options.enumerateAllOptima === true) {
+      combinedOptimumCount *= BigInt(localOptima.length);
+      if (combinedOptimumCount > BigInt(MAX_FACTORED_MODULARITY_OPTIMA)) {
+        throw new Error(
+          `L'enumerazione esatta produrrebbe ${combinedOptimumCount.toString()} partizioni globali ` +
+          `(limite di visualizzazione ${MAX_FACTORED_MODULARITY_OPTIMA}); disattiva l'enumerazione ` +
+          `completa per calcolare e mostrare un solo ottimo per componente.`
+        );
+      }
+    }
+  }
+
+  const partitions = combineModularityComponentPartitions(components, partitionsByComponent);
+  if (partitions.length === 0) throw new Error("La ricomposizione non ha prodotto partizioni globali.");
+  return {
+    partitions,
+    result: {
+      Result: "OPTIMUM FOUND",
+      Models: { More: options.enumerateAllOptima === true ? "no" : "yes" },
+      Call: [{ Witnesses: [] }]
+    }
+  };
 }
 
 export interface MinimumHopPathWitness {

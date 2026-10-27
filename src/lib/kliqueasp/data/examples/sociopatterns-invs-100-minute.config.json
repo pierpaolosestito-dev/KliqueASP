@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 2,
+  "features": {
+    "timeline": true,
+    "labelVisibilityToggle": true,
+    "nodeLabelsVisibleByDefault": false
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type",
+      "attributes": {
+        "participant": "$.id"
+      }
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.validFrom",
+        "toField": "$.validTo",
+        "numericUnit": "seconds"
+      }
+    }
+  },
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "invs-temporal-contact-chain",
+        "label": "Catena di quattro partecipanti con contatti in ordine temporale",
+        "temporal": {
+          "semantics": "orderedByStart",
+          "strict": true
+        },
+        "roles": {
+          "first": { "nodeTypes": ["person"] },
+          "second": { "nodeTypes": ["person"] },
+          "third": { "nodeTypes": ["person"] },
+          "fourth": { "nodeTypes": ["person"] }
+        },
+        "edges": [
+          { "sourceRole": "first", "targetRole": "second", "edgeType": "face-to-face-contact" },
+          { "sourceRole": "second", "targetRole": "third", "edgeType": "face-to-face-contact" },
+          { "sourceRole": "third", "targetRole": "fourth", "edgeType": "face-to-face-contact" }
+        ]
+      },
+      {
+        "id": "invs-selected-participant-gap",
+        "label": "Why-not nella finestra: 80–95–118–15",
+        "temporal": {
+          "semantics": "orderedByStart",
+          "strict": true
+        },
+        "roles": {
+          "first": { "nodeTypes": ["person"], "attributes": { "participant": "80" } },
+          "second": { "nodeTypes": ["person"], "attributes": { "participant": "95" } },
+          "third": { "nodeTypes": ["person"], "attributes": { "participant": "118" } },
+          "fourth": { "nodeTypes": ["person"], "attributes": { "participant": "15" } }
+        },
+        "edges": [
+          { "sourceRole": "first", "targetRole": "second", "edgeType": "face-to-face-contact" },
+          { "sourceRole": "second", "targetRole": "third", "edgeType": "face-to-face-contact" },
+          { "sourceRole": "third", "targetRole": "fourth", "edgeType": "face-to-face-contact" }
+        ]
+      }
+    ]
+  }
+}

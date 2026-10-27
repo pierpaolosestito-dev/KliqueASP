@@ -12,6 +12,8 @@ export function getDeclaredNodeTypeConfig(
     return null;
   }
 
+  if (!Object.prototype.hasOwnProperty.call(nodeTypes, nodeType)) return null;
+
   const typeConfig = (nodeTypes as Record<string, unknown>)[nodeType];
   return typeConfig && typeof typeConfig === "object" && !Array.isArray(typeConfig)
     ? typeConfig as DeclaredNodeTypeConfig

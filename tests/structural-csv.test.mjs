@@ -2,7 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCompactKCoreWitnessCsv,
+  buildKPlexMaximumMembershipDiagnosisCsv,
+  buildKPlexCompletionWhyNotCsv,
+  buildKCoreCompletionWhyNotCsv,
+  buildKCoreMembershipCompletionWhyNotCsv,
   buildDominatingSetWitnessCsv,
+  buildDominatingSetInfeasibilityCsv,
+  buildProvenanceScenarioDominatingSetInfeasibilityCsv,
+  buildTypedPathCounterfactualCsv,
+  buildTypedPathTemporalCounterfactualCsv,
+  buildTypedPathTemporalNoRouteCsv,
+  buildTypedPathCounterfactualWhyNotCsv,
   buildKCoreWitnessCsv,
   buildKPlexWitnessCsv,
   buildModularityCertificateCsv,
@@ -53,6 +63,260 @@ function parseCsv(csv) {
 
 const edgeProvenanceSummary = (edgeIds) => edgeIds.map((id) => `${id}: fonte`).join(" | ");
 const structuredEdgeEvidence = (edgeIds) => edgeIds.map((id) => ({ edge_id: id, provenance_references: [`ref:${id}`] }));
+
+test("k-plex maximum-membership CSV preserves the target, optimum gap, witness, and missing pairs", () => {
+  const rows = parseCsv(buildKPlexMaximumMembershipDiagnosisCsv({
+    targetNodeId: "c",
+    s: 2,
+    globalMaximumSize: 3,
+    maximumContainingSize: 2,
+    sizeGap: 1,
+    outcome: "excluded-from-maximum",
+    witnessNodeIds: ["a", "c"],
+    missingPairs: [["a", "c"]]
+  }, {
+    a: "=node-a",
+    c: "node,c"
+  }, "=Researchers"));
+  assert.deepEqual(rows[0], [
+    "target_node_id", "selected_group", "s", "outcome", "global_maximum_s_plex_size",
+    "maximum_s_plex_size_containing_target", "size_gap", "witness_node_ids_json",
+    "missing_pairs_json", "structured_witness_json"
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1][0], "node,c");
+  assert.equal(rows[1][1], "'=Researchers");
+  assert.deepEqual(JSON.parse(rows[1][7]), ["=node-a", "node,c"]);
+  assert.deepEqual(JSON.parse(rows[1][8]), [["=node-a", "node,c"]]);
+  const witness = JSON.parse(rows[1][9]);
+  assert.equal(witness.global_maximum_s_plex_size, 3);
+  assert.equal(witness.maximum_s_plex_size_containing_target, 2);
+  assert.equal(witness.size_gap, 1);
+  assert.deepEqual(witness.missing_pairs, [["=node-a", "node,c"]]);
+});
+
+test("k-plex membership CSV records brave/skeptical counts only when all optima were enumerated", () => {
+  const rows = parseCsv(buildKPlexMaximumMembershipDiagnosisCsv({
+    targetNodeId: "c",
+    s: 2,
+    globalMaximumSize: 3,
+    maximumContainingSize: 3,
+    sizeGap: 0,
+    outcome: "included-in-maximum",
+    witnessNodeIds: ["a", "b", "c"],
+    missingPairs: [],
+    optimalMembershipSummary: {
+      totalOptimalKplexes: 2,
+      targetOptimalKplexes: 1,
+      status: "some"
+    }
+  }, {}, ""));
+  assert.deepEqual(rows[0].slice(-3), [
+    "optimal_k_plex_count", "target_membership_count", "membership_across_all_optima"
+  ]);
+  assert.deepEqual(rows[1].slice(-3), ["2", "1", "some"]);
+  assert.deepEqual(JSON.parse(rows[1][9]).membership_across_all_optima, "some");
+});
+
+test("typed-path counterfactual CSV conserva passi osservati/ipotetici e neutralizza formule", () => {
+  const rows = parseCsv(buildTypedPathCounterfactualCsv({
+    proposals: [{
+      totalCost: 2,
+      path: { nodeIds: ["a", "b", "c"], edgeIdsByStep: [["observed-1"], ["candidate:candidate-1"]] },
+      addedEdges: [{
+        id: "candidate-1", sourceNodeId: "b", targetNodeId: "c", edgeType: "publication", cost: 2
+      }]
+    }],
+    edgeTypeSequence: ["affiliation", "publication"],
+    selectedGroup: "=Researchers",
+    sourceIdByNodeId: { a: "=node-a", b: "node-b", c: "node-c" },
+    sourceIdByEdgeId: { "observed-1": "observed,1" }
+  }));
+
+  assert.deepEqual(rows[0], [
+    "proposal_index", "total_cost", "step", "source_node_id", "target_node_id", "edge_type",
+    "edge_id", "candidate_cost", "hypothetical", "candidate_edge_ids", "typed_path_sequence", "group"
+  ]);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[1], [
+    "1", "2", "1", "'=node-a", "node-b", "affiliation", "observed,1", "0", "false",
+    "candidate-1", "affiliation | publication", "'=Researchers"
+  ]);
+  assert.deepEqual(rows[2], [
+    "1", "2", "2", "node-b", "node-c", "publication", "candidate-1", "2", "true",
+    "candidate-1", "affiliation | publication", "'=Researchers"
+  ]);
+});
+
+test("typed-path counterfactual CSV include il cammino osservato quando il costo minimo è zero", () => {
+  const rows = parseCsv(buildTypedPathCounterfactualCsv({
+    proposals: [{
+      totalCost: 0,
+      path: { nodeIds: ["a", "b"], edgeIdsByStep: [["observed-1"]] },
+      addedEdges: []
+    }],
+    edgeTypeSequence: ["collaboration"],
+    selectedGroup: "",
+    sourceIdByNodeId: { a: "A", b: "B" },
+    sourceIdByEdgeId: { "observed-1": "source-edge-1" }
+  }));
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[1], [
+    "1", "0", "1", "A", "B", "collaboration", "source-edge-1", "0", "false", "",
+    "collaboration", ""
+  ]);
+});
+
+test("typed-path counterfactual CSV rifiuta witness di percorso incompleti", () => {
+  assert.throws(() => buildTypedPathCounterfactualCsv({
+    proposals: [{
+      totalCost: 1,
+      path: { nodeIds: ["a"], edgeIdsByStep: [] },
+      addedEdges: []
+    }],
+    edgeTypeSequence: ["collaboration"],
+    selectedGroup: "",
+    sourceIdByNodeId: {},
+    sourceIdByEdgeId: {}
+  }), /witness completo/);
+});
+
+test("CSV del controfattuale temporale esporta la semantica e il tempo testimone per ogni passo", () => {
+  const rows = parseCsv(buildTypedPathTemporalCounterfactualCsv({
+    proposals: [{
+      totalCost: 2,
+      path: {
+        nodeIds: ["a", "b", "c"],
+        edgeIdsByStep: [["observed-1"], ["candidate:candidate-1"]],
+        temporalSemantics: "orderedByStart",
+        startTimeValuesByStep: [1990, 2000]
+      },
+      addedEdges: [{
+        id: "candidate-1", sourceNodeId: "b", targetNodeId: "c", edgeType: "publication", cost: 2
+      }]
+    }],
+    edgeTypeSequence: ["affiliation", "publication"],
+    selectedGroup: "Researchers",
+    sourceIdByNodeId: { a: "A", b: "B", c: "C" },
+    sourceIdByEdgeId: { "observed-1": "source-edge-1" }
+  }));
+  assert.deepEqual(rows[0], [
+    "proposal_index", "total_cost", "temporal_semantics", "common_time", "step_start_time", "step",
+    "source_node_id", "target_node_id", "edge_type", "edge_id", "candidate_cost", "hypothetical",
+    "candidate_edge_ids", "typed_path_sequence", "group"
+  ]);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[1], [
+    "1", "2", "orderedByStart", "", "1990", "1", "A", "B", "affiliation", "source-edge-1", "0", "false",
+    "candidate-1", "affiliation | publication", "Researchers"
+  ]);
+  assert.deepEqual(rows[2], [
+    "1", "2", "orderedByStart", "", "2000", "2", "B", "C", "publication", "candidate-1", "2", "true",
+    "candidate-1", "affiliation | publication", "Researchers"
+  ]);
+  assert.throws(() => buildTypedPathTemporalCounterfactualCsv({
+    proposals: [{ totalCost: 0, path: { nodeIds: ["a", "b"], edgeIdsByStep: [["edge"]] }, addedEdges: [] }],
+    edgeTypeSequence: ["x"], selectedGroup: "", sourceIdByNodeId: {}, sourceIdByEdgeId: {}
+  }), /cammino temporale/);
+});
+
+test("CSV why-not temporale esporta la walk ASP massima e i tempi testimone", () => {
+  const rows = parseCsv(buildTypedPathTemporalNoRouteCsv({
+    certificate: {
+      edgeTypeSequence: ["x", "y", "z"],
+      temporalSemantics: "coValid",
+      walk: { nodeIds: ["s", "a", "s", "g"], edgeIdsByStep: [["e-x"], ["e-y"], ["e-z"]] },
+      maximumPrefixLength: 3,
+      goalReachableAsWalk: true,
+      repeatedNodeIds: ["s"],
+      commonTimeValue: 2000
+    },
+    startNodeId: "s",
+    goalNodeId: "g",
+    selectedGroup: "Researchers",
+    sourceIdByNodeId: { s: "S", a: "A", g: "G" },
+    sourceIdByEdgeId: { "e-x": "source-x", "e-y": "source-y", "e-z": "source-z" }
+  }));
+  assert.deepEqual(rows[0], [
+    "temporal_semantics", "step", "required_edge_type", "source_node_id", "target_node_id", "edge_record_id",
+    "common_time", "edge_start_time", "maximum_prefix_length", "first_blocked_step",
+    "goal_reachable_as_walk", "repeated_node_ids_json", "start_node_id", "goal_node_id", "group",
+    "structured_witness_json"
+  ]);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows[1].slice(0, 12), [
+    "coValid", "1", "x", "S", "A", "source-x", "2000", "", "3", "", "true", '["S"]'
+  ]);
+  assert.throws(() => buildTypedPathTemporalNoRouteCsv({
+    certificate: {
+      edgeTypeSequence: ["x"], temporalSemantics: "orderedByStart",
+      walk: { nodeIds: ["s"], edgeIdsByStep: [] }, maximumPrefixLength: 0,
+      goalReachableAsWalk: false, repeatedNodeIds: [], startTimeValuesByStep: [2000]
+    },
+    startNodeId: "s", goalNodeId: "g", selectedGroup: "", sourceIdByNodeId: {}, sourceIdByEdgeId: {}
+  }), /certificato completo/);
+});
+
+test("CSV why-not temporale opzionale registra tutti i candidati del supergrafo", () => {
+  const rows = parseCsv(buildTypedPathTemporalNoRouteCsv({
+    certificate: {
+      edgeTypeSequence: ["x", "y"],
+      temporalSemantics: "orderedByStart",
+      walk: { nodeIds: ["s", "a"], edgeIdsByStep: [["observed-x"]] },
+      maximumPrefixLength: 1,
+      goalReachableAsWalk: false,
+      firstBlockedStep: 2,
+      repeatedNodeIds: [],
+      startTimeValuesByStep: [10]
+    },
+    candidateEdgeIds: ["candidate-y", "candidate-z"],
+    startNodeId: "s",
+    goalNodeId: "g",
+    selectedGroup: "Researchers",
+    sourceIdByNodeId: { s: "S", a: "A", g: "G" },
+    sourceIdByEdgeId: { "observed-x": "source-x" }
+  }));
+
+  assert.ok(rows[0].includes("candidate_edge_ids_json"));
+  const candidateColumn = rows[0].indexOf("candidate_edge_ids_json");
+  assert.deepEqual(JSON.parse(rows[1][candidateColumn]), ["candidate-y", "candidate-z"]);
+  assert.deepEqual(JSON.parse(rows[1].at(-1)).candidate_edge_ids, ["candidate-y", "candidate-z"]);
+});
+
+test("typed-path why-not CSV esporta i prefissi certificati e neutralizza i campi formula-like", () => {
+  const rows = parseCsv(buildTypedPathCounterfactualWhyNotCsv({
+    certificate: {
+      edgeTypeSequence: ["affiliation", "publication"],
+      reachableByStep: [
+        { step: 0, nodeIds: ["a"] },
+        { step: 1, nodeIds: ["b", "c"] },
+        { step: 2, nodeIds: [] }
+      ],
+      goalReachableAsWalk: false,
+      firstEmptyStep: 2,
+      candidateEdgeIds: ["=candidate-id"]
+    },
+    startNodeId: "a",
+    goalNodeId: "goal",
+    selectedGroup: "=group",
+    sourceIdByNodeId: { a: "=start", b: "B", c: "C", goal: "Goal" }
+  }));
+
+  assert.deepEqual(rows[0], [
+    "record_type", "prefix_step", "required_edge_type", "reachable_node_ids_json", "start_node_id", "goal_node_id",
+    "candidate_edge_ids_json", "goal_reachable_as_walk", "first_empty_step", "group", "interpretation"
+  ]);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows[1].slice(0, 10), [
+    "reachable_prefix", "0", "", '["=start"]', "'=start", "Goal", '["=candidate-id"]', "false", "2", "'=group"
+  ]);
+  assert.equal(rows[2][2], "affiliation");
+  assert.equal(rows[2][3], '["B","C"]');
+  assert.equal(rows[3][2], "publication");
+  assert.equal(rows[3][3], "[]");
+  assert.match(rows[3][10], /nessun nodo raggiungibile dopo il passo 2/);
+});
 
 test("k-plex massimo CSV conserva schema e righe per le coppie non adiacenti", () => {
   const rows = parseCsv(buildKPlexWitnessCsv({
@@ -290,6 +554,177 @@ test("dominating-set CSV distinguishes self and adjacent coverage and keeps reco
     { edge_id: "leaf-center", provenance_references: ["ref:leaf-center"] },
     { edge_id: "generated", provenance_references: ["ref:generated"] }
   ]);
+});
+
+test("dominating-set why-not CSV records uncovered targets and neutralizes formula-like IDs", () => {
+  const rows = parseCsv(buildDominatingSetInfeasibilityCsv({
+    uncoverableTargetNodeIds: ["t2", "t1", "t2"],
+    sourceIdByNodeId: { t1: "=FORMULA()", t2: "target,2" },
+    nodeLabels: { t1: "Target uno", t2: "@Target due" },
+    candidateGroup: "candidates",
+    targetGroup: "targets"
+  }));
+  assert.deepEqual(rows[0], [
+    "record_type", "target_node_id", "target_node_label", "candidate_group", "target_group", "why_not"
+  ]);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[1][1], "'=FORMULA()");
+  assert.equal(rows[1][2], "Target uno");
+  assert.equal(rows[2][1], "target,2");
+  assert.equal(rows[2][2], "'@Target due");
+  assert.equal(rows[1][5], rows[2][5]);
+});
+
+test("k-plex completion why-not CSV preserves its target, cohort, candidate domain, and blockers", () => {
+  const rows = parseCsv(buildKPlexCompletionWhyNotCsv({
+    targetS: 1,
+    cohortNodeIds: ["a", "b", "c"],
+    candidateEdgeIds: ["candidate-ab", "=candidate-ac"],
+    unfillableMissingPairs: [["a", "c"]],
+    blockers: [
+      { nodeId: "a", unfillableMissingNeighborIds: ["c"] },
+      { nodeId: "c", unfillableMissingNeighborIds: ["a"] }
+    ]
+  }, {
+    a: "=node-a",
+    b: "node-b",
+    c: "node,c"
+  }));
+  assert.deepEqual(rows[0], [
+    "record_type", "target_s", "cohort_node_ids", "authorized_candidate_edge_ids",
+    "unfillable_missing_pair_count", "unfillable_missing_pairs_json", "blockers_json", "structured_witness_json"
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1][1], "1");
+  assert.equal(rows[1][2], "'=node-a | node-b | node,c");
+  assert.equal(rows[1][3], "candidate-ab | =candidate-ac");
+  assert.equal(rows[1][4], "1");
+  assert.deepEqual(JSON.parse(rows[1][5]), [["=node-a", "node,c"]]);
+  assert.deepEqual(JSON.parse(rows[1][6]), [
+    { blocking_node_id: "=node-a", unfillable_missing_neighbor_ids: ["node,c"] },
+    { blocking_node_id: "node,c", unfillable_missing_neighbor_ids: ["=node-a"] }
+  ]);
+  const witness = JSON.parse(rows[1][7]);
+  assert.deepEqual(witness.cohort_node_ids, ["=node-a", "node-b", "node,c"]);
+  assert.deepEqual(witness.authorized_candidate_edge_ids, ["candidate-ab", "=candidate-ac"]);
+  assert.deepEqual(witness.blockers, [
+    { blocking_node_id: "=node-a", unfillable_missing_neighbor_ids: ["node,c"] },
+    { blocking_node_id: "node,c", unfillable_missing_neighbor_ids: ["=node-a"] }
+  ]);
+});
+
+test("k-core completion why-not CSV preserves degree bounds and maps source IDs safely", () => {
+  const rows = parseCsv(buildKCoreCompletionWhyNotCsv({
+    targetK: 3,
+    cohortNodeIds: ["a", "b", "c"],
+    candidateEdgeIds: ["candidate,1", "=candidate-2"],
+    blockers: [{
+      nodeId: "a",
+      currentNeighborIds: ["b"],
+      additionalCandidateNeighborIds: ["c"],
+      maximumAchievableDegree: 2
+    }]
+  }, {
+    a: "=formula-node",
+    b: "B,1",
+    c: "C\n3"
+  }));
+
+  assert.deepEqual(rows[0], [
+    "record_type", "target_k", "cohort_node_ids", "authorized_candidate_edge_ids",
+    "blocker_count", "blockers_json", "structured_witness_json"
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1][0], "k_core_completion_why_not");
+  assert.equal(rows[1][2], "'=formula-node | B,1 | C\n3");
+  assert.equal(rows[1][3], "candidate,1 | =candidate-2");
+  assert.deepEqual(JSON.parse(rows[1][5]), [{
+    blocking_node_id: "=formula-node",
+    current_neighbor_ids: ["B,1"],
+    additional_candidate_neighbor_ids: ["C\n3"],
+    current_degree: 1,
+    maximum_achievable_degree: 2,
+    target_k: 3
+  }]);
+  assert.deepEqual(JSON.parse(rows[1][6]), {
+    kind: "k_core_completion_why_not",
+    target_k: 3,
+    cohort_node_ids: ["=formula-node", "B,1", "C\n3"],
+    authorized_candidate_edge_ids: ["candidate,1", "=candidate-2"],
+    blockers: JSON.parse(rows[1][5])
+  });
+});
+
+test("k-core membership why-not CSV records the target round, scope, and certified peeling", () => {
+  const rows = parseCsv(buildKCoreMembershipCompletionWhyNotCsv({
+    targetK: 2,
+    targetNodeId: "a",
+    candidateNodeIds: ["a", "b", "c"],
+    candidateEdgeIds: ["hyp-a-b", "=hyp-b-c"],
+    peelingScope: "target_prefix",
+    peeling: [
+      { nodeId: "b", round: 1, survivingNeighborIds: ["a", "c"] },
+      { nodeId: "c", round: 1, survivingNeighborIds: ["b"] },
+      { nodeId: "a", round: 2, survivingNeighborIds: [] }
+    ]
+  }, { a: "=Target", b: "B,1", c: "C\n3" }));
+
+  assert.deepEqual(rows[0], [
+    "record_type", "target_k", "target_node_id", "target_elimination_round",
+    "candidate_node_ids", "authorized_candidate_edge_ids", "peeling_scope", "peeling_json", "structured_witness_json"
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1][0], "k_core_membership_completion_why_not");
+  assert.equal(rows[1][2], "'=Target");
+  assert.equal(rows[1][3], "2");
+  assert.equal(rows[1][4], "'=Target | B,1 | C\n3");
+  assert.equal(rows[1][6], "target_prefix");
+  const peeling = JSON.parse(rows[1][7]);
+  assert.deepEqual(peeling, [
+    { node_id: "B,1", round: 1, surviving_neighbor_ids: ["=Target", "C\n3"] },
+    { node_id: "C\n3", round: 1, surviving_neighbor_ids: ["B,1"] },
+    { node_id: "=Target", round: 2, surviving_neighbor_ids: [] }
+  ]);
+  assert.deepEqual(JSON.parse(rows[1][8]), {
+    kind: "k_core_membership_completion_why_not",
+    target_k: 2,
+    target_node_id: "=Target",
+    candidate_node_ids: ["=Target", "B,1", "C\n3"],
+    authorized_candidate_edge_ids: ["hyp-a-b", "=hyp-b-c"],
+    peeling_scope: "target_prefix",
+    peeling
+  });
+});
+
+test("scenario dominating-set why-not CSV preserves scenario and projection context", () => {
+  const rows = parseCsv(buildProvenanceScenarioDominatingSetInfeasibilityCsv({
+    scenarioId: "only-a",
+    scenarioLabel: "Solo fonte A",
+    scenarioSources: ["source:a", "source:b"],
+    uncoverableTargetNodeIds: ["target"],
+    sourceIdByNodeId: { target: "=NODE()" },
+    nodeLabels: { target: "@Target" },
+    candidateGroup: "clinicians",
+    targetGroup: "patients",
+    confidenceThreshold: 0.6,
+    timelineWindow: "2020–2024",
+    viewFilters: { types: ["person", "place"], groups: ["north"] }
+  }));
+  assert.deepEqual(rows[0], [
+    "record_type", "scenario_id", "scenario_label", "scenario_sources", "target_node_id", "target_node_label",
+    "candidate_group", "target_group", "confidence_threshold", "timeline_window", "type_filters", "group_filters", "why_not"
+  ]);
+  assert.equal(rows[1][1], "only-a");
+  assert.equal(rows[1][3], '["source:a","source:b"]');
+  assert.equal(rows[1][4], "'=NODE()");
+  assert.equal(rows[1][5], "'@Target");
+  assert.equal(rows[1][6], "clinicians");
+  assert.equal(rows[1][7], "patients");
+  assert.equal(rows[1][8], "0.6");
+  assert.equal(rows[1][9], "2020–2024");
+  assert.equal(rows[1][10], '["person","place"]');
+  assert.equal(rows[1][11], '["north"]');
+  assert.equal(rows[1][12], "nessun candidato eleggibile coincide con il target o gli è adiacente nella proiezione dello scenario");
 });
 
 test("separator certificate CSV varies its evidence columns by removed element type", () => {

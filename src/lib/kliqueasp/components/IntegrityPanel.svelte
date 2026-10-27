@@ -3,6 +3,8 @@
   import { csvCell, downloadCsvText } from "../csvExport";
   import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
   import { summarizeEdgeProvenance } from "../graph/structuralTasks";
+  import { getOwnRecordValue } from "../graph/recordUtils";
+  import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { IntegrityRepairProposal, IntegrityViolation } from "../graph/integrityTask";
 
@@ -25,15 +27,21 @@
   export let showClingoStats: boolean = false;
 
   const dispatch = createEventDispatcher();
+  const integrityDiagnosisContract = getGraphTaskContract("graphIntegrity");
+  const integrityRepairContract = getGraphTaskContract("minimumIntegrityRepair");
 
   function provenanceForEdges(edgeIds: string[]): string {
     return summarizeEdgeProvenance(edgeIds, edgeProvenanceBySourceId);
   }
 
+  function edgeProvenance(edgeId: string): string | undefined {
+    return getOwnRecordValue<string>(edgeProvenanceBySourceId, edgeId);
+  }
+
   function structuredEdgeEvidence(edgeIds: string[]) {
     return edgeIds.map((edgeId) => ({
       edge_id: edgeId,
-      provenance_references: edgeProvenanceReferencesBySourceId[edgeId] ?? []
+      provenance_references: getOwnRecordValue<string[]>(edgeProvenanceReferencesBySourceId, edgeId) ?? []
     }));
   }
 
@@ -200,6 +208,30 @@
       <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
     </header>
 
+    {#if integrityDiagnosisContract && integrityRepairContract}
+      <details class="asp-contract">
+        <summary>Semantica dei task ASP</summary>
+        <div>
+          <strong>Diagnosi · {integrityDiagnosisContract.aspEncoding} v{integrityDiagnosisContract.encodingVersion}</strong>
+          <p>{integrityDiagnosisContract.querySemantics}</p>
+          <small>
+            {getTaskEnumerationDescription("graphIntegrity")} · parser: {integrityDiagnosisContract.parser} ·
+            atomi: {integrityDiagnosisContract.witnessPredicates.join(", ")} ·
+            campi interpretati: {integrityDiagnosisContract.resultFields.join(", ")}.
+          </small>
+        </div>
+        <div>
+          <strong>Riparazione · {integrityRepairContract.aspEncoding} v{integrityRepairContract.encodingVersion}</strong>
+          <p>{integrityRepairContract.querySemantics}</p>
+          <small>
+            {getTaskEnumerationDescription("minimumIntegrityRepair")} · parser: {integrityRepairContract.parser} ·
+            atomi: {integrityRepairContract.witnessPredicates.join(", ")} ·
+            campi interpretati: {integrityRepairContract.resultFields.join(", ")}.
+          </small>
+        </div>
+      </details>
+    {/if}
+
     <button type="button" class="run" on:click={() => dispatch("run")} disabled={running}>
       {running ? "Verifica in esecuzione…" : "Esegui verifica ASP"}
     </button>
@@ -269,23 +301,23 @@
           <span>Assegnare {candidate.attribute} = {JSON.stringify(candidate.value)} al nodo {candidate.nodeId} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.edgeAttributes ?? [] as candidate}
-          <span>Assegnare {candidate.attribute} = {JSON.stringify(candidate.value)} all'arco {candidate.edgeId}{#if edgeProvenanceBySourceId[candidate.edgeId]} · fonte dichiarata: {edgeProvenanceBySourceId[candidate.edgeId]}{/if} · costo {candidate.cost}</span>
+          <span>Assegnare {candidate.attribute} = {JSON.stringify(candidate.value)} all'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.nodeAttributeReplacements ?? [] as candidate}
           <span>Sostituire {candidate.attribute} del nodo {candidate.nodeId}: {JSON.stringify(candidate.expectedValue)} → {JSON.stringify(candidate.value)} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.edgeAttributeReplacements ?? [] as candidate}
-          <span>Sostituire {candidate.attribute} dell'arco {candidate.edgeId}{#if edgeProvenanceBySourceId[candidate.edgeId]} · fonte dichiarata: {edgeProvenanceBySourceId[candidate.edgeId]}{/if}: {JSON.stringify(candidate.expectedValue)} → {JSON.stringify(candidate.value)} · costo {candidate.cost}</span>
+          <span>Sostituire {candidate.attribute} dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: {JSON.stringify(candidate.expectedValue)} → {JSON.stringify(candidate.value)} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.nodeTypeReplacements ?? [] as candidate}
           <span>Correggere il tipo del nodo {candidate.nodeId}: {candidate.expectedType} → {candidate.newType} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.edgeTypeReplacements ?? [] as candidate}
-          <span>Correggere il tipo dell'arco {candidate.edgeId}{#if edgeProvenanceBySourceId[candidate.edgeId]} · fonte dichiarata: {edgeProvenanceBySourceId[candidate.edgeId]}{/if}: {candidate.expectedType} → {candidate.newType} · costo {candidate.cost}</span>
+          <span>Correggere il tipo dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: {candidate.expectedType} → {candidate.newType} · costo {candidate.cost}</span>
         {/each}
         {#each repairProposal.edgeIntervalReplacements ?? [] as candidate}
           <span>
-            Sostituire l'intervallo chiuso dell'arco {candidate.edgeId}{#if edgeProvenanceBySourceId[candidate.edgeId]} · fonte dichiarata: {edgeProvenanceBySourceId[candidate.edgeId]}{/if}: [{candidate.expectedFrom === undefined ? "assente" : JSON.stringify(candidate.expectedFrom)}, {candidate.expectedTo === undefined ? "assente" : JSON.stringify(candidate.expectedTo)}] → [{JSON.stringify(candidate.from)}, {JSON.stringify(candidate.to)}] · costo {candidate.cost}
+            Sostituire l'intervallo chiuso dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: [{candidate.expectedFrom === undefined ? "assente" : JSON.stringify(candidate.expectedFrom)}, {candidate.expectedTo === undefined ? "assente" : JSON.stringify(candidate.expectedTo)}] → [{JSON.stringify(candidate.from)}, {JSON.stringify(candidate.to)}] · costo {candidate.cost}
             <button type="button" on:click={() => dispatch("highlight", { kind: "invalid_edge_interval", subjectId: candidate.edgeId, edgeIds: [candidate.edgeId], nodeIds: [] })}>Evidenzia arco</button>
           </span>
         {/each}
@@ -297,6 +329,31 @@
 {/if}
 
 <style>
+  .asp-contract {
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .asp-contract summary {
+    cursor: pointer;
+    font-weight: 650;
+  }
+
+  .asp-contract div {
+    margin-top: 8px;
+  }
+
+  .asp-contract p {
+    margin: 4px 0;
+  }
+
+  .asp-contract small {
+    display: block;
+    color: #475569;
+  }
+
   .integrity-panel {
     position: absolute;
     top: var(--solver-top);
@@ -421,7 +478,7 @@
       right: 12px;
       width: min(var(--solver-width), calc(100vw - 24px));
       top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
-      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px);
+      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px - var(--mobile-status-reserve, 48px));
     }
   }
 </style>

@@ -34,14 +34,29 @@
       viewFilters
     ));
   }
+
+  $: notBraveCount = comparison?.memberships.filter((membership) => membership.optimalAnswerSetCount === 0).length ?? 0;
+  $: braveOnlyCount = comparison?.memberships.filter((membership) =>
+    membership.optimalAnswerSetCount > 0 && !membership.stableAcrossEveryOptimalAnswerSet
+  ).length ?? 0;
 </script>
 
 {#if open}
-  <section class="scenario-comparison-panel" aria-label="Stabilità delle clique tra scenari di provenienza">
+  <section
+    class="scenario-comparison-panel"
+    aria-label={comparison?.worldAssumption === "finite-exhaustive-worlds"
+      ? "Membership brave e cautious nei mondi di provenienza"
+      : "Stabilità delle clique tra scenari di provenienza"}
+  >
     <header>
       <div>
-        <h3>Stabilità della clique tra scenari</h3>
-        <p>Clingo calcola tutte le clique massime separatamente per ciascuno scenario configurato.</p>
+        {#if comparison?.worldAssumption === "finite-exhaustive-worlds"}
+          <h3>Membership brave e cautious nei mondi</h3>
+          <p>Clingo calcola tutti i massimi per ogni scenario; la configurazione dichiara esaustivo l'insieme finito dei mondi.</p>
+        {:else}
+          <h3>Stabilità della clique tra scenari</h3>
+          <p>Clingo calcola tutte le clique massime separatamente per ciascuno scenario configurato.</p>
+        {/if}
       </div>
       <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
     </header>
@@ -56,12 +71,21 @@
 
     {#if comparison && !error}
       <div class="summary" role="status">
-        <strong>{comparison.stableNodeIds.length}</strong> nodi stabili ·
-        <strong>{comparison.nonUniversalNodeIds.length}</strong> membership non universali ·
+        {#if comparison.worldAssumption === "finite-exhaustive-worlds"}
+          <strong>{comparison.stableNodeIds.length}</strong> membership cautious ·
+          <strong>{braveOnlyCount}</strong> brave-only ·
+          <strong>{notBraveCount}</strong> not-brave ·
+        {:else}
+          <strong>{comparison.stableNodeIds.length}</strong> nodi stabili ·
+          <strong>{comparison.nonUniversalNodeIds.length}</strong> membership non universali ·
+        {/if}
         {comparison.scenarioCount} scenari · {comparison.totalOptimalAnswerSetCount} answer set ottimi complessivi
       </div>
 
       <div class="context">
+        {#if comparison.worldAssumption === "finite-exhaustive-worlds"}
+          <span>Assunzione esplicita: questi scenari sono l'intero insieme finito dei mondi plausibili per questa analisi.</span>
+        {/if}
         <span>La coorte dei nodi è ricalcolata per scenario con la finestra temporale e i filtri correnti.</span>
         <span>Gruppo clique: {selectedGroup || "tutti"}</span>
         <span>Soglia confidenza: {confidenceThreshold ?? "non attiva"}</span>
@@ -75,7 +99,9 @@
         {#each comparison.scenarios as scenario (scenario.scenarioId)}
           <article class="scenario-row">
             <strong>{scenario.scenarioLabel}</strong>
-            <span>{scenario.nodesCount} nodi · {scenario.linksCount} archi</span>
+            <span>{scenario.nodesCount} nodi proiettati{scenario.candidateNodeCount === undefined
+              ? ""
+              : ` · ${scenario.candidateNodeCount} candidati clique`} · {scenario.linksCount} archi</span>
             <span>Taglia massima {scenario.maximumCliqueSize} · {scenario.maximumCliqueCount} ottimi</span>
             <small>{scenario.timeMs.toFixed(1)} ms</small>
           </article>
@@ -83,11 +109,13 @@
       </section>
 
       <div class="membership-heading">
-        <h4>Membership nei massimi</h4>
+        <h4>{comparison.worldAssumption === "finite-exhaustive-worlds" ? "Candidati e membership brave nei massimi" : "Candidati e membership nei massimi"}</h4>
         <button type="button" on:click={exportComparison}>Esporta CSV</button>
       </div>
       {#if comparison.memberships.length === 0}
-        <p>Nessun nodo compare nelle clique massime trovate.</p>
+        <p>{comparison.worldAssumption === "finite-exhaustive-worlds"
+          ? "Nessun nodo ha membership brave in una clique massima dei mondi configurati."
+          : "Nessun nodo compare nelle clique massime trovate."}</p>
       {:else}
         <ul class="membership-list">
           {#each comparison.memberships as membership (membership.nodeId)}
@@ -95,9 +123,22 @@
               <button type="button" class:stable={membership.stableAcrossEveryOptimalAnswerSet} on:click={() => highlightNode(membership.nodeId)}>
                 <span class="node-name">{nodeLabels[membership.nodeId] ?? membership.nodeId}</span>
                 <span class="node-id">ID: {membership.nodeId}</span>
+                {#if membership.candidateScenarioSupportCount !== undefined}
+                  <span>Nel dominio candidato: {membership.candidateScenarioSupportCount}/{comparison.scenarioCount} scenari</span>
+                {/if}
                 <span>Scenari: {membership.scenarioSupportCount}/{comparison.scenarioCount}</span>
                 <span>Ottimi: {membership.optimalAnswerSetCount}/{membership.totalOptimalAnswerSetCount}</span>
-                <strong>{membership.stableAcrossEveryOptimalAnswerSet ? "Presente in tutti gli ottimi" : "Non presente in tutti gli ottimi"}</strong>
+                {#if comparison.worldAssumption === "finite-exhaustive-worlds"}
+                  <strong>{membership.stableAcrossEveryOptimalAnswerSet
+                    ? "Cautious: presente in ogni ottimo di ogni mondo"
+                    : membership.optimalAnswerSetCount === 0
+                      ? "Not brave: candidato ma assente da ogni clique massima"
+                      : "Brave: presente in almeno un ottimo; non cautious"}</strong>
+                {:else}
+                  <strong>{membership.stableAcrossEveryOptimalAnswerSet
+                    ? "Presente in tutti gli ottimi"
+                    : membership.optimalAnswerSetCount === 0 ? "Mai selezionato in una clique massima" : "Non presente in tutti gli ottimi"}</strong>
+                {/if}
               </button>
             </li>
           {/each}
@@ -105,7 +146,12 @@
       {/if}
 
       <small class="semantics">
-        “Stabile” significa che il nodo appartiene a ogni clique massima di ogni scenario configurato, inclusi tutti i pareggi. Una membership non universale può dipendere dal cambio di scenario oppure da un pareggio fra ottimi nello stesso scenario. La copertura per scenario conta gli scenari in cui compare in almeno un massimo. Non è una probabilità né una valutazione di attendibilità delle fonti. In modalità graph-aware ogni scenario ricalcola la coorte con la stessa finestra temporale e gli stessi filtri, usando i propri archi; in modalità simple la coorte resta comune.
+        {#if comparison.worldAssumption === "finite-exhaustive-worlds"}
+          “Brave” significa che esiste almeno un mondo configurato e una sua clique massima che contiene il nodo; “cautious” significa che il nodo compare in tutte le clique massime di tutti i mondi configurati, inclusi i pareggi. “Not brave” indica un nodo candidato in almeno uno scenario ma assente da ogni massimo. I nodi fuori da tutti i domini candidati non fanno parte della query. La conclusione è condizionata all'assunzione dell'analista che la lista dei mondi sia esaustiva. Non si assegnano probabilità né affidabilità alle fonti.
+        {:else}
+          “Stabile” significa che il nodo appartiene a ogni clique massima di ogni scenario configurato, inclusi tutti i pareggi. Una membership non universale può dipendere dal cambio di scenario oppure da un pareggio fra ottimi nello stesso scenario. Quando il dominio candidato è dichiarato, i candidati mai selezionati restano visibili con supporto zero; i nodi fuori da tutti i domini candidati non fanno parte del confronto. La copertura per scenario conta gli scenari in cui compare in almeno un massimo. Non è una probabilità né una valutazione di attendibilità delle fonti.
+        {/if}
+        In modalità graph-aware ogni scenario ricalcola la coorte con la stessa finestra temporale e gli stessi filtri, usando i propri archi; in modalità simple la coorte resta comune.
       </small>
     {/if}
   </section>
@@ -179,7 +225,17 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px 12px;
+    min-width: 0;
     font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .context > *,
+  .scenario-row > *,
+  .membership-list button > * {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .scenario-list,
@@ -204,6 +260,7 @@
     align-items: flex-start;
     gap: 2px;
     width: 100%;
+    min-width: 0;
     box-sizing: border-box;
     padding: 8px 10px;
     border: 1px solid #cbd5e1;
@@ -211,6 +268,17 @@
     background: #fff;
     color: inherit;
     text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .scenario-row {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .membership-list,
+  .membership-list li {
+    min-width: 0;
   }
 
   .membership-list button {
@@ -258,7 +326,7 @@
       width: min(var(--solver-width), calc(100vw - 20px));
       right: 10px;
       top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
-      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px);
+      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px - var(--mobile-status-reserve, 48px));
     }
   }
 </style>

@@ -1,4 +1,7 @@
 import type { CliqueSupportingEdge } from "./graphModel";
+import type { CliqueMaximumMembershipDiagnosis } from "./cliqueMembershipDiagnosis";
+import { serializeCsv } from "../csvExport.ts";
+import { getOwnRecordValue } from "./recordUtils.ts";
 
 function cliqueSignature(clique: string[]): string {
   return [...clique].sort().join("\u0000");
@@ -27,7 +30,7 @@ export function buildCliqueSupportingExportRows(
       .map((edge) => edge.edgeId!);
     const provenanceEdgeIds = [...new Set(support.flatMap((edge) => edge.edgeId ? [edge.edgeId] : []))];
     const sourceProvenance = provenanceEdgeIds.flatMap((edgeId) => {
-      const references = provenanceReferencesBySourceId[edgeId];
+      const references = getOwnRecordValue<string[]>(provenanceReferencesBySourceId, edgeId);
       return references?.length ? [{ edge_id: edgeId, references }] : [];
     });
 
@@ -38,7 +41,7 @@ export function buildCliqueSupportingExportRows(
       sourceEdgeIds.join(" | "),
       generatedRecordKeys.join(" | "),
       provenanceEdgeIds.flatMap((edgeId) => {
-        const provenance = provenanceBySourceId[edgeId];
+        const provenance = getOwnRecordValue<string>(provenanceBySourceId, edgeId);
         return provenance ? [`${edgeId}: ${provenance}`] : [];
       }).join(" | "),
       JSON.stringify(clique),
@@ -53,4 +56,51 @@ export function buildCliqueSupportingExportRows(
   }
 
   return rows;
+}
+
+/** Exports the target-constrained maximum clique and the global-size comparison. */
+export function buildCliqueMaximumMembershipDiagnosisCsv(
+  diagnosis: CliqueMaximumMembershipDiagnosis,
+  sourceIdByNodeId: Record<string, string>,
+  selectedGroup: string
+): string {
+  const sourceNodeIds = diagnosis.witnessNodeIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId);
+  const sourceTargetId = sourceIdByNodeId[diagnosis.targetNodeId] ?? diagnosis.targetNodeId;
+  const sourceEdges = diagnosis.supportingEdges.map((edge) => ({
+    source_node_id: sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId,
+    target_node_id: sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId,
+    ...(edge.edgeId ? { source_edge_id: edge.edgeId } : {}),
+    ...(edge.edgeIdGenerated ? { generated_record_key: edge.edgeId } : {})
+  }));
+  const rows: unknown[][] = [[
+    "target_node_id",
+    "selected_group",
+    "outcome",
+    "global_maximum_clique_size",
+    "maximum_clique_size_containing_target",
+    "size_gap",
+    "witness_node_ids_json",
+    "supporting_edges_json",
+    "structured_witness_json"
+  ], [
+    sourceTargetId,
+    selectedGroup,
+    diagnosis.outcome,
+    diagnosis.globalMaximumSize,
+    diagnosis.maximumContainingSize,
+    diagnosis.sizeGap,
+    JSON.stringify(sourceNodeIds),
+    JSON.stringify(sourceEdges),
+    JSON.stringify({
+      target_node_id: sourceTargetId,
+      selected_group: selectedGroup || null,
+      outcome: diagnosis.outcome,
+      global_maximum_clique_size: diagnosis.globalMaximumSize,
+      maximum_clique_size_containing_target: diagnosis.maximumContainingSize,
+      size_gap: diagnosis.sizeGap,
+      witness_node_ids: sourceNodeIds,
+      supporting_edges: sourceEdges
+    })
+  ]];
+  return serializeCsv(rows);
 }

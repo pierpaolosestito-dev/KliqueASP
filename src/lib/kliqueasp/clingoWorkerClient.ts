@@ -11,6 +11,15 @@ export interface ClingoWorkerLease {
   release(): void;
 }
 
+/** Keep the single-string CLI call below the empirically tested 1 MiB WASM input boundary. */
+export const MAX_CLINGO_WASM_PROGRAM_BYTES = 1_000_000;
+
+export function getClingoWasmProgramSizeError(program: string): string | null {
+  const byteLength = new TextEncoder().encode(program).byteLength;
+  if (byteLength <= MAX_CLINGO_WASM_PROGRAM_BYTES) return null;
+  return `Il programma ASP occupa ${byteLength.toLocaleString("it-IT")} byte e supera il limite prudenziale di ${MAX_CLINGO_WASM_PROGRAM_BYTES.toLocaleString("it-IT")} byte del solver WASM. Riduci il grafo o applica filtri prima dell'analisi.`;
+}
+
 /** Reuses clingo-WASM across GraphApp remounts and serializes calls after its init handshake. */
 export class ClingoWorkerClient {
   private worker: Worker | null = null;

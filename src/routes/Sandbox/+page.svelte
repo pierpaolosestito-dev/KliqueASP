@@ -1,12 +1,18 @@
 <script lang="ts">
+  import { base } from "$app/paths";
   import GraphApp from "$lib/kliqueasp/GraphApp.svelte";
   import JsonEditor from "$lib/kliqueasp/components/JsonEditor.svelte";
   import davisConfig from "$lib/kliqueasp/data/examples/davis-southern-women.config.json";
   import davisDataset from "$lib/kliqueasp/data/examples/davis-southern-women.json";
+  import gahukuGamaConfig from "$lib/kliqueasp/data/examples/gahuku-gama-signed.config.json";
+  import gahukuGamaDataset from "$lib/kliqueasp/data/examples/gahuku-gama-signed.json";
   import karateConfig from "$lib/kliqueasp/data/examples/karate-club.config.json";
   import karateDataset from "$lib/kliqueasp/data/examples/karate-club.json";
   import temporalEdgeConfig from "$lib/kliqueasp/data/examples/temporal-edge-projection.config.json";
   import temporalEdgeDataset from "$lib/kliqueasp/data/examples/temporal-edge-projection.json";
+  import invsConfig from "$lib/kliqueasp/data/examples/sociopatterns-invs-100-minute.config.json";
+  import invsDataset from "$lib/kliqueasp/data/examples/sociopatterns-invs-100-minute.json";
+  import invsFullConfig from "$lib/kliqueasp/data/examples/sociopatterns-invs-full.config.json";
 
   const DEFAULT_CONFIG_TEXT = `{
   "features": {
@@ -120,7 +126,13 @@
 
     onLoadKarate: loadKarateExample,
 
+    onLoadGahukuGama: loadGahukuGamaExample,
+
     onLoadTemporalEdges: loadTemporalEdgeExample,
+
+    onLoadInVS: loadInVSExample,
+
+    onLoadInVSFull: loadFullInVSExample,
 
     onOpen: () => {
       editorOpen = true;
@@ -164,10 +176,35 @@
     applyJson();
   }
 
+  function loadGahukuGamaExample() {
+    configText = JSON.stringify(gahukuGamaConfig, null, 2);
+    datasetText = JSON.stringify(gahukuGamaDataset, null, 2);
+    applyJson();
+  }
+
   function loadTemporalEdgeExample() {
     configText = JSON.stringify(temporalEdgeConfig, null, 2);
     datasetText = JSON.stringify(temporalEdgeDataset, null, 2);
     applyJson();
+  }
+
+  function loadInVSExample() {
+    configText = JSON.stringify(invsConfig, null, 2);
+    datasetText = JSON.stringify(invsDataset, null, 2);
+    applyJson();
+  }
+
+  async function loadFullInVSExample() {
+    try {
+      const response = await fetch(`${base}/examples/sociopatterns-invs-full.json`);
+      if (!response.ok) throw new Error(`HTTP ${response.status} caricando il dataset InVS completo.`);
+      const fullDataset = await response.json();
+      configText = JSON.stringify(invsFullConfig, null, 2);
+      datasetText = JSON.stringify(fullDataset, null, 2);
+      applyJson();
+    } catch (error: any) {
+      errorMessage = error?.message ?? "Impossibile caricare il dataset InVS completo.";
+    }
   }
 
   function normalizeDataset(dataset: any) {

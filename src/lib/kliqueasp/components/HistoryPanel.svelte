@@ -82,4 +82,10 @@
   .sep {
     opacity: var(--history-sep-opacity);
   }
+
+  @media (max-width: 600px) {
+    .history-panel {
+      bottom: calc(var(--history-bottom) + var(--mobile-status-reserve, 48px));
+    }
+  }
 </style>

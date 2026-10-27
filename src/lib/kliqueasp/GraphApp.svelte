@@ -2,8 +2,9 @@
   import { onMount, onDestroy } from "svelte";
   import { base } from "$app/paths";
   import * as THREE from "three";
-  import { forceManyBody, forceCenter, forceLink } from "d3-force-3d";
+  import { forceManyBody, forceCenter, forceLink, forceCollide } from "d3-force-3d";
   import TimelineSlider from "./components/TimelineSlider.svelte";
+  import { deepMergeConfig } from "./config/deepMergeConfig";
   import InfoPanel from "./components/InfoPanel.svelte";
   import HistoryPanel from "./components/HistoryPanel.svelte";
   import SolverPanel from "./components/SolverPanel.svelte";
@@ -19,7 +20,11 @@
     type ClingoInvocationTiming,
     type WorkerWasmMemoryStats
   } from "./workerDiagnostics";
-  import { clingoWorkerClient, type ClingoWorkerLease } from "./clingoWorkerClient";
+  import {
+    clingoWorkerClient,
+    getClingoWasmProgramSizeError,
+    type ClingoWorkerLease
+  } from "./clingoWorkerClient";
   import {
     filterLinksByMinimumConfidence,
     parseMinimumConfidenceThreshold
@@ -30,6 +35,18 @@
   } from "./graph/provenance";
   import { projectVisibleNodeIds } from "./graph/visibleNodeProjection";
   import {
+    formatGraphDisplayEdgeTypeTooltip,
+    formatGraphDisplayLinkTooltip,
+    getGraphDisplayEdgeTypeLegend,
+    getGraphDisplayLinkColor,
+    getGraphNeighborhoodNodeIds,
+    graphDisplayLinkMatchesIdentities,
+    prepareGraphDisplayLinks,
+    type AggregatedGraphDisplayLink,
+    type GraphDisplayLink,
+    type NeighborhoodDirection
+  } from "./graph/graphVisualization";
+  import {
     filterLinksByTemporalWindow,
     isTimelineControlAvailable
   } from "./graph/temporalProjection";
@@ -38,6 +55,14 @@
     getDeclaredNodeTypeConfig,
     isDeclaredNodeAlwaysVisible
   } from "./graph/configuredNodeSemantics";
+  import { normalizeNodeTypeConfigStyles } from "./graph/nodeTypeConfig";
+  import {
+    getGraphTaskContract,
+    resolveCliqueMode,
+    resolveTaskEnumeration,
+    GRAPH_CAPABILITY_IDS,
+    GRAPH_CAPABILITY_LABELS
+  } from "./graph/graphTaskContracts";
   import {
     getRemainingSolverBudgetMs,
     resolveSolverTaskTimeoutMs,
@@ -47,9 +72,15 @@
     summarizeProvenanceScenarioMaximumCliques,
     summarizeProvenanceScenarioMaximumKPlexes,
     summarizeProvenanceScenarioKCores,
+    summarizeProvenanceScenarioComponents,
+    summarizeProvenanceScenarioDominatingSets,
+    buildProvenanceScenarioDominatingSetCsv,
     type ProvenanceScenarioCliqueComparison,
     type ProvenanceScenarioKPlexComparison,
     type ProvenanceScenarioKCoreComparison,
+    type ProvenanceScenarioComponentComparison,
+    type ProvenanceScenarioComponentTask,
+    type ProvenanceScenarioDominatingSetComparison,
     type ScenarioMaximumCliqueInput,
     type ScenarioMaximumKPlexInput
   } from "./graph/provenanceScenarioAnalysis";
@@ -74,9 +105,42 @@
     type GraphCapabilities,
     type GraphDiagnostic,
     type GraphIntegrityConstraints,
+    type GraphContextualCliqueConfig,
     type GraphMotifTemplate,
+    type GraphTemporalMetricUnit,
     type AspTemporalEncoding
   } from "./graph/graphModel";
+  import {
+    buildCliqueRequiredNodeConstraint,
+    parseCliqueMaximumMembershipDiagnosis,
+    type CliqueMaximumMembershipDiagnosis,
+    type CliqueMembershipEdgeRecord
+  } from "./graph/cliqueMembershipDiagnosis";
+  import {
+    buildKPlexRequiredNodeConstraint,
+    parseKPlexMaximumMembershipDiagnosis,
+    type KPlexMaximumMembershipDiagnosis
+  } from "./graph/kplexMembershipDiagnosis";
+  import {
+    MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES,
+    searchMinimumCostKPlexMaximumMembershipCounterfactual,
+    type KPlexMaximumMembershipCounterfactualSearchOutcome
+  } from "./graph/kplexMembershipCounterfactual";
+  import {
+    buildCommunityConstraintRelaxationProgram,
+    parseCommunityConstraintDiagnosisResult,
+    type CommunityConstraintDiagnosis,
+    type CommunityConstraintRelaxationSpec
+  } from "./graph/communityConstraintDiagnosis";
+  import {
+    classifyCommunityPairOptimumMembership,
+    type CommunityPairOptimumMembership
+  } from "./graph/communityOptimumStability";
+  import {
+    searchMinimumCostCommunityTopologyCounterfactual,
+    type CommunityTopologyCounterfactualResult,
+    type CommunityTopologyEdgeEdit
+  } from "./graph/communityTopologyCounterfactual";
   import {
     buildMinimumIntegrityRepairProgram,
     buildGraphIntegrityProgram,
@@ -87,11 +151,13 @@
     type IntegrityViolation
   } from "./graph/integrityTask";
   import {
+    buildTypedMotifCountProgram,
     buildTypedMotifProgram,
     buildTypedMotifNearMatchProgram,
     buildTypedMotifTemporalNearMatchProgram,
     buildTypedMotifCompletionCounterfactualProgram,
     parseTypedMotifMatches,
+    parseTypedMotifCount,
     parseTypedMotifNearMatches,
     parseTypedMotifCompletionCounterfactuals,
     type TypedMotifMatch,
@@ -99,6 +165,36 @@
     type TypedMotifEdgeAdditionCandidate,
     type TypedMotifCounterfactual
   } from "./graph/motifTask";
+  import {
+    resolveTypedMotifCountPartitionDomain,
+    resolveTypedMotifCountPartitionSettings,
+    runTypedMotifCountPartitions,
+    type TypedMotifCountPartitionProgress
+  } from "./graph/motifCountTask";
+  import {
+    summarizeProvenanceScenarioMotifs,
+    type ProvenanceMotifScenarioComparison,
+    type ProvenanceMotifScenarioInput
+  } from "./graph/motifScenarioAnalysis";
+  import {
+    buildSignedTriadProgram,
+    parseSignedTriadResults,
+    prepareSignedTriads,
+    type SignedTriadPreparation,
+    type SignedTriadResult
+  } from "./graph/signedTriadTask";
+  import {
+    buildContextualCliqueIncidenceIndex,
+    buildContextualCliqueProgram,
+    parseContextualCliqueResults,
+    validateContextualCliqueConfig,
+    type ContextualCliqueResult
+  } from "./graph/contextualCliqueTask";
+  import {
+    summarizeSignedTriadScenarios,
+    type SignedTriadScenarioComparison,
+    type SignedTriadScenarioInput
+  } from "./graph/signedTriadScenarioAnalysis";
   import {
     buildConnectedComponentsProgram,
     buildWeaklyConnectedComponentsProgram,
@@ -114,7 +210,12 @@
     formatPathLengthBound,
     buildTypedPathProgram,
     buildTypedPathNoRouteProgram,
+    buildTypedPathTemporalNoRouteProgram,
+    buildTypedPathCompletionCounterfactualProgram,
+    buildTypedPathCompletionWhyNotProgram,
+    buildTypedPathTemporalCompletionWhyNotProgram,
     buildMinimumDominatingSetProgram,
+    buildDominatingSetFeasibilityProgram,
     buildMinimumNodeSeparatorProgram,
     buildMinimumCostNodeSeparatorProgram,
     buildMinimumEdgeSeparatorFacts,
@@ -130,29 +231,42 @@
     buildEdgeProvenanceReferencesBySourceId,
     buildMinimumEdgeSeparatorProgram,
     buildMinimumCostEdgeSeparatorProgram,
+    buildMaximumKPlexProgram,
     buildMaximalKPlexProgram,
     buildMaximalKPlexCertificateProgram,
     buildGreedyMaximalKPlexWitness,
     buildKPlexCompletionCounterfactualProgram,
+    buildKPlexCompletionWhyNotProgram,
     buildKCoreCompletionCounterfactualProgram,
+    buildKCoreCompletionWhyNotProgram,
     buildKCoreMembershipCompletionCounterfactualProgram,
+    solveKCoreMembershipCompletionWhyNotByRounds,
     parseKPlexCompletionCounterfactuals,
+    parseKPlexCompletionWhyNot,
     parseKCoreCompletionCounterfactuals,
+    parseKCoreCompletionWhyNot,
     parseKCoreMembershipCompletionCounterfactuals,
     validateKPlexCompletionCandidates,
     buildModularityFacts,
+    solveModularityByPositiveWeightComponents,
     buildMaximumModularityProgram,
+    buildCommunityPairMembershipPrograms,
     MAX_PAIRWISE_MODULARITY_CANDIDATES,
     validateCommunityConfiguration,
     resolveCommunityAttributeBounds,
     getStructuralEdgeIdentity,
     getStructuralSolverOptions,
+    hasCompleteModelEnumeration,
+    hasCompleteOptimalModelEnumeration,
+    hasCompleteKCoreScenarioResult,
     getStructuralCounterfactualSolverOptions,
     getKCoreMembershipCounterfactualSolverOptions,
     parseWitnessComponents,
     parseWitnessWeakComponents,
     parseWitnessStrongComponents,
     parseWitnessDominatingSetExplanations,
+    parseDominatingSetFeasibilityCertificate,
+    verifyDominatingSetFeasibilityCertificate,
     parseWitnessKCoreExplanations,
     parseWitnessKCorePeelingRound,
     parseWitnessKPlexExplanations,
@@ -160,7 +274,13 @@
     parseWitnessMinimumHopPathWitness,
     parseBoundedPathNoRouteCertificate,
     parseWitnessTypedPath,
+    parseWitnessTemporalTypedPath,
     parseTypedPathNoRouteCertificate,
+    parseTypedPathTemporalNoRouteCertificate,
+    parseTypedPathCompletionCounterfactuals,
+    parseTypedPathCompletionWhyNotCertificate,
+    parseTypedPathTemporalCompletionWhyNotCertificate,
+    mergeTypedPathEdgeTypes,
     parseWitnessRemovedNodeSetExplanations,
     parseWitnessRemovedEdgeSetExplanations,
     parseWitnessModularityPartitions,
@@ -178,15 +298,28 @@
     type KCorePeelingCertificate,
     type DominatingSetCoverageWitness,
     type ModularityPartition,
+    type ParsedModularityPartition,
+    type ModularityCommunityOptions,
     type MinimumHopPathMinimalityCertificate,
     type BoundedPathNoRouteCertificate,
     type TypedPathNoRouteCertificate,
+    type TypedPathTemporalNoRouteCertificate,
+    type TypedPathOptions,
+    type TypedPathTemporalEdgeRecord,
+    type TypedPathTemporalSemantics,
+    type TypedPathTemporalResult,
+    type TypedPathCounterfactualProposal,
+    type TypedPathCounterfactualWhyNot,
     type KPlexCompletionCandidate,
     type KPlexCompletionProposal,
+    type KPlexCompletionWhyNot,
+    type KCoreCompletionWhyNot,
+    type KCoreMembershipCompletionWhyNot,
     type KCoreMembershipCompletionProposal,
     type MaximalKPlexWitnessExplanation,
     type StructuralEdgeCompletionCandidate
   } from "./graph/structuralTasks";
+  import { deriveCommunityAttributeBoundCounts } from "./graph/communityAttributeCounts";
 
   export let graphConfig: any = {};
   export let graphData: any = {
@@ -581,34 +714,6 @@
 
   const RAW_CONFIG: any = applyLegacyConfigAliases(graphConfig);
 
-  function isPlainObject(value: any): boolean {
-    return (
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value)
-    );
-  }
-
-  function deepMerge<T = any>(base: T, override: any): T {
-    if (!isPlainObject(base)) return override ?? base;
-    if (!isPlainObject(override)) return base;
-
-    const result: any = { ...(base as any) };
-
-    for (const key of Object.keys(override)) {
-      const baseValue = (base as any)[key];
-      const overrideValue = override[key];
-
-      if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
-        result[key] = deepMerge(baseValue, overrideValue);
-      } else {
-        result[key] = overrideValue;
-      }
-    }
-
-    return result;
-  }
-
   function hasOwnPath(obj: any, path: string): boolean {
     const parts = path.split(".");
     let cur = obj;
@@ -623,44 +728,40 @@
     return true;
   }
 
-  const GRAPH_CONFIG: any = deepMerge(
+  const GRAPH_CONFIG: any = deepMergeConfig(
     DEFAULT_GRAPH_CONFIG,
     RAW_CONFIG
   );
 
-  function normalizeNodeTypeConfigs() {
-    const nodeTypes = GRAPH_CONFIG.nodeTypes ?? {};
-    const defaultStyle = nodeTypes.default ?? {};
-
-    for (const [type, cfg] of Object.entries(nodeTypes) as [string, any][]) {
-      if (type === "default" || type === "highlight") continue;
-      if (!cfg || typeof cfg !== "object") continue;
-
-      // Ogni tipo custom eredita almeno stile e icona dal tipo default.
-      GRAPH_CONFIG.nodeTypes[type] = {
-        ...defaultStyle,
-        ...cfg
-      };
-
-      // Se un tipo dichiara una timeline, allora è un tipo temporale
-      // anche se il JSON minimale non specifica category: "temporal".
-      if (GRAPH_CONFIG.nodeTypes[type].timeline && !GRAPH_CONFIG.nodeTypes[type].category) {
-        GRAPH_CONFIG.nodeTypes[type].category = "temporal";
-      }
-    }
-  }
-
-  normalizeNodeTypeConfigs();
+  GRAPH_CONFIG.nodeTypes = normalizeNodeTypeConfigStyles(GRAPH_CONFIG.nodeTypes);
 
   const UI = GRAPH_CONFIG.ui;
   const solverEnabled = GRAPH_CONFIG.solver?.enabled !== false;
   const showClingoTimingDiagnostics = GRAPH_CONFIG.solver?.diagnostics?.aspTiming === true;
   const showClingoSolverStatsDiagnostics = GRAPH_CONFIG.solver?.diagnostics?.aspStats === true;
   const labelVisibilityToggleEnabled = GRAPH_CONFIG.features?.labelVisibilityToggle === true;
+  const aggregateParallelEdgesForDisplay = GRAPH_CONFIG.features?.aggregateParallelEdgesForDisplay === true;
+  const edgeTypeColors = GRAPH_CONFIG.colors?.edgeTypes;
+  const edgeTypeColorsConfigured = edgeTypeColors !== null && typeof edgeTypeColors === "object" &&
+    !Array.isArray(edgeTypeColors) && Object.keys(edgeTypeColors).length > 0;
+  const fitGraphToViewEnabled = GRAPH_CONFIG.features?.fitGraphToView === true;
   const integrityConfigured = Object.prototype.hasOwnProperty.call(RAW_CONFIG, "graphIntegrity");
   const motifTemplates: GraphMotifTemplate[] = Array.isArray(GRAPH_CONFIG.graphAnalysis?.motifs)
     ? GRAPH_CONFIG.graphAnalysis.motifs
     : [];
+  const motifCountPartitionSettings = resolveTypedMotifCountPartitionSettings(
+    GRAPH_CONFIG.graphAnalysis?.motifCount
+  );
+  const motifTemporalMetricUnits = [...new Set(motifTemplates.flatMap((template) => {
+    const temporal = template.temporal;
+    return temporal && "maximumSpan" in temporal && temporal.maximumSpan
+      ? [temporal.maximumSpan.unit]
+      : [];
+  }))];
+  const numericTimeUnit: GraphTemporalMetricUnit | undefined =
+    GRAPH_CONFIG.graphMapping?.edge?.validity?.numericUnit;
+  const signedTriadConfig = GRAPH_CONFIG.graphAnalysis?.signedTriads;
+  const contextualCliqueConfig = GRAPH_CONFIG.graphAnalysis?.contextualClique as GraphContextualCliqueConfig | undefined;
   const provenanceScenarioConfig = GRAPH_CONFIG.graphAnalysis?.provenanceScenarios;
   const provenanceScenarios = (provenanceScenarioConfig?.unattributedEdges === "include" ||
     provenanceScenarioConfig?.unattributedEdges === "exclude") && Array.isArray(provenanceScenarioConfig?.scenarios)
@@ -702,6 +803,8 @@
 
   let container: HTMLDivElement;
   let graph3D: any;
+  let graphLayoutRunning = false;
+  let fitOnEngineStop = false;
   let graphResizeObserver: ResizeObserver | null = null;
   let toolbarElement: HTMLDivElement;
   let toolbarResizeObserver: ResizeObserver | null = null;
@@ -715,6 +818,8 @@
 
   // ---------------- STATE ----------------
   let data: any = null;
+  $: graphEdgeTypeLegend = getGraphDisplayEdgeTypeLegend(data?.links ?? [], edgeTypeColors);
+  let graphDisplayLinkCount = 0;
   let originalData: any = null;
   let graphDiagnostics: GraphDiagnostic[] = [];
   let graphDirection: "undirected" | "directed" = "undirected";
@@ -782,40 +887,87 @@
   );
   $: communitiesDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
-    [
-      ...(getGraphTaskRequirements("communities") ?? []),
-      ...(configuredCommunityConstraints?.useEdgeWeights === true ? ["modularityWeights"] : [])
-    ]
+    getGraphTaskContract("communities", {
+      useEdgeWeights: configuredCommunityConstraints?.useEdgeWeights === true
+    })?.requiredCapabilities.slice() ?? []
   );
+  $: typedPathStaticRequirements = getGraphTaskContract("typedPath", {
+    direction: graphDirection,
+    temporalSemantics: "static"
+  })?.requiredCapabilities.slice() ?? [];
+  $: typedPathTemporalRequirements = getGraphTaskContract("typedPath", {
+    direction: graphDirection,
+    temporalSemantics: "coValid"
+  })?.requiredCapabilities.filter((capability) => !typedPathStaticRequirements.includes(capability)) ?? [];
   $: typedPathDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
-    [...(getGraphTaskRequirements("typedPath") ?? []), ...(graphDirection === "directed" ? ["directedEdges"] : [])]
+    typedPathStaticRequirements
   );
+  $: typedPathTemporalDataReadiness = checkGraphTaskRequirements(graphCapabilities, typedPathTemporalRequirements);
   $: typedMotifDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
-    getGraphTaskRequirements("typedMotif") ?? []
+    getGraphTaskContract("typedMotif", { direction: graphDirection })?.requiredCapabilities.slice() ?? []
   );
   $: temporalMotifDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
-    getGraphTaskRequirements("temporalMotif") ?? []
+    getGraphTaskContract("temporalMotif", { direction: graphDirection })?.requiredCapabilities.slice() ?? []
   );
-  $: capabilityRows = [
-    ["undirectedAdjacency", "Proiezione non orientata"],
-    ["nodeTypes", "Tipi di nodo"],
-    ["nodeRoles", "Ruoli dei nodi"],
-    ["nodeGroups", "Gruppi"],
-    ["nodeAttributes", "Attributi dei nodi"],
-    ["nodeRemovalCosts", "Costi di rimozione dei nodi"],
-    ["edgeTypes", "Tipi di arco"],
-    ["edgeAttributes", "Attributi degli archi"],
-    ["directedEdges", "Direzione degli archi"],
-    ["edgeIntervals", "Intervalli temporali degli archi"],
-    ["edgeWeights", "Pesi degli archi"],
-    ["edgeRemovalCosts", "Costi di rimozione degli archi"],
-    ["edgeConfidence", "Confidenza degli archi"],
-    ["edgeProvenance", "Provenienza degli archi"],
-    ["edgeIdentity", "Identità persistente degli archi"]
-  ] as Array<[string, string]>;
+  $: contextualCliqueDataReadiness = checkGraphTaskRequirements(
+    graphCapabilities,
+    getGraphTaskContract("contextualClique", { direction: graphDirection })?.requiredCapabilities.slice() ?? []
+  );
+  $: contextualCliqueTypeReadiness = (() => {
+    if (!contextualCliqueConfig) return { missing: [] as string[], reasons: [] as string[] };
+    let validatedConfig: ReturnType<typeof validateContextualCliqueConfig>;
+    try {
+      validatedConfig = validateContextualCliqueConfig(contextualCliqueConfig);
+    } catch (error) {
+      return {
+        missing: ["invalid-config"],
+        reasons: [error instanceof Error ? error.message : "La configurazione del gruppo contestuale non è valida."]
+      };
+    }
+    const nodeTypes = new Set((data?.nodes ?? []).map((node: any) => node.analysis?.type).filter((type: unknown): type is string => typeof type === "string"));
+    const edgeTypes = new Set((data?.links ?? []).map((link: any) => link.analysis?.type).filter((type: unknown): type is string => typeof type === "string"));
+    const missingFocus = validatedConfig.focusNodeTypes.filter((type) => !nodeTypes.has(type));
+    const missingContext = validatedConfig.contextNodeTypes.filter((type) => !nodeTypes.has(type));
+    const missingEdges = validatedConfig.edgeTypes.filter((type) => !edgeTypes.has(type));
+    const reasons = [
+      ...(missingFocus.length ? [`Tipi di nodo focali assenti dalla proiezione: ${missingFocus.join(", ")}.`] : []),
+      ...(missingContext.length ? [`Tipi di nodo di contesto assenti dalla proiezione: ${missingContext.join(", ")}.`] : []),
+      ...(missingEdges.length ? [`Tipi di arco assenti dalla proiezione: ${missingEdges.join(", ")}.`] : [])
+    ];
+    return { missing: [...missingFocus, ...missingContext, ...missingEdges], reasons };
+  })();
+  $: contextualCliqueRequirementReasons = [
+    ...(graphDirection !== "undirected" ? ["Questa query richiede una direzione del grafo esplicitamente non orientata."] : []),
+    ...contextualCliqueDataReadiness.reasons,
+    ...contextualCliqueTypeReadiness.reasons,
+    ...(graphDiagnostics.find((diagnostic) => diagnostic.severity === "error")?.message
+      ? [graphDiagnostics.find((diagnostic) => diagnostic.severity === "error")!.message]
+      : [])
+  ];
+  $: contextualCliqueAvailable = Boolean(contextualCliqueConfig) &&
+    graphDirection === "undirected" && contextualCliqueDataReadiness.available &&
+    contextualCliqueTypeReadiness.missing.length === 0 &&
+    !graphDiagnostics.some((diagnostic) => diagnostic.severity === "error");
+  $: motifAnalysisButtonLabel = [
+    ...(motifTemplates.length > 0 ? ["Motivi tipizzati"] : []),
+    ...(signedTriadConfig ? ["triadi firmate"] : []),
+    ...(contextualCliqueConfig ? ["gruppi contestuali"] : [])
+  ].join(", ") + " ASP";
+  $: signedTriadPreparation = prepareSignedTriads(
+    signedTriadConfig,
+    graphSchemaVersion,
+    graphDirection,
+    data?.nodes ?? [],
+    data?.links ?? [],
+    new Set(Object.keys(GRAPH_CONFIG.graphMapping?.edge?.attributes ?? {})),
+    extractGroups,
+    selectedSignedTriadGroup,
+    typeof GRAPH_CONFIG.graphMapping?.edge?.typeField === "string" && GRAPH_CONFIG.graphMapping.edge.typeField.trim() !== ""
+  ) as SignedTriadPreparation;
+  $: capabilityRows = GRAPH_CAPABILITY_IDS.map((key) => [key, GRAPH_CAPABILITY_LABELS[key]] as const);
   let query = "";
   let currentStart = GRAPH_CONFIG.timeline.start;
   let currentEnd = GRAPH_CONFIG.timeline.end;
@@ -830,6 +982,17 @@
   let highlightedNeighbors = new Set<string>();
   let cliqueNodes = new Set<string>();
   let highlightedEdgeIds = new Set<string>();
+  let focusedSignedTriadEdgeIds: Set<string> | null = null;
+  let focusedSignedTriadKey = "";
+  let neighborhoodFocusNodeIds: Set<string> | null = null;
+  let neighborhoodFocusInfo: {
+    rootNodeId: string;
+    maxHops: number;
+    direction: NeighborhoodDirection;
+    nodeCount: number;
+    recordCount: number;
+    renderedLinkCount: number;
+  } | null = null;
 
   function getCliqueSignature(nodeIds: string[]): string {
     return [...nodeIds].sort().join("\u0000");
@@ -871,6 +1034,33 @@
   let provenanceKPlexScenarioConfidenceThreshold: number | null = null;
   let provenanceKPlexScenarioTimelineWindow = "";
   let provenanceKPlexScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceComponentScenarioComparison: ProvenanceScenarioComponentComparison | null = null;
+  let provenanceComponentScenarioComparisonProgress = "";
+  let provenanceComponentScenarioComparisonError = "";
+  let provenanceComponentScenarioSelectedGroup = "";
+  let provenanceComponentScenarioTargetNodeId = "";
+  let provenanceComponentScenarioConfidenceThreshold: number | null = null;
+  let provenanceComponentScenarioTimelineWindow = "";
+  let provenanceComponentScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceDominatingSetScenarioComparison: ProvenanceScenarioDominatingSetComparison | null = null;
+  let provenanceDominatingSetScenarioComparisonProgress = "";
+  let provenanceDominatingSetScenarioComparisonError = "";
+  let provenanceDominatingSetScenarioCandidateGroup = "";
+  let provenanceDominatingSetScenarioTargetGroup = "";
+  let provenanceDominatingSetScenarioConfidenceThreshold: number | null = null;
+  let provenanceDominatingSetScenarioTimelineWindow = "";
+  let provenanceDominatingSetScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceDominatingSetScenarioWhyNot: {
+    scenarioId: string;
+    scenarioLabel: string;
+    scenarioSources: string[];
+    uncoverableTargetNodeIds: string[];
+    candidateGroup: string;
+    targetGroup: string;
+    confidenceThreshold: number | null;
+    timelineWindow: string;
+    viewFilters: { types: string[]; groups: string[] };
+  } | null = null;
   let structuralError = "";
   let structuralTask: StructuralTask = "kPlex";
   let structuralParameter = 2;
@@ -884,22 +1074,39 @@
   let selectedStructuralTargetGroup = "";
   let structuralResults: string[][] = [];
   let structuralKPlexCounterfactuals: KPlexCompletionProposal[] = [];
+  let structuralKPlexCounterfactualWhyNot: KPlexCompletionWhyNot | null = null;
+  let structuralKPlexCounterfactualWhyNotMessage = "";
   let structuralKPlexCounterfactualHasRun = false;
   let structuralKPlexCounterfactualError = "";
   let structuralKPlexCounterfactualTimeMs: number | undefined;
   let structuralKPlexCounterfactualExcludedCandidateCount = 0;
   let structuralKCoreCounterfactuals: KPlexCompletionProposal[] = [];
+  let structuralKCoreCounterfactualWhyNot: KCoreCompletionWhyNot | null = null;
+  let structuralKCoreCounterfactualWhyNotMessage = "";
   let structuralKCoreCounterfactualHasRun = false;
   let structuralKCoreCounterfactualError = "";
   let structuralKCoreCounterfactualTimeMs: number | undefined;
   let structuralKCoreCounterfactualExcludedCandidateCount = 0;
   let structuralKCoreMembershipCounterfactuals: KCoreMembershipCompletionProposal[] = [];
+  let structuralKCoreMembershipCounterfactualWhyNot: KCoreMembershipCompletionWhyNot | null = null;
+  let structuralKCoreMembershipCounterfactualWhyNotMessage = "";
   let structuralKCoreMembershipCounterfactualHasRun = false;
   let structuralKCoreMembershipCounterfactualError = "";
   let structuralKCoreMembershipCounterfactualTimeMs: number | undefined;
   let structuralKCoreMembershipCounterfactualExcludedCandidateCount = 0;
   let structuralKPlexMissingPairsBySetKey: Record<string, Array<[string, string]>> = {};
   let structuralKPlexMaximalityBySetKey: Record<string, MaximalKPlexWitnessExplanation> = {};
+  let structuralKPlexMembershipDiagnosis: KPlexMaximumMembershipDiagnosis | null = null;
+  let structuralKPlexMembershipDiagnosisTargetNodeId = "";
+  let structuralKPlexMembershipDiagnosisRunning = false;
+  let structuralKPlexMembershipDiagnosisError = "";
+  let structuralKPlexMembershipDiagnosisTimeMs: number | undefined;
+  let structuralKPlexMembershipCounterfactual: KPlexMaximumMembershipCounterfactualSearchOutcome | null = null;
+  let structuralKPlexMembershipCounterfactualRunning = false;
+  let structuralKPlexMembershipCounterfactualError = "";
+  let structuralKPlexMembershipCounterfactualTimeMs: number | undefined;
+  let structuralKPlexMembershipCounterfactualCandidateCount = 0;
+  let structuralKPlexMembershipCounterfactualRequestId = 0;
   let structuralKCoreSupportBySetKey: Record<string, KCoreSupportingPair[]> = {};
   let structuralKCorePeelingBySetKey: Record<string, KCorePeelingCertificate[]> = {};
   let structuralExplainKCoreExclusions = false;
@@ -907,13 +1114,58 @@
   let structuralExplainPathMinimality = false;
   let structuralExplainTypedPathNoRoute = false;
   let structuralDominatingSetSupportBySetKey: Record<string, DominatingSetCoverageWitness[]> = {};
+  let structuralDominatingSetUncoverableTargetNodeIds: string[] = [];
   let structuralSeparatorReachableBySetKey: Record<string, string[]> = {};
   let structuralPathEdgeTypeSequence: string[] = [];
   let structuralPathEdgeIdsByStep: string[][] = [];
+  let structuralPathTemporalSemantics: "static" | TypedPathTemporalSemantics = "static";
+  let structuralPathStrictTemporalOrder = false;
+  let structuralPathCommonTimeValue: number | undefined;
+  let structuralPathStartTimeValuesByStep: number[] = [];
   let structuralPathMinimality: MinimumHopPathMinimalityCertificate | undefined;
   let structuralPathNoRouteCertificate: BoundedPathNoRouteCertificate | undefined;
-  let structuralTypedPathNoRouteCertificate: TypedPathNoRouteCertificate | undefined;
+  let structuralTypedPathNoRouteCertificate: TypedPathNoRouteCertificate | TypedPathTemporalNoRouteCertificate | undefined;
+  let structuralTypedPathCounterfactuals: TypedPathCounterfactualProposal[] = [];
+  let structuralTypedPathCounterfactualWhyNot: TypedPathCounterfactualWhyNot | undefined;
+  let structuralTypedPathCounterfactualWhyNotError = "";
+  let structuralTypedPathCounterfactualHasRun = false;
+  let structuralTypedPathCounterfactualError = "";
+  let structuralTypedPathCounterfactualTimeMs: number | undefined;
+  let structuralTypedPathCounterfactualExcludedCandidateCount = 0;
   let structuralCommunityPartitions: ModularityPartition[] = [];
+  let structuralCommunityPairMembership: CommunityPairOptimumMembership | null = null;
+  let structuralCommunityPairMembershipError = "";
+  let structuralCommunityPairMembershipRunning = false;
+  let structuralCommunityPairMembershipTimeMs: number | undefined;
+  let structuralCommunityTopologyCounterfactual: CommunityTopologyCounterfactualResult | null = null;
+  let structuralCommunityTopologyCounterfactualError = "";
+  let structuralCommunityTopologyCounterfactualRunning = false;
+  let structuralCommunityTopologyCounterfactualTimeMs: number | undefined;
+  let communityPairMembershipContext: {
+    baseFacts: string;
+    graphFacts: string;
+    options: ModularityCommunityOptions;
+    reverseIndex: Record<number, string>;
+    indexByNodeId: Map<string, number>;
+    candidateNodeIds: Set<string>;
+    globalScaledScore: number;
+    communityEdgeRecords: Array<{
+      identity: string;
+      sourceNodeId: string;
+      targetNodeId: string;
+      sourceIndex: number;
+      targetIndex: number;
+      sourceId?: string;
+      sourceIdGenerated: boolean;
+      weight?: number | string;
+    }>;
+    candidateIndexes: number[];
+    resolution: number;
+  } | null = null;
+  let structuralCommunityConstraintDiagnoses: CommunityConstraintDiagnosis[] = [];
+  let structuralCommunityConstraintDiagnosisError = "";
+  let structuralCommunityConstraintDiagnosesAllEnumerated = false;
+  let structuralExplainCommunityInfeasibility = false;
   let structuralCommunityMinCount = Number.isInteger(configuredCommunityConstraints?.minCount)
     ? configuredCommunityConstraints.minCount
     : 0;
@@ -938,10 +1190,37 @@
   let integrityRepairProposal: IntegrityRepairProposal | null = null;
   let selectedMotifTemplateIndex = "0";
   let selectedMotifGroup = "";
+  let selectedSignedTriadGroup = "";
+  let contextualCliqueGroup = "";
+  let contextualCliqueEnumerateAllOptima = false;
+  let contextualCliqueResults: ContextualCliqueResult[] = [];
+  let contextualCliqueHasRun = false;
+  let contextualCliqueError = "";
+  let contextualCliqueTimeMs: number | undefined;
+  let signedTriadResults: SignedTriadResult[] = [];
+  let signedTriadHasRun = false;
+  let signedTriadError = "";
+  let signedTriadTimeMs: number | undefined;
+  let signedTriadScenarioComparison: SignedTriadScenarioComparison | null = null;
+  let signedTriadScenarioComparisonError = "";
+  let signedTriadScenarioComparisonProgress = "";
+  let signedTriadScenarioComparisonTimeMs: number | undefined;
   let motifError = "";
   let motifMatches: TypedMotifMatch[] = [];
   let motifHasRun = false;
   let motifTimeMs: number | undefined;
+  let motifScenarioComparison: ProvenanceMotifScenarioComparison | null = null;
+  let motifScenarioComparisonError = "";
+  let motifScenarioComparisonProgress = "";
+  let motifScenarioComparisonTimeMs: number | undefined;
+  let motifCount: string | undefined;
+  let motifCountHasRun = false;
+  let motifCountError = "";
+  let motifCountTimeMs: number | undefined;
+  let motifCountPartitionCount: number | undefined;
+  let motifCountProgress: TypedMotifCountPartitionProgress | undefined;
+  let motifCountNotice = "";
+  let motifCountAbortController: AbortController | undefined;
   let motifNearMatches: TypedMotifNearMatch[] = [];
   let motifNearMatchHasRun = false;
   let motifNearMatchError = "";
@@ -974,8 +1253,13 @@
   } | null = null;
 
   let maximumCliques: string[][] = [];
+  let maximumCliqueMembershipCliques: string[][] = [];
   let allCliques: string[][] = [];
   let cliqueSupportingEdgesByKey: Record<string, CliqueSupportingEdge[]> = {};
+  let cliqueMembershipDiagnosis: CliqueMaximumMembershipDiagnosis | null = null;
+  let cliqueMembershipDiagnosisTargetNodeId: string | null = null;
+  let cliqueMembershipDiagnosisRunning = false;
+  let cliqueMembershipDiagnosisError = "";
 
   let solverStats = {
     totalCliques: 0,
@@ -985,7 +1269,8 @@
     nodesCount: undefined as number | undefined,
     linksCount: undefined as number | undefined,
     periodLabel: undefined as string | undefined,
-    cliqueMode: undefined as string | undefined
+    cliqueMode: undefined as string | undefined,
+    selectedGroup: ""
   };
 
   let minCliqueSize = 3;
@@ -1008,15 +1293,21 @@
   $: typedPathCandidateNodeIds = new Set((data?.nodes ?? [])
     .filter((node: any) => !selectedStructuralGroup || extractGroups(node).includes(selectedStructuralGroup))
     .map((node: any) => normalizeGraphId(node.id)));
-  $: availableStructuralEdgeTypes = [...new Set<string>((data?.links ?? [])
+  $: availableStructuralEdgeTypes = mergeTypedPathEdgeTypes((data?.links ?? [])
     .filter((link: any) => typedPathCandidateNodeIds.has(normalizeGraphId(getGraphEndpointId(link.source))) &&
       typedPathCandidateNodeIds.has(normalizeGraphId(getGraphEndpointId(link.target))))
-    .map((link: any) => String(link.analysis?.type ?? "").trim())
-    .filter(Boolean))].sort();
+    .map((link: any) => link.analysis?.type),
+    Array.isArray(motifCounterfactualEdgeAdditions)
+      ? motifCounterfactualEdgeAdditions.map((candidate: any) => candidate?.edgeType)
+      : []
+  );
   $: availablePathNodes = (data?.nodes ?? []).map((node: any) => ({
     id: node.id,
     label: node.label ?? node.id
   }));
+  $: availableKPlexMembershipNodes = (data?.nodes ?? [])
+    .filter((node: any) => !selectedStructuralGroup || extractGroups(node).includes(selectedStructuralGroup))
+    .map((node: any) => ({ id: String(node.id), label: String(node.label ?? node.id) }));
   $: sourceIdByNodeId = Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [
     node.id,
     String(node.sourceId ?? node.id)
@@ -1382,44 +1673,6 @@
     });
   }
 
-  function addCommunityAttributeBoundCounts(partitions: ModularityPartition[], candidateNodes: any[]): ModularityPartition[] {
-    const bounds: Array<{
-      attribute: string;
-      value: string | number | boolean;
-      minPerCommunity?: number;
-      maxPerCommunity?: number;
-    }> = Array.isArray(configuredCommunityConstraints?.attributeBounds)
-      ? configuredCommunityConstraints.attributeBounds as Array<{
-        attribute: string;
-        value: string | number | boolean;
-        minPerCommunity?: number;
-        maxPerCommunity?: number;
-      }>
-      : [];
-    if (bounds.length === 0) return partitions;
-    const nodeById = new Map(candidateNodes.map((node) => [node.id, node]));
-    return partitions.map((partition) => ({
-      ...partition,
-      attributeBoundCounts: partition.communities.flatMap((community) => bounds.map((bound) => ({
-        communityId: community[0],
-      attribute: bound.attribute.trim(),
-        value: bound.value,
-        count: community.filter((nodeId) => {
-          const attributes = nodeById.get(nodeId)?.analysis?.attributes;
-          return attributes !== null && typeof attributes === "object" && !Array.isArray(attributes) &&
-            Object.prototype.hasOwnProperty.call(attributes, bound.attribute.trim()) &&
-            (attributes as Record<string, unknown>)[bound.attribute.trim()] === bound.value;
-        }).length,
-        ...(bound.minPerCommunity !== undefined && bound.minPerCommunity > 0
-          ? { minimum: bound.minPerCommunity }
-          : {}),
-        ...(bound.maxPerCommunity !== undefined && bound.maxPerCommunity > 0
-          ? { maximum: bound.maxPerCommunity }
-          : {})
-      })))
-    }));
-  }
-
   function nodePassesGroupFilters(node: any) {
     if (!groupFiltersEnabled || selectedGroupsFilter.size === 0) return true;
 
@@ -1455,6 +1708,10 @@
     showMotifPanel = false;
     showProvenanceScenarioAnalysisPanel = false;
     solverError = "";
+    cliqueMembershipDiagnosis = null;
+    cliqueMembershipDiagnosisTargetNodeId = null;
+    cliqueMembershipDiagnosisRunning = false;
+    cliqueMembershipDiagnosisError = "";
     provenanceScenarioAnalysisError = "";
     provenanceScenarioAnalysisProgress = "";
     provenanceScenarioComparison = null;
@@ -1463,7 +1720,11 @@
     provenanceScenarioTimelineWindow = "";
     provenanceScenarioViewFilters = { types: [], groups: [] };
     clearProvenanceKCoreScenarioComparison();
+    clearProvenanceKPlexScenarioComparison();
+    clearProvenanceComponentScenarioComparison();
+    clearProvenanceDominatingSetScenarioComparison();
     maximumCliques = [];
+    maximumCliqueMembershipCliques = [];
     allCliques = [];
     cliqueSupportingEdgesByKey = {};
     solverStats = {
@@ -1474,10 +1735,13 @@
       nodesCount: undefined,
       linksCount: undefined,
       periodLabel: undefined,
-      cliqueMode: undefined
+      cliqueMode: undefined,
+      selectedGroup: ""
     };
     cliqueNodes = new Set();
     highlightedEdgeIds = new Set();
+    focusedSignedTriadEdgeIds = null;
+    focusedSignedTriadKey = "";
     clearStructuralTaskResult();
     integrityResults = [];
     integrityHasRun = false;
@@ -1486,6 +1750,7 @@
     integrityRepairError = "";
     integrityRepairProposal = null;
     clearMotifAnalysis();
+    clearSignedTriadAnalysis();
   }
 
   function getEdgeConfidenceRange() {
@@ -1596,8 +1861,48 @@
     };
   }
 
+  function refreshRenderedGraphData() {
+    const focusNodeIds = neighborhoodFocusNodeIds;
+    const displayNodes = focusNodeIds === null
+      ? data.nodes
+      : data.nodes.filter((node: any) => focusNodeIds.has(String(node.id)));
+    const recordLinks = focusNodeIds === null
+      ? data.links
+      : data.links.filter((link: any) => focusNodeIds.has(String(getLinkEndId(link.source))) &&
+        focusNodeIds.has(String(getLinkEndId(link.target))));
+    const displayLinks = aggregateParallelEdgesForDisplay
+      ? prepareGraphDisplayLinks(recordLinks, {
+        aggregateParallelEdges: true,
+        defaultDirection: data.direction === "directed" ? "directed" : "undirected",
+        getIdentity: (link: GraphDisplayLink) => getStructuralEdgeIdentity(link)
+      })
+      : recordLinks;
+
+    graphDisplayLinkCount = displayLinks.length;
+    if (neighborhoodFocusInfo) {
+      neighborhoodFocusInfo = {
+        ...neighborhoodFocusInfo,
+        nodeCount: displayNodes.length,
+        recordCount: recordLinks.length,
+        renderedLinkCount: displayLinks.length
+      };
+    }
+    graph3D?.graphData({ ...data, nodes: displayNodes, links: displayLinks });
+  }
+
   function recomputeGraphData() {
     if (!originalData) return;
+    // The focus is derived from the current projection and is only a display filter.
+    neighborhoodFocusNodeIds = null;
+    neighborhoodFocusInfo = null;
+    communityPairMembershipContext = null;
+    structuralCommunityPairMembership = null;
+    structuralCommunityPairMembershipError = "";
+    structuralCommunityPairMembershipTimeMs = undefined;
+    structuralCommunityTopologyCounterfactual = null;
+    structuralCommunityTopologyCounterfactualError = "";
+    structuralCommunityTopologyCounterfactualRunning = false;
+    structuralCommunityTopologyCounterfactualTimeMs = undefined;
 
     const provenanceProjectedData = getProvenanceProjectedData();
     const sourceQualifiedLinks: any[] = provenanceProjectedData?.links ?? [];
@@ -1658,7 +1963,7 @@
     // =========================================================
     // 🔹 update graph
     // =========================================================
-    graph3D?.graphData(data);
+    refreshRenderedGraphData();
     refreshNodeVisuals();
   }
 
@@ -1677,6 +1982,8 @@
     highlightedNeighbors = new Set();
     cliqueNodes = new Set();
     highlightedEdgeIds = new Set();
+    focusedSignedTriadEdgeIds = null;
+    focusedSignedTriadKey = "";
     clearHistory();
 
     let graph = graphData;
@@ -1698,10 +2005,26 @@
     structuralResults = [];
     structuralPathEdgeTypeSequence = [];
     structuralPathEdgeIdsByStep = [];
+    structuralPathTemporalSemantics = "static";
+    structuralPathStrictTemporalOrder = false;
+    structuralPathCommonTimeValue = undefined;
+    structuralPathStartTimeValuesByStep = [];
     structuralPathMinimality = undefined;
     structuralPathNoRouteCertificate = undefined;
     structuralTypedPathNoRouteCertificate = undefined;
     structuralCommunityPartitions = [];
+    communityPairMembershipContext = null;
+    structuralCommunityPairMembership = null;
+    structuralCommunityPairMembershipError = "";
+    structuralCommunityPairMembershipRunning = false;
+    structuralCommunityPairMembershipTimeMs = undefined;
+    structuralCommunityTopologyCounterfactual = null;
+    structuralCommunityTopologyCounterfactualError = "";
+    structuralCommunityTopologyCounterfactualRunning = false;
+    structuralCommunityTopologyCounterfactualTimeMs = undefined;
+    structuralCommunityConstraintDiagnoses = [];
+    structuralCommunityConstraintDiagnosisError = "";
+    structuralCommunityConstraintDiagnosesAllEnumerated = false;
     structuralError = "";
     structuralStats = null;
     selectedStructuralGroup = "";
@@ -1714,15 +2037,25 @@
     integrityTimeMs = undefined;
     integrityRepairError = "";
     integrityRepairProposal = null;
+    motifCountAbortController?.abort();
     motifMatches = [];
     motifHasRun = false;
     motifError = "";
     motifTimeMs = undefined;
+    motifCount = undefined;
+    motifCountHasRun = false;
+    motifCountError = "";
+    motifCountTimeMs = undefined;
+    motifCountPartitionCount = undefined;
+    motifCountProgress = undefined;
+    motifCountNotice = "";
+    motifCountAbortController = undefined;
     motifNearMatches = [];
     motifNearMatchHasRun = false;
     motifNearMatchError = "";
     motifNearMatchTimeMs = undefined;
     resetMotifCounterfactual();
+    clearSignedTriadAnalysis();
     if (!normalizedGraph.valid) {
       console.error("[GRAPH] Input or mapping validation failed:", graphDiagnostics);
     }
@@ -1872,16 +2205,71 @@
     return 0.22;
   }
 
+  function isGraphDisplayNodeVisible(node: any): boolean {
+    if (focusedSignedTriadEdgeIds !== null) return cliqueNodes.has(String(node.id));
+    return neighborhoodFocusNodeIds === null || neighborhoodFocusNodeIds.has(String(node.id));
+  }
+
+  function isGraphDisplayLinkVisible(link: any): boolean {
+    if (focusedSignedTriadEdgeIds !== null) {
+      return graphDisplayLinkMatchesIdentities(
+        link as GraphDisplayLink,
+        focusedSignedTriadEdgeIds,
+        (edge: GraphDisplayLink) => getStructuralEdgeIdentity(edge)
+      );
+    }
+    if (neighborhoodFocusNodeIds === null) return true;
+    const sourceId = String(getLinkEndId(link.source));
+    const targetId = String(getLinkEndId(link.target));
+    return neighborhoodFocusNodeIds.has(sourceId) && neighborhoodFocusNodeIds.has(targetId);
+  }
+
+  function getDisplayLinkColor(link: any): string {
+    if (highlightedEdgeIds.size > 0) {
+      return graphDisplayLinkMatchesIdentities(
+        link as GraphDisplayLink,
+        highlightedEdgeIds,
+        (edge: GraphDisplayLink) => getStructuralEdgeIdentity(edge)
+      ) ? H.clique : "#334155";
+    }
+    return getGraphDisplayLinkColor(link as GraphDisplayLink, edgeTypeColors);
+  }
+
+  function getDisplayLinkLabel(link: any): HTMLElement {
+    const label = document.createElement("span");
+    const typeDetails = formatGraphDisplayEdgeTypeTooltip(
+      link as GraphDisplayLink,
+      data?.direction === "directed" ? "directed" : "undirected"
+    );
+    if (aggregateParallelEdgesForDisplay) {
+      const aggregateDetails = formatGraphDisplayLinkTooltip(link as AggregatedGraphDisplayLink);
+      label.textContent = edgeTypeColorsConfigured
+        ? `${typeDetails}; ${aggregateDetails}`
+        : aggregateDetails;
+    } else {
+      label.textContent = typeDetails;
+    }
+    return label;
+  }
+
   function refreshLinkVisuals() {
     if (!graph3D) return;
+    if (focusedSignedTriadEdgeIds !== null && (
+      focusedSignedTriadKey === "" ||
+      focusedSignedTriadEdgeIds.size !== highlightedEdgeIds.size ||
+      [...focusedSignedTriadEdgeIds].some((edgeId) => !highlightedEdgeIds.has(edgeId))
+    )) {
+      focusedSignedTriadEdgeIds = null;
+      focusedSignedTriadKey = "";
+    }
     graph3D
-      .linkColor((link: any) => highlightedEdgeIds.size > 0
-        ? highlightedEdgeIds.has(getStructuralEdgeIdentity(link)) ? H.clique : "#334155"
-        : null)
+      .nodeVisibility(isGraphDisplayNodeVisible)
+      .linkVisibility(isGraphDisplayLinkVisible)
+      .linkColor(getDisplayLinkColor)
       .linkWidth((link: any) => {
         const baseWidth = Number(GRAPH_CONFIG.graph.linkWidth) || 0.4;
         if (highlightedEdgeIds.size === 0) return baseWidth;
-        return highlightedEdgeIds.has(getStructuralEdgeIdentity(link))
+        return graphDisplayLinkMatchesIdentities(link, highlightedEdgeIds, (edge: GraphDisplayLink) => getStructuralEdgeIdentity(edge))
           ? Math.max(baseWidth * 4, 1.5)
           : Math.max(baseWidth * 0.5, 0.2);
       });
@@ -2284,6 +2672,39 @@
     updateSelectedDetails(id);
   }
 
+  function focusGraphNeighborhood(rootNodeId: string, maxHops: number, direction: NeighborhoodDirection) {
+    const visibleNodeIds = data.nodes.map((node: any) => String(node.id));
+    const focusNodeIds = getGraphNeighborhoodNodeIds(
+      visibleNodeIds,
+      data.links,
+      rootNodeId,
+      { maxHops, direction, defaultGraphDirection: graphDirection }
+    );
+    neighborhoodFocusNodeIds = focusNodeIds;
+    neighborhoodFocusInfo = {
+      rootNodeId,
+      maxHops,
+      direction,
+      nodeCount: focusNodeIds.size,
+      recordCount: 0,
+      renderedLinkCount: 0
+    };
+    focusedSignedTriadEdgeIds = null;
+    focusedSignedTriadKey = "";
+    refreshRenderedGraphData();
+    refreshLinkVisuals();
+    graph3D?.zoomToFit(500, 100, (node: any) => focusNodeIds.has(String(node.id)));
+  }
+
+  function clearGraphNeighborhoodFocus() {
+    if (neighborhoodFocusNodeIds === null) return;
+    neighborhoodFocusNodeIds = null;
+    neighborhoodFocusInfo = null;
+    refreshRenderedGraphData();
+    refreshLinkVisuals();
+    graph3D?.zoomToFit(500, 100);
+  }
+
   function viewNeighbor(id: string) {
     highlightedNeighbors = new Set([id]);
     focusNode(id);
@@ -2428,17 +2849,36 @@
     );
   }
 
+  function fitGraphToView() {
+    if (!graph3D) return;
+    graph3D.zoomToFit(500, 180);
+    fitOnEngineStop = graphLayoutRunning;
+  }
+
   // ---------------- ASP ----------------
   // Modalità di enumerazione (solver.cliqueMode):
   // - "maximal": tutte le clique massimali (non estendibili) -> default
   // - "all":     tutte le clique, incluse le sotto-clique (--opt-mode=enum);
   //              è il comportamento con cui sono stati prodotti i CSV in results/
   // - "maximum": solo le clique di cardinalità massima (--opt-mode=optN)
-  const CLIQUE_MODES: CliqueMode[] = ["maximal", "all", "maximum"];
-
+  // Il registro del contratto decide quali valori di solver.cliqueMode sono validi.
   function getCliqueMode(): CliqueMode {
-    const mode = GRAPH_CONFIG.solver?.cliqueMode;
-    return CLIQUE_MODES.includes(mode) ? mode : "maximal";
+    return resolveCliqueMode(GRAPH_CONFIG.solver?.cliqueMode);
+  }
+
+  function buildAppAspFactsFromGraph(
+    graphInput: unknown,
+    additionalTemporalValues: readonly unknown[] = [],
+    options: { includeRawTemporalValues?: boolean } = {}
+  ) {
+    return buildAspFactsFromGraph(graphInput, extractGroups, {
+      compact: true,
+      includeEdgeProvenance: false,
+      additionalTemporalValues,
+      temporalMetricUnits: motifTemporalMetricUnits,
+      numericTimeUnit,
+      ...options
+    });
   }
 
   function buildAspFactsFromCurrentData(additionalTemporalValues: readonly unknown[] = []) {
@@ -2449,13 +2889,10 @@
       reverseEdgeIndex: {},
       reverseGeneratedEdgeIndex: {},
       indexByNodeId: new Map<string, number>(),
-      temporalEncoding: createAspTemporalEncoding(additionalTemporalValues)
+      temporalEncoding: createAspTemporalEncoding(additionalTemporalValues, numericTimeUnit)
     };
-    const { facts, reverseIndex, reverseSourceIndex, reverseEdgeIndex, indexByNodeId, temporalEncoding } = buildAspFactsFromGraph(
-      data,
-      extractGroups,
-      { includeEdgeProvenance: false, additionalTemporalValues }
-    );
+    const { facts, reverseIndex, reverseSourceIndex, reverseEdgeIndex, indexByNodeId, temporalEncoding } =
+      buildAppAspFactsFromGraph(data, additionalTemporalValues);
     return { facts, reverseIndex, reverseSourceIndex, reverseEdgeIndex, indexByNodeId, temporalEncoding };
   }
 
@@ -2543,9 +2980,7 @@
           nodes: candidateNodes,
           links: scenarioLinks
         };
-        const { facts, reverseIndex } = buildAspFactsFromGraph(graphForScenario, extractGroups, {
-          includeEdgeProvenance: false
-        });
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
         const program = buildCliqueProgram("maximum", selectedGroup);
         const fullProgram = `${facts.trim()}\n\n${program.trim()}\n`;
         const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
@@ -2557,8 +2992,8 @@
         if (result?.Result === "ERROR") {
           throw new Error(result.Error || "clingo ha restituito un errore");
         }
-        if (result?.Models?.More !== "no") {
-          throw new Error("clingo non conferma che l'enumerazione di tutti gli ottimi sia completa");
+        if (!hasCompleteOptimalModelEnumeration(result)) {
+          throw new Error(`clingo non ha provato e completato l'enumerazione di tutti gli ottimi (${result?.Result ?? "risposta vuota"})`);
         }
 
         const witnessedCliques = parseWitnessCliques(result?.Call?.[0]?.Witnesses, reverseIndex, 1);
@@ -2573,11 +3008,17 @@
           nodesCount: candidateNodes.length,
           linksCount: scenarioLinks.length,
           timeMs,
+          candidateNodeIds: eligibleNodes.map((node: any) => String(node.id)),
           maximumCliques
         });
       }
 
-      provenanceScenarioComparison = summarizeProvenanceScenarioMaximumCliques(scenarioInputs);
+      provenanceScenarioComparison = summarizeProvenanceScenarioMaximumCliques(
+        scenarioInputs,
+        provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"
+          ? "finite-exhaustive-worlds"
+          : "declared-projections"
+      );
       provenanceScenarioSelectedGroup = selectedGroup;
       provenanceScenarioConfidenceThreshold = confidenceThreshold;
       provenanceScenarioTimelineWindow = timelineControlEnabled
@@ -2687,12 +3128,6 @@
         const eligibleNodes = request.group
           ? candidateNodes.filter((node: any) => extractGroups(node).includes(request.group))
           : candidateNodes;
-        if (eligibleNodes.length === 0) {
-          throw new Error(request.group
-            ? `Il gruppo '${request.group}' non contiene nodi visibili nello scenario con la finestra temporale e i filtri correnti.`
-            : "Lo scenario non produce nodi visibili con la finestra temporale e i filtri correnti.");
-        }
-
         const candidateNodeIds = new Set(candidateNodes.map((node: any) => normalizeGraphId(node.id)));
         const scenarioLinks = timelineQualifiedLinks.filter((link: any) =>
           candidateNodeIds.has(normalizeGraphId(getLinkEndId(link.source))) &&
@@ -2703,9 +3138,7 @@
           nodes: candidateNodes,
           links: scenarioLinks
         };
-        const { facts, reverseIndex } = buildAspFactsFromGraph(graphForScenario, extractGroups, {
-          includeEdgeProvenance: false
-        });
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
         const program = `${facts.trim()}\n\n${buildKCoreProgram(
           request.k,
           request.group,
@@ -2721,8 +3154,8 @@
         if (result?.Result === "ERROR") {
           throw new Error(result.Error || "clingo ha restituito un errore");
         }
-        if (result?.Result !== "OPTIMUM FOUND") {
-          throw new Error(`clingo non ha provato l'ottimo del k-core; stato: ${result?.Result ?? "risposta vuota"}`);
+        if (!hasCompleteKCoreScenarioResult(result, eligibleNodes.length)) {
+          throw new Error(`clingo non ha provato e completato l'enumerazione dell'ottimo del k-core; stato: ${result?.Result ?? "risposta vuota"}`);
         }
         const maximumCoreSets = selectMaximumNodeSets(
           parseWitnessNodeSets(result?.Call?.[0]?.Witnesses, reverseIndex)
@@ -2744,7 +3177,10 @@
       provenanceKCoreScenarioComparison = summarizeProvenanceScenarioKCores(
         scenarioInputs,
         request.k,
-        request.degreeMode
+        request.degreeMode,
+        provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"
+          ? "finite-exhaustive-worlds"
+          : "declared-projections"
       );
       provenanceKCoreScenarioSelectedGroup = request.group;
       provenanceKCoreScenarioConfidenceThreshold = confidenceThreshold;
@@ -2860,9 +3296,7 @@
           nodes: candidateNodes,
           links: scenarioLinks
         };
-        const { facts, reverseIndex } = buildAspFactsFromGraph(graphForScenario, extractGroups, {
-          includeEdgeProvenance: false
-        });
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
         if (!facts.trim()) {
           throw new Error("Non sono stati generati fatti ASP dalla proiezione dello scenario.");
         }
@@ -2915,7 +3349,10 @@
 
       provenanceKPlexScenarioComparison = summarizeProvenanceScenarioMaximumKPlexes(
         scenarioInputs,
-        request.s
+        request.s,
+        provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"
+          ? "finite-exhaustive-worlds"
+          : "declared-projections"
       );
       provenanceKPlexScenarioSelectedGroup = request.group;
       provenanceKPlexScenarioConfidenceThreshold = confidenceThreshold;
@@ -2931,6 +3368,410 @@
     } finally {
       solverRunning = false;
       provenanceKPlexScenarioComparisonProgress = "";
+    }
+  }
+
+  async function runProvenanceScenarioComponentComparison(request: {
+    task: ProvenanceScenarioComponentTask;
+    targetNodeId: string;
+    group: string;
+  }) {
+    if (solverRunning || !clingoWorker) return;
+
+    showSolverPanel = false;
+    showIntegrityPanel = false;
+    showMotifPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showStructuralPanel = true;
+    clearStructuralTaskResult();
+    provenanceComponentScenarioComparisonError = "";
+    provenanceComponentScenarioComparisonProgress = "";
+    provenanceComponentScenarioComparison = null;
+
+    const allowedTasks: ProvenanceScenarioComponentTask[] = ["components", "weakComponents", "strongComponents"];
+    if (!allowedTasks.includes(request.task)) {
+      provenanceComponentScenarioComparisonError = "Il confronto richiede un task di componenti valido.";
+      return;
+    }
+    const targetNodeId = typeof request.targetNodeId === "string" ? normalizeGraphId(request.targetNodeId) : "";
+    if (!targetNodeId || !originalData?.nodes?.some((node: any) => normalizeGraphId(String(node.id)) === targetNodeId)) {
+      provenanceComponentScenarioComparisonError = "Scegli un nodo di riferimento presente nel grafo importato.";
+      return;
+    }
+    if (provenanceScenarios.length < 2) {
+      provenanceComponentScenarioComparisonError = "Il confronto richiede almeno due scenari di provenienza dichiarati.";
+      return;
+    }
+
+    const requirementName = request.task === "components" ? "connectedComponents" : request.task;
+    const requirements = checkGraphTaskRequirements(
+      graphCapabilities,
+      getGraphTaskRequirements(requirementName) ?? []
+    );
+    if (!requirements.available) {
+      provenanceComponentScenarioComparisonError = requirements.reasons.join("; ");
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      provenanceComponentScenarioComparisonError = blockingDiagnostic.message;
+      return;
+    }
+    if (!originalData?.nodes?.length) {
+      provenanceComponentScenarioComparisonError = "Il grafo di origine non contiene nodi da confrontare.";
+      return;
+    }
+
+    const confidenceRange = getEdgeConfidenceRange();
+    const confidenceThreshold = graphCapabilities.edgeConfidence?.available === true
+      ? minimumEdgeConfidence
+      : null;
+    const scenarioInputs: Array<{
+      scenarioId: string;
+      scenarioLabel: string;
+      projectedNodeCount: number;
+      linksCount: number;
+      timeMs: number;
+      candidateNodeIds: string[];
+      components: string[][];
+    }> = [];
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    const deadline = performance.now() + timeoutMs;
+    let activeScenarioLabel = "";
+
+    solverRunning = true;
+    try {
+      for (let index = 0; index < provenanceScenarios.length; index += 1) {
+        const scenario = provenanceScenarios[index];
+        activeScenarioLabel = String(scenario.label ?? scenario.id);
+        provenanceComponentScenarioComparisonProgress =
+          `Scenario ${index + 1}/${provenanceScenarios.length}: ${activeScenarioLabel}`;
+
+        const sourceLinks = filterLinksByProvenanceScenario(originalData.links ?? [], {
+          sources: scenario.sources,
+          unattributedEdges: provenanceScenarioConfig.unattributedEdges,
+          referenceMatching: provenanceScenarioConfig.referenceMatching ?? "any"
+        });
+        const confidenceQualifiedLinks = filterLinksByMinimumConfidence(
+          sourceLinks,
+          confidenceThreshold,
+          confidenceRange
+        );
+        const timelineQualifiedLinks = getTimelineQualifiedLinks(confidenceQualifiedLinks);
+        const scenarioVisibleNodeIds = projectVisibleNodeIdsForLinks(timelineQualifiedLinks);
+        const projectedNodes = originalData.nodes.filter((node: any) =>
+          scenarioVisibleNodeIds.has(String(node.id))
+        );
+        const eligibleNodes = request.group
+          ? projectedNodes.filter((node: any) => extractGroups(node).includes(request.group))
+          : projectedNodes;
+        const projectedNodeIds = new Set(projectedNodes.map((node: any) => normalizeGraphId(node.id)));
+        const scenarioLinks = timelineQualifiedLinks.filter((link: any) =>
+          projectedNodeIds.has(normalizeGraphId(getLinkEndId(link.source))) &&
+          projectedNodeIds.has(normalizeGraphId(getLinkEndId(link.target)))
+        );
+        const graphForScenario = {
+          ...originalData,
+          nodes: projectedNodes,
+          links: scenarioLinks
+        };
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
+        const program = request.task === "components"
+          ? buildConnectedComponentsProgram(request.group)
+          : request.task === "weakComponents"
+            ? buildWeaklyConnectedComponentsProgram(request.group)
+            : buildStronglyConnectedComponentsProgram(request.group);
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`è scaduto il limite complessivo di ${timeoutMs} ms`);
+        const startedAt = performance.now();
+        const result = await callClingo(
+          `${facts.trim()}\n\n${program}\n`,
+          getStructuralSolverOptions(request.task),
+          remainingMs
+        );
+        const timeMs = performance.now() - startedAt;
+        if (result?.Result === "ERROR") {
+          throw new Error(result.Error || "clingo ha restituito un errore");
+        }
+        if (result?.Result !== "SATISFIABLE" || !hasCompleteModelEnumeration(result)) {
+          throw new Error(`clingo non ha completato l'enumerazione della partizione; stato: ${result?.Result ?? "risposta vuota"}`);
+        }
+        const witnesses = result?.Call?.[0]?.Witnesses;
+        const components = request.task === "components"
+          ? parseWitnessComponents(witnesses, reverseIndex)
+          : request.task === "weakComponents"
+            ? parseWitnessWeakComponents(witnesses, reverseIndex)
+            : parseWitnessStrongComponents(witnesses, reverseIndex);
+        scenarioInputs.push({
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label ?? scenario.id,
+          projectedNodeCount: projectedNodes.length,
+          linksCount: scenarioLinks.length,
+          timeMs,
+          candidateNodeIds: eligibleNodes.map((node: any) => String(node.id)),
+          components
+        });
+      }
+
+      provenanceComponentScenarioComparison = summarizeProvenanceScenarioComponents(
+        scenarioInputs,
+        request.task,
+        targetNodeId,
+        provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"
+          ? "finite-exhaustive-worlds"
+          : "declared-projections"
+      );
+      provenanceComponentScenarioSelectedGroup = request.group;
+      provenanceComponentScenarioTargetNodeId = targetNodeId;
+      provenanceComponentScenarioConfidenceThreshold = confidenceThreshold;
+      provenanceComponentScenarioTimelineWindow = timelineControlEnabled
+        ? `${currentStart}–${currentEnd}`
+        : "";
+      provenanceComponentScenarioViewFilters = getScenarioViewFilterSnapshot();
+    } catch (error) {
+      provenanceComponentScenarioComparison = null;
+      const message = error instanceof Error ? error.message : String(error);
+      provenanceComponentScenarioComparisonError =
+        `Confronto interrotto nello scenario '${activeScenarioLabel}'. Nessun risultato parziale è stato presentato. ${message}`;
+    } finally {
+      solverRunning = false;
+      provenanceComponentScenarioComparisonProgress = "";
+    }
+  }
+
+  async function runProvenanceScenarioDominatingSetComparison(request: {
+    candidateGroup: string;
+    targetGroup: string;
+  }) {
+    if (solverRunning || !clingoWorker) return;
+
+    showSolverPanel = false;
+    showIntegrityPanel = false;
+    showMotifPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showStructuralPanel = true;
+    clearStructuralTaskResult();
+    provenanceDominatingSetScenarioComparisonError = "";
+    provenanceDominatingSetScenarioComparisonProgress = "";
+    provenanceDominatingSetScenarioComparison = null;
+    provenanceDominatingSetScenarioWhyNot = null;
+
+    if (provenanceScenarios.length < 2) {
+      provenanceDominatingSetScenarioComparisonError = "Il confronto richiede almeno due scenari di provenienza dichiarati.";
+      return;
+    }
+    const requirements = checkGraphTaskRequirements(
+      graphCapabilities,
+      getGraphTaskRequirements("dominatingSet") ?? []
+    );
+    if (!requirements.available) {
+      provenanceDominatingSetScenarioComparisonError = requirements.reasons.join("; ");
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      provenanceDominatingSetScenarioComparisonError = blockingDiagnostic.message;
+      return;
+    }
+    if (!originalData?.nodes?.length) {
+      provenanceDominatingSetScenarioComparisonError = "Il grafo di origine non contiene nodi da confrontare.";
+      return;
+    }
+
+    const candidateGroup = typeof request.candidateGroup === "string" ? request.candidateGroup : "";
+    const targetGroup = typeof request.targetGroup === "string" ? request.targetGroup : "";
+    const confidenceRange = getEdgeConfidenceRange();
+    const confidenceThreshold = graphCapabilities.edgeConfidence?.available === true
+      ? minimumEdgeConfidence
+      : null;
+    const scenarioInputs: Array<{
+      scenarioId: string;
+      scenarioLabel: string;
+      projectedNodeCount: number;
+      projectedNodeIds: string[];
+      candidateNodeIds: string[];
+      targetNodeIds: string[];
+      linksCount: number;
+      timeMs: number;
+      minimumDominatingSets: string[][];
+    }> = [];
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    const deadline = performance.now() + timeoutMs;
+    let activeScenarioLabel = "";
+
+    solverRunning = true;
+    try {
+      for (let index = 0; index < provenanceScenarios.length; index += 1) {
+        const scenario = provenanceScenarios[index];
+        activeScenarioLabel = String(scenario.label ?? scenario.id);
+        provenanceDominatingSetScenarioComparisonProgress =
+          `Scenario ${index + 1}/${provenanceScenarios.length}: ${activeScenarioLabel}`;
+
+        const sourceLinks = filterLinksByProvenanceScenario(originalData.links ?? [], {
+          sources: scenario.sources,
+          unattributedEdges: provenanceScenarioConfig.unattributedEdges,
+          referenceMatching: provenanceScenarioConfig.referenceMatching ?? "any"
+        });
+        const confidenceQualifiedLinks = filterLinksByMinimumConfidence(
+          sourceLinks,
+          confidenceThreshold,
+          confidenceRange
+        );
+        const timelineQualifiedLinks = getTimelineQualifiedLinks(confidenceQualifiedLinks);
+        const scenarioVisibleNodeIds = projectVisibleNodeIdsForLinks(timelineQualifiedLinks);
+        const projectedNodes = originalData.nodes.filter((node: any) =>
+          scenarioVisibleNodeIds.has(String(node.id))
+        );
+        const projectedNodeIds = new Set(projectedNodes.map((node: any) => normalizeGraphId(node.id)));
+        const scenarioLinks = timelineQualifiedLinks.filter((link: any) =>
+          projectedNodeIds.has(normalizeGraphId(getLinkEndId(link.source))) &&
+          projectedNodeIds.has(normalizeGraphId(getLinkEndId(link.target)))
+        );
+        const candidateNodes = candidateGroup
+          ? projectedNodes.filter((node: any) => extractGroups(node).includes(candidateGroup))
+          : projectedNodes;
+        const targetNodes = targetGroup
+          ? projectedNodes.filter((node: any) => extractGroups(node).includes(targetGroup))
+          : projectedNodes;
+        const graphForScenario = { ...originalData, nodes: projectedNodes, links: scenarioLinks };
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
+        const program = buildMinimumDominatingSetProgram(candidateGroup, targetGroup);
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`è scaduto il limite complessivo di ${timeoutMs} ms`);
+        const startedAt = performance.now();
+        const result = await callClingo(
+          `${facts.trim()}\n\n${program}\n`,
+          getStructuralSolverOptions("dominatingSet", true),
+          remainingMs
+        );
+        const timeMs = performance.now() - startedAt;
+        if (result?.Result === "ERROR") {
+          throw new Error(result.Error || "clingo ha restituito un errore");
+        }
+        if (result?.Result === "UNSATISFIABLE") {
+          const remainingWhyNotMs = getRemainingSolverBudgetMs(deadline, performance.now());
+          if (remainingWhyNotMs <= 0) {
+            throw new Error("la copertura è impossibile, ma il budget condiviso è terminato prima del certificato why-not");
+          }
+          const whyNotProgram = buildDominatingSetFeasibilityProgram(candidateGroup, targetGroup);
+          const whyNotResult = await callClingo(
+            `${facts.trim()}\n\n${whyNotProgram}\n`,
+            [],
+            remainingWhyNotMs
+          );
+          if (whyNotResult?.Result !== "SATISFIABLE") {
+            throw new Error(`la copertura è impossibile, ma il certificato why-not non è stato completato (${whyNotResult?.Result ?? "risposta vuota"})`);
+          }
+          const certificate = parseDominatingSetFeasibilityCertificate(
+            whyNotResult?.Call?.[0]?.Witnesses,
+            reverseIndex
+          );
+          if (!certificate) {
+            throw new Error("la copertura è impossibile, ma il solver non ha restituito un certificato why-not interpretabile");
+          }
+
+          const expectedUncoverableTargetIds = verifyDominatingSetFeasibilityCertificate(
+            certificate,
+            candidateNodes.map((node: any) => String(normalizeGraphId(node.id))),
+            targetNodes.map((node: any) => String(normalizeGraphId(node.id))),
+            scenarioLinks.map((link: any) => [
+              String(normalizeGraphId(getLinkEndId(link.source))),
+              String(normalizeGraphId(getLinkEndId(link.target)))
+            ] as [string, string])
+          );
+          if (!expectedUncoverableTargetIds) {
+            throw new Error("il certificato why-not ASP non coincide con il controllo indipendente dello scenario ed è stato scartato");
+          }
+
+          provenanceDominatingSetScenarioWhyNot = {
+            scenarioId: String(scenario.id),
+            scenarioLabel: activeScenarioLabel,
+            scenarioSources: Array.isArray(scenario.sources) ? scenario.sources.map(String) : [],
+            uncoverableTargetNodeIds: expectedUncoverableTargetIds,
+            candidateGroup,
+            targetGroup,
+            confidenceThreshold,
+            timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+            viewFilters: getScenarioViewFilterSnapshot()
+          };
+          throw new Error(`la combinazione di candidati e nodi obiettivo non ammette una copertura completa; ${expectedUncoverableTargetIds.length} target non sono copribili nello scenario`);
+        }
+        if (result?.Result !== "OPTIMUM FOUND") {
+          throw new Error(`clingo non ha provato tutti gli ottimi; stato: ${result?.Result ?? "risposta vuota"}`);
+        }
+        if (result?.Models?.More !== "no") {
+          throw new Error("l'enumerazione degli insiemi dominanti ottimi è incompleta");
+        }
+        const explanations = parseWitnessDominatingSetExplanations(result?.Call?.[0]?.Witnesses, reverseIndex);
+        const minimumDominatingSets = selectMinimumNodeSets(explanations.map(({ nodeIds }) => nodeIds));
+        if (minimumDominatingSets.length === 0) {
+          throw new Error("clingo non ha restituito witness di copertura ottima interpretabili");
+        }
+
+        const candidateNodeIds = new Set<string>(candidateNodes.map((node: any) => normalizeGraphId(node.id)));
+        const targetNodeIds = new Set<string>(targetNodes.map((node: any) => normalizeGraphId(node.id)));
+        const scenarioLinkPairs = scenarioLinks.map((link: any) => [
+          normalizeGraphId(getLinkEndId(link.source)),
+          normalizeGraphId(getLinkEndId(link.target))
+        ] as [string, string]);
+        const areAdjacent = (left: string, right: string) => scenarioLinkPairs.some(([source, target]) =>
+          (source === left && target === right) || (source === right && target === left)
+        );
+        for (const explanation of explanations) {
+          const selected = new Set(explanation.nodeIds);
+          if ([...selected].some((nodeId) => !candidateNodeIds.has(nodeId))) {
+            throw new Error("un witness ASP contiene nodi fuori dal dominio candidato");
+          }
+          const coveredTargets = new Set<string>();
+          for (const [targetId, coveringId] of explanation.coveragePairs) {
+            if (!targetNodeIds.has(targetId) || !selected.has(coveringId) ||
+              (targetId !== coveringId && !areAdjacent(targetId, coveringId))) {
+              throw new Error("un witness ASP contiene una coppia di copertura non valida nella proiezione");
+            }
+            coveredTargets.add(targetId);
+          }
+          if (coveredTargets.size !== targetNodeIds.size ||
+            [...targetNodeIds].some((nodeId) => !coveredTargets.has(nodeId))) {
+            throw new Error("un witness ASP non copre esattamente tutti i nodi obiettivo");
+          }
+        }
+
+        scenarioInputs.push({
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label ?? scenario.id,
+          projectedNodeCount: projectedNodes.length,
+          projectedNodeIds: projectedNodes.map((node: any) => normalizeGraphId(node.id)),
+          candidateNodeIds: candidateNodes.map((node: any) => normalizeGraphId(node.id)),
+          targetNodeIds: targetNodes.map((node: any) => normalizeGraphId(node.id)),
+          linksCount: scenarioLinks.length,
+          timeMs,
+          minimumDominatingSets
+        });
+      }
+
+      provenanceDominatingSetScenarioComparison = summarizeProvenanceScenarioDominatingSets(
+        scenarioInputs,
+        candidateGroup,
+        targetGroup,
+        provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"
+          ? "finite-exhaustive-worlds"
+          : "declared-projections"
+      );
+      provenanceDominatingSetScenarioCandidateGroup = candidateGroup;
+      provenanceDominatingSetScenarioTargetGroup = targetGroup;
+      provenanceDominatingSetScenarioConfidenceThreshold = confidenceThreshold;
+      provenanceDominatingSetScenarioTimelineWindow = timelineControlEnabled
+        ? `${currentStart}–${currentEnd}`
+        : "";
+      provenanceDominatingSetScenarioViewFilters = getScenarioViewFilterSnapshot();
+    } catch (error) {
+      provenanceDominatingSetScenarioComparison = null;
+      const message = error instanceof Error ? error.message : String(error);
+      provenanceDominatingSetScenarioComparisonError =
+        `Confronto interrotto nello scenario '${activeScenarioLabel}'. Nessun risultato parziale è stato presentato. ${message}`;
+    } finally {
+      solverRunning = false;
+      provenanceDominatingSetScenarioComparisonProgress = "";
     }
   }
 
@@ -2960,9 +3801,20 @@
 
   // Invia un programma al worker e attende il risultato JSON di clingo.
   // Le task combinatorie usano un limite esterno che può terminare il worker WASM.
-  function callClingo(program: string, options: string[], timeoutMs = 0, modelLimit = 0): Promise<any> {
+  function callClingo(
+    program: string,
+    options: string[],
+    timeoutMs = 0,
+    modelLimit = 0,
+    signal?: AbortSignal
+  ): Promise<any> {
+    if (signal?.aborted) return Promise.resolve({ Result: "CANCELLED" });
     if (showClingoTimingDiagnostics) clingoInvocationTiming = null;
     if (showClingoSolverStatsDiagnostics) clingoInvocationStats = null;
+    const programSizeError = getClingoWasmProgramSizeError(program);
+    if (programSizeError) {
+      return Promise.resolve({ Result: "ERROR", Error: programSizeError });
+    }
     return new Promise((resolve) => {
       const worker = clingoWorkerLease?.worker ?? clingoWorker;
       const readiness = clingoWorkerLease?.readiness;
@@ -2980,6 +3832,7 @@
       const cleanup = () => {
         worker.removeEventListener("message", onMessage);
         worker.removeEventListener("error", onError);
+        signal?.removeEventListener("abort", onAbort);
         if (timeoutHandle) clearTimeout(timeoutHandle);
       };
       const finish = (result: any) => {
@@ -3047,8 +3900,21 @@
         }
       };
 
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (clingoWorker === worker) restartClingoWorker();
+        resolve({ Result: "CANCELLED" });
+      };
+
       worker.addEventListener("message", onMessage);
       worker.addEventListener("error", onError);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
 
       if (timeoutMs > 0) {
         timeoutHandle = setTimeout(() => {
@@ -3114,6 +3980,9 @@
     const fullProgram = facts.trim() + "\n\n" + program.trim() + "\n";
     const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
 
+    cliqueMembershipDiagnosis = null;
+    cliqueMembershipDiagnosisTargetNodeId = null;
+    cliqueMembershipDiagnosisError = "";
     solverRunning = true;
     solverError = "";
 
@@ -3123,31 +3992,71 @@
 
     solverRunning = false;
 
+    const enumerationComplete = mode === "maximum"
+      ? hasCompleteOptimalModelEnumeration(result)
+      : hasCompleteModelEnumeration(result);
+    if (!enumerationComplete) {
+      const status = result?.Result ?? "risposta vuota";
+      const modelCompleteness = result?.Models?.More === "yes"
+        ? "clingo segnala altri modelli non restituiti"
+        : "clingo non conferma l'esaurimento dei modelli";
+      solverError = result?.Result === "ERROR"
+        ? result.Error || "Errore clingo"
+        : mode === "maximum"
+          ? `La ricerca delle clique massime non è completa (${status}; ${modelCompleteness}). Non vengono mostrati risultati parziali come elenco degli ottimi.`
+          : `L'enumerazione delle clique non è completa (${status}; ${modelCompleteness}). Non vengono mostrati risultati parziali.`;
+      maximumCliques = [];
+      maximumCliqueMembershipCliques = [];
+      allCliques = [];
+      cliqueSupportingEdgesByKey = {};
+      solverStats = {
+        totalCliques: 0,
+        maxSize: 0,
+        histogram: new Map<number, number>(),
+        timeMs: t1 - t0,
+        nodesCount: data.nodes.length,
+        linksCount: data.links.length,
+        periodLabel: timelineControlEnabled ? `${currentStart}–${currentEnd}` : undefined,
+        cliqueMode: mode,
+        selectedGroup
+      };
+      cliqueNodes = new Set();
+      refreshNodeVisuals();
+      showSolverPanel = true;
+      return;
+    }
+
     let foundCliques: string[][] = [];
+    let allCliqueWitnesses: string[][] = [];
 
     if (result?.Result === "ERROR") {
       console.error("❌ CLINGO ERROR:", result.Error);
       solverError = result.Error || "Clingo error";
     } else if (!explainCliqueSupports) {
-      foundCliques = parseWitnessCliques(result?.Call?.[0]?.Witnesses, reverseIndex);
+      allCliqueWitnesses = parseWitnessCliques(result?.Call?.[0]?.Witnesses, reverseIndex, 1);
+      foundCliques = allCliqueWitnesses.filter((clique) => clique.length >= 3);
     } else {
       const cliqueResults = parseWitnessCliqueResults(
         result?.Call?.[0]?.Witnesses,
         reverseIndex,
         reverseSourceIndex,
         reverseEdgeIndex,
-        reverseGeneratedEdgeIndex
+        reverseGeneratedEdgeIndex,
+        1
       );
-      foundCliques = cliqueResults.map((clique) => clique.nodeIds);
+      allCliqueWitnesses = cliqueResults.map((clique) => clique.nodeIds);
+      foundCliques = allCliqueWitnesses.filter((clique) => clique.length >= 3);
       cliqueSupportingEdgesByKey = Object.fromEntries(cliqueResults.map((clique) => [
         getCliqueSignature(clique.nodeIds),
         clique.supportingEdges
       ]));
     }
 
+    allCliqueWitnesses.sort((a, b) => b.length - a.length);
     foundCliques.sort((a, b) => b.length - a.length);
+    const maxCliqueMembership = selectMaximumCliques(allCliqueWitnesses);
     const maxCliques = selectMaximumCliques(foundCliques);
-    const maxSize = maxCliques[0]?.length ?? 0;
+    const maxSize = maxCliqueMembership[0]?.length ?? 0;
 
     // In modalità "maximum" clingo stampa anche i modelli intermedi non ottimi.
     if (mode === "maximum") {
@@ -3165,6 +4074,7 @@
     );
 
     maximumCliques = maxCliques;
+    maximumCliqueMembershipCliques = maxCliqueMembership;
     allCliques = foundCliques;
 
     solverStats = {
@@ -3175,42 +4085,343 @@
       nodesCount: data.nodes.length,
       linksCount: data.links.length,
       periodLabel: timelineControlEnabled ? `${currentStart}–${currentEnd}` : undefined,
-      cliqueMode: mode
+      cliqueMode: mode,
+      selectedGroup
     };
 
     showSolverPanel = true;
+    clearGraphNeighborhoodFocus();
     cliqueNodes = new Set(maxCliques[0] ?? []);
     refreshNodeVisuals();
+  }
+
+  async function explainMaximumCliqueMembership(targetNodeId: string) {
+    if (solverRunning || !clingoWorker || !data || !targetNodeId || solverStats.maxSize < 1) return;
+    cliqueMembershipDiagnosisTargetNodeId = targetNodeId;
+    cliqueMembershipDiagnosis = null;
+    cliqueMembershipDiagnosisError = "";
+    if (graphDirection === "directed") {
+      cliqueMembershipDiagnosisError = "La diagnosi di clique richiede una proiezione non orientata.";
+      return;
+    }
+
+    const analyzedGroup = solverStats.selectedGroup;
+    const asp = buildAspFactsFromCurrentData();
+    const targetIndex = asp.indexByNodeId.get(targetNodeId);
+    const candidateNodeIds = data.nodes
+      .filter((node: any) => !analyzedGroup || extractGroups(node).includes(analyzedGroup))
+      .map((node: any) => String(node.id));
+    if (targetIndex === undefined || !candidateNodeIds.includes(targetNodeId)) {
+      cliqueMembershipDiagnosisError = "Il nodo selezionato non appartiene al gruppo analizzato.";
+      return;
+    }
+
+    const edgeRecords: CliqueMembershipEdgeRecord[] = data.links.flatMap((link: any) => {
+      const sourceNodeId = normalizeGraphId(getGraphEndpointId(link.source));
+      const targetNodeId = normalizeGraphId(getGraphEndpointId(link.target));
+      if (!candidateNodeIds.includes(sourceNodeId) || !candidateNodeIds.includes(targetNodeId)) return [];
+      const edgeId = String(link.sourceId ?? link.analysis?.id ?? "").trim();
+      return [{
+        sourceNodeId,
+        targetNodeId,
+        ...(edgeId ? { edgeId } : {}),
+        ...(edgeId && link.sourceIdGenerated === true ? { edgeIdGenerated: true } : {})
+      }];
+    });
+
+    const program = [
+      asp.facts.trim(),
+      buildCliqueProgram("maximum", analyzedGroup),
+      buildCliqueRequiredNodeConstraint(targetIndex)
+    ].filter(Boolean).join("\n\n") + "\n";
+
+    cliqueMembershipDiagnosisRunning = true;
+    solverRunning = true;
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    try {
+      const result = await callClingo(program, ["--opt-mode=opt"], timeoutMs);
+      if (result?.Result === "ERROR") {
+        throw new Error(result.Error || "Errore clingo durante la diagnosi della clique.");
+      }
+      cliqueMembershipDiagnosis = parseCliqueMaximumMembershipDiagnosis(result, {
+        reverseIndex: asp.reverseIndex,
+        candidateNodeIds,
+        edgeRecords,
+        targetNodeId,
+        globalMaximumSize: solverStats.maxSize
+      });
+    } catch (error) {
+      cliqueMembershipDiagnosisError = error instanceof Error
+        ? error.message
+        : "La diagnosi ASP della clique non è disponibile.";
+    } finally {
+      cliqueMembershipDiagnosisRunning = false;
+      solverRunning = false;
+    }
+  }
+
+  async function explainMaximumKPlexMembership(targetNodeId: string) {
+    if (solverRunning || !clingoWorker || !data || structuralStats?.task !== "kPlex" ||
+      structuralResults.length === 0 || !targetNodeId) return;
+
+    structuralKPlexMembershipDiagnosis = null;
+    structuralKPlexMembershipDiagnosisTargetNodeId = targetNodeId;
+    structuralKPlexMembershipDiagnosisError = "";
+    structuralKPlexMembershipDiagnosisTimeMs = undefined;
+
+    if (graphDirection !== "undirected") {
+      structuralKPlexMembershipDiagnosisError = "La diagnosi dei k-plex massimi richiede una proiezione non orientata.";
+      return;
+    }
+    if (!Number.isSafeInteger(structuralParameter) || structuralParameter < 1) {
+      structuralKPlexMembershipDiagnosisError = "Il parametro s del k-plex non è valido.";
+      return;
+    }
+
+    const candidateNodeIds = data.nodes
+      .filter((node: any) => !selectedStructuralGroup || extractGroups(node).includes(selectedStructuralGroup))
+      .map((node: any) => String(node.id));
+    if (!candidateNodeIds.includes(targetNodeId)) {
+      structuralKPlexMembershipDiagnosisError = "Il nodo selezionato non appartiene alla proiezione o al gruppo analizzato.";
+      return;
+    }
+
+    const asp = buildAspFactsFromCurrentData();
+    const targetIndex = asp.indexByNodeId.get(targetNodeId);
+    const globalMaximumSize = Math.max(...structuralResults.map((nodeIds) => nodeIds.length));
+    if (targetIndex === undefined || globalMaximumSize < 1 || structuralStats.parameter !== structuralParameter) {
+      structuralKPlexMembershipDiagnosisError = "Il risultato massimo corrente non corrisponde ai criteri selezionati.";
+      return;
+    }
+    const candidateSet = new Set(candidateNodeIds);
+    const edgeRecords = data.links.flatMap((link: any) => {
+      const sourceNodeId = normalizeGraphId(getGraphEndpointId(link.source));
+      const targetNodeId = normalizeGraphId(getGraphEndpointId(link.target));
+      return candidateSet.has(sourceNodeId) && candidateSet.has(targetNodeId)
+        ? [{ sourceNodeId, targetNodeId }]
+        : [];
+    });
+    const program = [
+      asp.facts.trim(),
+      buildMaximumKPlexProgram(structuralParameter, selectedStructuralGroup),
+      buildKPlexRequiredNodeConstraint(targetIndex)
+    ].filter(Boolean).join("\n\n") + "\n";
+
+    const startedAt = performance.now();
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    structuralKPlexMembershipDiagnosisRunning = true;
+    solverRunning = true;
+    try {
+      const result = await callClingo(program, ["--opt-mode=opt"], timeoutMs);
+      if (result?.Result === "ERROR") {
+        throw new Error(result.Error || "Errore clingo durante la diagnosi della membership k-plex.");
+      }
+      structuralKPlexMembershipDiagnosis = parseKPlexMaximumMembershipDiagnosis(result, {
+        reverseIndex: asp.reverseIndex,
+        candidateNodeIds,
+        edgeRecords,
+        targetNodeId,
+        s: structuralParameter,
+        globalMaximumSize
+      });
+      structuralKPlexMembershipDiagnosisTimeMs = performance.now() - startedAt;
+    } catch (error) {
+      structuralKPlexMembershipDiagnosisError = error instanceof Error
+        ? error.message
+        : "La diagnosi ASP della membership k-plex non è disponibile.";
+    } finally {
+      structuralKPlexMembershipDiagnosisRunning = false;
+      solverRunning = false;
+    }
+  }
+
+  async function searchKPlexMaximumMembershipCounterfactual(targetNodeId: string) {
+    if (solverRunning || !clingoWorker || !data || structuralStats?.task !== "kPlex" || !targetNodeId) return;
+    const requestId = ++structuralKPlexMembershipCounterfactualRequestId;
+    const requestedParameter = structuralParameter;
+    const requestedGroup = selectedStructuralGroup;
+    structuralKPlexMembershipCounterfactual = null;
+    structuralKPlexMembershipCounterfactualError = "";
+    structuralKPlexMembershipCounterfactualTimeMs = undefined;
+    structuralKPlexMembershipCounterfactualCandidateCount = 0;
+
+    if (graphDirection !== "undirected") {
+      structuralKPlexMembershipCounterfactualError = "Il controfattuale di membership richiede una proiezione non orientata.";
+      return;
+    }
+    if (!Number.isSafeInteger(structuralParameter) || structuralParameter < 1 ||
+      structuralStats.parameter !== structuralParameter) {
+      structuralKPlexMembershipCounterfactualError = "Il parametro s del k-plex non corrisponde all'analisi corrente.";
+      return;
+    }
+    if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
+      structuralKPlexMembershipCounterfactualError = "Dichiara gli archi e i costi possibili in graphAnalysis.counterfactuals.edgeAdditions.";
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      structuralKPlexMembershipCounterfactualError = blockingDiagnostic.message;
+      return;
+    }
+
+    const candidateNodeIds = data.nodes
+      .filter((node: any) => !selectedStructuralGroup || extractGroups(node).includes(selectedStructuralGroup))
+      .map((node: any) => String(node.id));
+    if (!candidateNodeIds.includes(targetNodeId)) {
+      structuralKPlexMembershipCounterfactualError = "Il nodo selezionato non appartiene alla proiezione o al gruppo analizzato.";
+      return;
+    }
+
+    structuralKPlexMembershipCounterfactualRunning = true;
+    solverRunning = true;
+    const startedAt = performance.now();
+    try {
+      const { facts, reverseEdgeIndex, reverseIndex, indexByNodeId } = buildAspFactsFromCurrentData();
+      if (!facts.trim()) throw new Error("La proiezione corrente non ha prodotto fatti ASP.");
+      const targetIndex = indexByNodeId.get(targetNodeId);
+      if (targetIndex === undefined) throw new Error("Il nodo target non è mappabile nell'indice ASP.");
+      const { candidatesForCohort, excludedCandidateCount } = resolveStructuralCounterfactualCandidates(
+        candidateNodeIds,
+        reverseEdgeIndex,
+        indexByNodeId
+      );
+      structuralKPlexMembershipCounterfactualCandidateCount = candidatesForCohort.length;
+      if (candidatesForCohort.length > MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES) {
+        throw new RangeError(
+          `Sono eleggibili ${candidatesForCohort.length} archi candidati (${excludedCandidateCount} esclusi dalla proiezione); il limite esatto corrente è ${MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES}. Riduci edgeAdditions o filtri il grafo.`
+        );
+      }
+
+      const candidateSet = new Set(candidateNodeIds);
+      const observedEdgeRecords = (data.links as any[]).flatMap((link) => {
+        const sourceNodeId = normalizeGraphId(getGraphEndpointId(link.source));
+        const targetNodeId = normalizeGraphId(getGraphEndpointId(link.target));
+        return candidateSet.has(sourceNodeId) && candidateSet.has(targetNodeId)
+          ? [{ sourceNodeId, targetNodeId }]
+          : [];
+      });
+      const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + taskTimeoutMs;
+      const runWithinBudget = async (program: string, options: string[] = []) => {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) {
+          throw new Error(`è scaduto il budget complessivo di ${taskTimeoutMs} ms; il risultato parziale è stato scartato.`);
+        }
+        const result = await callClingo(program, options, remainingMs);
+        if (result?.Result === "ERROR") throw new Error(result.Error || "Errore del worker clingo.");
+        if (result?.Result === "CANCELLED" || result?.Result === "UNKNOWN") {
+          throw new Error(`il solver si è interrotto nello stato ${result.Result}; nessun risultato parziale è stato conservato.`);
+        }
+        return result;
+      };
+
+      const outcome = await searchMinimumCostKPlexMaximumMembershipCounterfactual({
+        s: requestedParameter,
+        targetNodeId,
+        candidates: candidatesForCohort,
+        solveSelection: (program) => runWithinBudget(program, ["--opt-mode=opt"]),
+        evaluateGraph: async (selectedCandidates) => {
+          const additionFacts = selectedCandidates.flatMap(({ sourceNode, targetNode }) => [
+            `edge(${sourceNode},${targetNode}).`,
+            `edge(${targetNode},${sourceNode}).`
+          ]).join("\n");
+          const graphFacts = [facts.trim(), additionFacts].filter(Boolean).join("\n\n");
+          const maximumProgram = buildMaximumKPlexProgram(requestedParameter, requestedGroup);
+          const globalResult = await runWithinBudget(`${graphFacts}\n\n${maximumProgram}\n`, ["--opt-mode=opt"]);
+          const targetResult = await runWithinBudget(
+            `${graphFacts}\n\n${maximumProgram}\n${buildKPlexRequiredNodeConstraint(targetIndex)}\n`,
+            ["--opt-mode=opt"]
+          );
+          return {
+            globalResult,
+            targetResult,
+            reverseIndex,
+            candidateNodeIds,
+            edgeRecords: [
+              ...observedEdgeRecords,
+              ...selectedCandidates.map(({ sourceNodeId, targetNodeId: targetEndpointId }) => ({
+                sourceNodeId,
+                targetNodeId: targetEndpointId
+              }))
+            ]
+          };
+        }
+      });
+      if (requestId === structuralKPlexMembershipCounterfactualRequestId) {
+        structuralKPlexMembershipCounterfactual = outcome;
+        structuralKPlexMembershipCounterfactualTimeMs = performance.now() - startedAt;
+      }
+    } catch (error) {
+      if (requestId === structuralKPlexMembershipCounterfactualRequestId) {
+        structuralKPlexMembershipCounterfactual = null;
+        structuralKPlexMembershipCounterfactualError = error instanceof Error
+          ? error.message
+          : "La ricerca ASP del controfattuale di membership non è disponibile.";
+        structuralKPlexMembershipCounterfactualTimeMs = performance.now() - startedAt;
+      }
+    } finally {
+      if (requestId === structuralKPlexMembershipCounterfactualRequestId) {
+        structuralKPlexMembershipCounterfactualRunning = false;
+      }
+      solverRunning = false;
+    }
   }
 
   function clearStructuralTaskResult() {
     clearProvenanceKCoreScenarioComparison();
     clearProvenanceKPlexScenarioComparison();
+    clearProvenanceComponentScenarioComparison();
     structuralError = "";
     structuralResults = [];
     clearKPlexCounterfactual();
     clearKCoreCounterfactual();
     clearKCoreMembershipCounterfactual();
+    clearTypedPathCounterfactual();
     structuralKPlexMissingPairsBySetKey = {};
     structuralKPlexMaximalityBySetKey = {};
+    structuralKPlexMembershipDiagnosisTargetNodeId = "";
     structuralKCoreSupportBySetKey = {};
     structuralKCorePeelingBySetKey = {};
     structuralKCoreNumbers = null;
     structuralKCoreProfileTimeMs = undefined;
     structuralDominatingSetSupportBySetKey = {};
+    structuralDominatingSetUncoverableTargetNodeIds = [];
     structuralSeparatorReachableBySetKey = {};
     structuralPathEdgeIdsByStep = [];
+    structuralPathCommonTimeValue = undefined;
+    structuralPathStartTimeValuesByStep = [];
     structuralPathMinimality = undefined;
     structuralPathNoRouteCertificate = undefined;
     structuralTypedPathNoRouteCertificate = undefined;
     structuralCommunityPartitions = [];
+    structuralCommunityTopologyCounterfactual = null;
+    structuralCommunityTopologyCounterfactualError = "";
+    structuralCommunityTopologyCounterfactualRunning = false;
+    structuralCommunityTopologyCounterfactualTimeMs = undefined;
+    structuralCommunityConstraintDiagnoses = [];
+    structuralCommunityConstraintDiagnosisError = "";
+    structuralCommunityConstraintDiagnosesAllEnumerated = false;
     structuralEdgeSourceIdById = {};
     structuralEdgeSourceIdentityById = buildEdgeSourceIdentityByIdentity(originalData?.links ?? []);
     structuralStats = null;
     highlightedEdgeIds = new Set();
     cliqueNodes = new Set();
+    clearKPlexMaximumMembershipDiagnosis();
     refreshLinkVisuals();
     refreshNodeVisuals();
+  }
+
+  function clearKPlexMaximumMembershipDiagnosis() {
+    structuralKPlexMembershipCounterfactualRequestId += 1;
+    structuralKPlexMembershipDiagnosis = null;
+    structuralKPlexMembershipDiagnosisRunning = false;
+    structuralKPlexMembershipDiagnosisError = "";
+    structuralKPlexMembershipDiagnosisTimeMs = undefined;
+    structuralKPlexMembershipCounterfactual = null;
+    structuralKPlexMembershipCounterfactualRunning = false;
+    structuralKPlexMembershipCounterfactualError = "";
+    structuralKPlexMembershipCounterfactualTimeMs = undefined;
+    structuralKPlexMembershipCounterfactualCandidateCount = 0;
   }
 
   function clearProvenanceKCoreScenarioComparison() {
@@ -3233,8 +4444,32 @@
     provenanceKPlexScenarioViewFilters = { types: [], groups: [] };
   }
 
+  function clearProvenanceComponentScenarioComparison() {
+    provenanceComponentScenarioComparison = null;
+    provenanceComponentScenarioComparisonProgress = "";
+    provenanceComponentScenarioComparisonError = "";
+    provenanceComponentScenarioSelectedGroup = "";
+    provenanceComponentScenarioConfidenceThreshold = null;
+    provenanceComponentScenarioTimelineWindow = "";
+    provenanceComponentScenarioViewFilters = { types: [], groups: [] };
+  }
+
+  function clearProvenanceDominatingSetScenarioComparison() {
+    provenanceDominatingSetScenarioComparison = null;
+    provenanceDominatingSetScenarioComparisonProgress = "";
+    provenanceDominatingSetScenarioComparisonError = "";
+    provenanceDominatingSetScenarioWhyNot = null;
+    provenanceDominatingSetScenarioCandidateGroup = "";
+    provenanceDominatingSetScenarioTargetGroup = "";
+    provenanceDominatingSetScenarioConfidenceThreshold = null;
+    provenanceDominatingSetScenarioTimelineWindow = "";
+    provenanceDominatingSetScenarioViewFilters = { types: [], groups: [] };
+  }
+
   function clearKPlexCounterfactual() {
     structuralKPlexCounterfactuals = [];
+    structuralKPlexCounterfactualWhyNot = null;
+    structuralKPlexCounterfactualWhyNotMessage = "";
     structuralKPlexCounterfactualHasRun = false;
     structuralKPlexCounterfactualError = "";
     structuralKPlexCounterfactualTimeMs = undefined;
@@ -3243,6 +4478,8 @@
 
   function clearKCoreCounterfactual() {
     structuralKCoreCounterfactuals = [];
+    structuralKCoreCounterfactualWhyNot = null;
+    structuralKCoreCounterfactualWhyNotMessage = "";
     structuralKCoreCounterfactualHasRun = false;
     structuralKCoreCounterfactualError = "";
     structuralKCoreCounterfactualTimeMs = undefined;
@@ -3251,10 +4488,22 @@
 
   function clearKCoreMembershipCounterfactual() {
     structuralKCoreMembershipCounterfactuals = [];
+    structuralKCoreMembershipCounterfactualWhyNot = null;
+    structuralKCoreMembershipCounterfactualWhyNotMessage = "";
     structuralKCoreMembershipCounterfactualHasRun = false;
     structuralKCoreMembershipCounterfactualError = "";
     structuralKCoreMembershipCounterfactualTimeMs = undefined;
     structuralKCoreMembershipCounterfactualExcludedCandidateCount = 0;
+  }
+
+  function clearTypedPathCounterfactual() {
+    structuralTypedPathCounterfactuals = [];
+    structuralTypedPathCounterfactualWhyNot = undefined;
+    structuralTypedPathCounterfactualWhyNotError = "";
+    structuralTypedPathCounterfactualHasRun = false;
+    structuralTypedPathCounterfactualError = "";
+    structuralTypedPathCounterfactualTimeMs = undefined;
+    structuralTypedPathCounterfactualExcludedCandidateCount = 0;
   }
 
   function resolveStructuralCounterfactualCandidates(
@@ -3344,6 +4593,313 @@
     return { candidatesForCohort, excludedCandidateCount };
   }
 
+  async function runTypedPathCounterfactual(request: {
+    startNodeId: string;
+    goalNodeId: string;
+    edgeTypeSequence: string[];
+    group: string;
+    enumerateAllOptima?: boolean;
+    temporalSemantics?: "static" | TypedPathTemporalSemantics;
+    strictTemporalOrder?: boolean;
+  }) {
+    if (solverRunning || !clingoWorker) return;
+    clearTypedPathCounterfactual();
+    if (!typedPathDataReadiness.available) {
+      structuralTypedPathCounterfactualError = typedPathDataReadiness.reasons.join("; ");
+      return;
+    }
+    if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
+      structuralTypedPathCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      return;
+    }
+    if (!request.startNodeId || !request.goalNodeId || request.startNodeId === request.goalNodeId ||
+      !Array.isArray(request.edgeTypeSequence) || request.edgeTypeSequence.length === 0 ||
+      request.edgeTypeSequence.some((type) => typeof type !== "string" || type.trim() === "")) {
+      structuralTypedPathCounterfactualError = "Scegli due terminali distinti e una sequenza non vuota di tipi d'arco.";
+      return;
+    }
+    if (request.edgeTypeSequence.length > 100 || request.edgeTypeSequence.some((type) =>
+      !availableStructuralEdgeTypes.includes(type.trim()))) {
+      structuralTypedPathCounterfactualError = "La sequenza deve contenere al massimo 100 passi e usare tipi d'arco disponibili nella proiezione.";
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      structuralTypedPathCounterfactualError = blockingDiagnostic.message;
+      return;
+    }
+    if (!data?.nodes?.length || !originalData?.nodes?.length) {
+      structuralTypedPathCounterfactualError = "La proiezione corrente non contiene nodi da analizzare.";
+      return;
+    }
+
+    const temporalSemantics = request.temporalSemantics ?? "static";
+    if (temporalSemantics !== "static" && temporalSemantics !== "coValid" && temporalSemantics !== "orderedByStart") {
+      structuralTypedPathCounterfactualError = "Scegli una semantica temporale valida per il cammino.";
+      return;
+    }
+    if (temporalSemantics !== "static" && !typedPathTemporalDataReadiness.available) {
+      structuralTypedPathCounterfactualError = typedPathTemporalDataReadiness.reasons.join("; ");
+      return;
+    }
+
+    try {
+      const candidateTemporalValues = temporalSemantics === "static" || !Array.isArray(motifCounterfactualEdgeAdditions)
+        ? []
+        : motifCounterfactualEdgeAdditions.flatMap((candidate: any) => [
+          candidate?.validity?.from,
+          candidate?.validity?.to
+        ]);
+      const { facts, reverseIndex, reverseEdgeIndex, indexByNodeId, temporalEncoding } =
+        buildAspFactsFromCurrentData(candidateTemporalValues);
+      if (!facts.trim()) throw new Error("Non sono stati generati fatti ASP dalla proiezione corrente.");
+      const visibleNodeIds = new Set<string>((data.nodes as any[]).map((node) => String(node.id)));
+      const nodesInGroup = new Set<string>((data.nodes as any[])
+        .filter((node) => !request.group || extractGroups(node).includes(request.group))
+        .map((node) => String(node.id)));
+      if (!nodesInGroup.has(request.startNodeId) || !nodesInGroup.has(request.goalNodeId)) {
+        throw new Error("I terminali selezionati devono appartenere al gruppo candidato scelto per il cammino.");
+      }
+      if (request.edgeTypeSequence.length + 1 > nodesInGroup.size) {
+        throw new Error("La sequenza richiede più nodi distinti di quanti ne contiene il gruppo selezionato.");
+      }
+      const actualEdgeIds = new Set<string>((originalData.links as any[]).map((link) =>
+        String(link.sourceId ?? link.analysis?.id ?? "").trim()
+      ).filter(Boolean));
+      const resolveConfiguredNode = (value: unknown, path: string) => {
+        if ((typeof value !== "string" && typeof value !== "number") || String(value).trim() === "") {
+          throw new TypeError(`${path} deve indicare un ID nodo stringa o numerico.`);
+        }
+        const requestedId = String(value).trim();
+        const exact = (originalData.nodes as any[]).filter((node) =>
+          String(node.sourceId ?? "") === requestedId || String(node.id) === requestedId
+        );
+        const matches = exact.length > 0
+          ? exact
+          : (originalData.nodes as any[]).filter((node) => node.id === normalizeGraphId(requestedId));
+        const unique = [...new Map(matches.map((node) => [node.id, node])).values()];
+        if (unique.length === 0) throw new TypeError(`${path} fa riferimento a un nodo inesistente: '${requestedId}'.`);
+        if (unique.length > 1) throw new TypeError(`${path} è ambiguo: '${requestedId}' identifica più nodi.`);
+        return unique[0];
+      };
+
+      const firstSyntheticRecord = Math.max(0, ...Object.keys(reverseEdgeIndex).map(Number)) + 1;
+      const candidateIds = new Set<string>();
+      const resolved = motifCounterfactualEdgeAdditions.map((candidate: any, index: number) => {
+        if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+          throw new TypeError(`edgeAdditions[${index}] deve essere un oggetto.`);
+        }
+        const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+        if (!id) throw new TypeError(`edgeAdditions[${index}].id deve essere una stringa non vuota.`);
+        if (candidateIds.has(id)) throw new TypeError(`edgeAdditions contiene l'ID duplicato '${id}'.`);
+        if (actualEdgeIds.has(id)) throw new TypeError(`L'ID candidato '${id}' è già usato da un arco osservato.`);
+        candidateIds.add(id);
+        const source = resolveConfiguredNode(candidate.sourceNodeId, `edgeAdditions[${index}].sourceNodeId`);
+        const target = resolveConfiguredNode(candidate.targetNodeId, `edgeAdditions[${index}].targetNodeId`);
+        if (source.id === target.id) throw new TypeError(`edgeAdditions[${index}] non può essere un cappio.`);
+        return { candidate, id, source, target, recordIndex: firstSyntheticRecord + index };
+      });
+      const validationCandidates = resolved.map(({ candidate, id, source, target, recordIndex }) => ({
+        ...candidate,
+        id,
+        sourceNodeId: String(source.sourceId ?? source.id),
+        targetNodeId: String(target.sourceId ?? target.id),
+        sourceNode: 1,
+        targetNode: 2,
+        recordIndex
+      }));
+      const validated = validateKPlexCompletionCandidates(validationCandidates);
+      const typedPathOptions = {
+        startNode: indexByNodeId.get(request.startNodeId) ?? 1,
+        goalNode: indexByNodeId.get(request.goalNodeId) ?? 2,
+        edgeTypeSequence: request.edgeTypeSequence,
+        direction: graphDirection,
+        group: request.group,
+        ...(temporalSemantics !== "static" ? { temporalSemantics } : {}),
+        ...(temporalSemantics === "orderedByStart"
+          ? { strictTemporalOrder: request.strictTemporalOrder === true }
+          : {})
+      };
+      buildTypedPathCompletionCounterfactualProgram(typedPathOptions, validationCandidates, temporalEncoding);
+
+      const nodePairKey = (source: string, target: string) => graphDirection === "undirected"
+        ? [source, target].sort().join("\u0000")
+        : `${source}\u0000${target}`;
+      const observedTypedEdges = new Set<string>();
+      for (const link of data.links as any[]) {
+        const source = normalizeGraphId(getGraphEndpointId(link.source));
+        const target = normalizeGraphId(getGraphEndpointId(link.target));
+        const type = typeof link.analysis?.type === "string" ? link.analysis.type.trim() : "";
+        if (source && target && source !== target && type) observedTypedEdges.add(`${type}\u0000${nodePairKey(source, target)}`);
+      }
+      let excludedCandidateCount = 0;
+      const candidates = resolved.flatMap(({ candidate, id, source, target, recordIndex }, index) => {
+        const sourceId = String(source.id);
+        const targetId = String(target.id);
+        const edgeType = String(candidate.edgeType).trim();
+        const sourceNode = indexByNodeId.get(sourceId);
+        const targetNode = indexByNodeId.get(targetId);
+        const edgeAlreadyObserved = observedTypedEdges.has(`${edgeType}\u0000${nodePairKey(sourceId, targetId)}`);
+        if (!visibleNodeIds.has(sourceId) || !nodesInGroup.has(sourceId) || !visibleNodeIds.has(targetId) ||
+          !nodesInGroup.has(targetId) || !request.edgeTypeSequence.some((type) => type.trim() === edgeType) ||
+          temporalSemantics === "static" && edgeAlreadyObserved || sourceNode === undefined || targetNode === undefined) {
+          excludedCandidateCount += 1;
+          return [];
+        }
+        return [{
+          ...validated[index],
+          ...(temporalSemantics !== "static" && candidate.validity !== undefined
+            ? { validity: candidate.validity }
+            : {}),
+          sourceNode,
+          targetNode,
+          recordIndex
+        }];
+      });
+      structuralTypedPathCounterfactualExcludedCandidateCount = excludedCandidateCount;
+
+      const compiled = buildTypedPathCompletionCounterfactualProgram(typedPathOptions, candidates, temporalEncoding);
+      const edgeIdentityFacts = buildMinimumEdgeSeparatorFacts(
+        data.links,
+        indexByNodeId,
+        new Map<string, string>((data.nodes as any[]).map((node) => [String(node.id), String(node.label ?? node.id)]))
+      );
+      structuralEdgeSourceIdById = edgeIdentityFacts.displayIdByEdgeId;
+      const observedEdges = (data.links as any[]).flatMap((link, index) => {
+        const source = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
+        const target = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target)));
+        const edgeType = typeof link.analysis?.type === "string" ? link.analysis.type.trim() : "";
+        return source && target && edgeType
+          ? [{ recordIndex: index + 1, sourceNode: source, targetNode: target, edgeType }]
+          : [];
+      });
+      const temporalEdgeRecords: TypedPathTemporalEdgeRecord[] = temporalSemantics === "static" ? [] :
+        (data.links as any[]).flatMap((link, index) => {
+          const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
+          const targetNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target)));
+          const validityFrom = temporalEncoding.encode(link.analysis?.validity?.from);
+          const validityTo = temporalEncoding.encode(link.analysis?.validity?.to);
+          if (!sourceNode || !targetNode || validityFrom === null || validityTo === null) return [];
+          return [{
+            recordIndex: index + 1,
+            sourceNode,
+            targetNode,
+            edgeType: String(link.analysis?.type ?? ""),
+            validityFrom,
+            validityTo
+          }];
+        });
+      const fullProgram = `${facts.trim()}\n\n${compiled.program}\n`;
+      const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + taskTimeoutMs;
+      solverRunning = true;
+      const startedAt = performance.now();
+      try {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`è scaduto il limite complessivo di ${taskTimeoutMs} ms`);
+        const result = await callClingo(
+          fullProgram,
+          getStructuralCounterfactualSolverOptions(request.enumerateAllOptima === true),
+          remainingMs
+        );
+        structuralTypedPathCounterfactualTimeMs = performance.now() - startedAt;
+        if (result?.Result === "ERROR") {
+          structuralTypedPathCounterfactualError = result.Error || "Errore del worker clingo.";
+          return;
+        }
+        if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
+          !hasCompleteModelEnumeration(result)) {
+          structuralTypedPathCounterfactualError = "clingo non conferma che tutte le proposte ottime siano state enumerate; il risultato parziale è stato scartato.";
+          return;
+        }
+        if (result?.Result === "UNSATISFIABLE") {
+          structuralTypedPathCounterfactualHasRun = true;
+          try {
+            const whyNot = temporalSemantics === "static"
+              ? buildTypedPathCompletionWhyNotProgram(typedPathOptions, compiled.candidates)
+              : buildTypedPathTemporalCompletionWhyNotProgram(
+                typedPathOptions as TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+                candidates,
+                temporalEncoding
+              );
+            const whyNotProgram = `${facts.trim()}\n\n${whyNot.program}\n`;
+            const whyNotBudgetMs = getRemainingSolverBudgetMs(deadline, performance.now());
+            if (whyNotBudgetMs <= 0) {
+              structuralTypedPathCounterfactualWhyNotError = `Il budget complessivo di ${taskTimeoutMs} ms è esaurito prima della diagnosi dei prefissi.`;
+            } else {
+              const whyNotResult = await callClingo(
+                whyNotProgram,
+                temporalSemantics === "static" ? [] : getStructuralCounterfactualSolverOptions(),
+                whyNotBudgetMs
+              );
+              structuralTypedPathCounterfactualTimeMs = performance.now() - startedAt;
+              if (temporalSemantics === "static" && whyNotResult?.Result === "SATISFIABLE" ||
+                temporalSemantics !== "static" && whyNotResult?.Result === "OPTIMUM FOUND") {
+                structuralTypedPathCounterfactualWhyNot = temporalSemantics === "static"
+                  ? parseTypedPathCompletionWhyNotCertificate(
+                    whyNotResult?.Call?.[0]?.Witnesses,
+                    typedPathOptions,
+                    whyNot.candidates,
+                    observedEdges,
+                    [...nodesInGroup],
+                    reverseIndex
+                  ) ?? undefined
+                  : parseTypedPathTemporalCompletionWhyNotCertificate(
+                    whyNotResult?.Call?.[0]?.Witnesses,
+                    typedPathOptions as TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics },
+                    whyNot.candidates,
+                    temporalEdgeRecords,
+                    [...nodesInGroup],
+                    reverseIndex,
+                    edgeIdentityFacts.reverseEdgeIndex,
+                    temporalEncoding.decode
+                  ) ?? undefined;
+                if (!structuralTypedPathCounterfactualWhyNot) {
+                  structuralTypedPathCounterfactualWhyNotError = "Il witness ASP dei prefissi non coincide con il ricalcolo indipendente.";
+                }
+              } else {
+                const failureDetail = typeof whyNotResult?.Error === "string" ? whyNotResult.Error.trim() : "";
+                structuralTypedPathCounterfactualWhyNotError =
+                  `La diagnosi why-not non è stata completata (${whyNotResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
+              }
+            }
+          } catch (whyNotError) {
+            structuralTypedPathCounterfactualWhyNotError =
+              `La diagnosi why-not non è disponibile: ${whyNotError instanceof Error ? whyNotError.message : String(whyNotError)}`;
+          }
+          return;
+        }
+        const emptyCandidateFeasibility = compiled.candidates.length === 0 && result?.Result === "SATISFIABLE";
+        if (result?.Result !== "OPTIMUM FOUND" && !emptyCandidateFeasibility) {
+          structuralTypedPathCounterfactualError = `Il solver non ha provato una proposta ottima (${result?.Result ?? "risposta vuota"}).`;
+          return;
+        }
+        structuralTypedPathCounterfactuals = parseTypedPathCompletionCounterfactuals(
+          result?.Call?.[0]?.Witnesses,
+          typedPathOptions,
+          compiled.candidates,
+          observedEdges,
+          reverseIndex,
+          edgeIdentityFacts.reverseEdgeIndex,
+          temporalSemantics === "static" ? undefined : {
+            edgeRecords: temporalEdgeRecords,
+            decodeTemporalValue: temporalEncoding.decode
+          }
+        );
+        if (structuralTypedPathCounterfactuals.length === 0) {
+          structuralTypedPathCounterfactualError = "Il solver ha trovato un ottimo, ma il witness del cammino non ha superato la verifica.";
+          return;
+        }
+        structuralTypedPathCounterfactualHasRun = true;
+      } finally {
+        solverRunning = false;
+      }
+    } catch (error) {
+      solverRunning = false;
+      structuralTypedPathCounterfactualError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async function runKPlexCompletionCounterfactual(request: {
     targetS: number;
     cohortNodeIds: string[];
@@ -3416,23 +4972,77 @@
       );
       const fullProgram = `${facts.trim()}\n\n${compiled.program}\n`;
       const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + taskTimeoutMs;
       solverRunning = true;
       const startedAt = performance.now();
       try {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`e scaduto il limite complessivo di ${taskTimeoutMs} ms`);
         const result = await callClingo(
           fullProgram,
           getStructuralSolverOptions("kPlex", request.enumerateAllOptima === true),
-          taskTimeoutMs
+          remainingMs
         );
-        structuralKPlexCounterfactualTimeMs = performance.now() - startedAt;
         if (result?.Result === "ERROR") {
           structuralKPlexCounterfactualError = result.Error || "Errore del worker clingo.";
           return;
         }
-        if (result?.Result === "UNSATISFIABLE") {
-          structuralKPlexCounterfactualHasRun = true;
+        if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
+          !hasCompleteModelEnumeration(result)) {
+          structuralKPlexCounterfactualError = "clingo non conferma che tutti i completamenti ottimi siano stati enumerati; il risultato parziale è stato scartato.";
           return;
         }
+        if (result?.Result === "UNSATISFIABLE") {
+          structuralKPlexCounterfactualHasRun = true;
+          const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+          if (whyNotRemainingMs <= 0) {
+            structuralKPlexCounterfactualWhyNotMessage = "Il solver ha provato l'infeasibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+          } else {
+            try {
+              const diagnostic = buildKPlexCompletionWhyNotProgram(
+                request.targetS,
+                cohortNodeIndices as number[],
+                candidatesForCohort
+              );
+              const diagnosticResult = await callClingo(
+                `${facts.trim()}\n\n${diagnostic.program}\n`,
+                [],
+                whyNotRemainingMs
+              );
+              if (diagnosticResult?.Result !== "SATISFIABLE" || diagnosticResult?.Models?.More !== "no") {
+                structuralKPlexCounterfactualWhyNotMessage = diagnosticResult?.Result === "ERROR"
+                  ? `Il solver ha provato l'infeasibilita, ma non ha completato il certificato why-not: ${diagnosticResult.Error || "errore del worker clingo"}`
+                  : `Il solver ha provato l'infeasibilita, ma la query why-not non ha restituito un answer set completo (${diagnosticResult?.Result ?? "risposta vuota"}).`;
+              } else {
+                const observedEdges = (data.links as any[]).flatMap((link) => {
+                  const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
+                  const targetNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target)));
+                  return sourceNode !== undefined && targetNode !== undefined
+                    ? [{ sourceNode, targetNode }]
+                    : [];
+                });
+                const nodeIdByIndex = new Map<number, string>(
+                  [...indexByNodeId.entries()].map(([nodeId, nodeIndex]) => [nodeIndex, nodeId])
+                );
+                structuralKPlexCounterfactualWhyNot = parseKPlexCompletionWhyNot(
+                  diagnosticResult?.Call?.[0]?.Witnesses,
+                  request.targetS,
+                  cohortNodeIndices as number[],
+                  observedEdges,
+                  diagnostic.candidates,
+                  nodeIdByIndex
+                );
+              }
+            } catch (error) {
+              structuralKPlexCounterfactualWhyNotMessage = error instanceof Error
+                ? `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${error.message}`
+                : `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${String(error)}`;
+            }
+          }
+          structuralKPlexCounterfactualTimeMs = performance.now() - startedAt;
+          return;
+        }
+        structuralKPlexCounterfactualTimeMs = performance.now() - startedAt;
         const emptyCandidateOptimum = result?.Result === "SATISFIABLE" && compiled.candidates.length === 0;
         if (result?.Result !== "OPTIMUM FOUND" && !emptyCandidateOptimum) {
           structuralKPlexCounterfactualError = `Il solver non ha provato una proposta ottima (${result?.Result ?? "risposta vuota"}).`;
@@ -3523,23 +5133,79 @@
       );
       const fullProgram = `${facts.trim()}\n\n${compiled.program}\n`;
       const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + taskTimeoutMs;
       solverRunning = true;
       const startedAt = performance.now();
       try {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`e scaduto il limite complessivo di ${taskTimeoutMs} ms`);
         const result = await callClingo(
           fullProgram,
           getStructuralCounterfactualSolverOptions(request.enumerateAllOptima === true),
-          taskTimeoutMs
+          remainingMs
         );
-        structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
         if (result?.Result === "ERROR") {
           structuralKCoreCounterfactualError = result.Error || "Errore del worker clingo.";
+          structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
+          return;
+        }
+        if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
+          !hasCompleteModelEnumeration(result)) {
+          structuralKCoreCounterfactualError = "clingo non conferma che tutti i completamenti ottimi del k-core siano stati enumerati; il risultato parziale è stato scartato.";
+          structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
           return;
         }
         if (result?.Result === "UNSATISFIABLE") {
           structuralKCoreCounterfactualHasRun = true;
+          const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+          if (whyNotRemainingMs <= 0) {
+            structuralKCoreCounterfactualWhyNotMessage = "Il solver ha provato l'infeasibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+          } else {
+            try {
+              const diagnostic = buildKCoreCompletionWhyNotProgram(
+                request.targetK,
+                cohortNodeIndices as number[],
+                candidatesForCohort
+              );
+              const diagnosticResult = await callClingo(
+                `${facts.trim()}\n\n${diagnostic.program}\n`,
+                [],
+                whyNotRemainingMs
+              );
+              if (diagnosticResult?.Result !== "SATISFIABLE" || diagnosticResult?.Models?.More !== "no") {
+                structuralKCoreCounterfactualWhyNotMessage = diagnosticResult?.Result === "ERROR"
+                  ? `Il solver ha provato l'infeasibilita, ma non ha completato il certificato why-not: ${diagnosticResult.Error || "errore del worker clingo"}`
+                  : `Il solver ha provato l'infeasibilita, ma la query why-not non ha restituito un answer set completo (${diagnosticResult?.Result ?? "risposta vuota"}).`;
+              } else {
+                const observedEdges = (data.links as any[]).flatMap((link) => {
+                  const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
+                  const targetNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target)));
+                  return sourceNode !== undefined && targetNode !== undefined
+                    ? [{ sourceNode, targetNode }]
+                    : [];
+                });
+                const nodeIdByIndex = new Map<number, string>(
+                  [...indexByNodeId.entries()].map(([nodeId, nodeIndex]) => [nodeIndex, nodeId])
+                );
+                structuralKCoreCounterfactualWhyNot = parseKCoreCompletionWhyNot(
+                  diagnosticResult?.Call?.[0]?.Witnesses,
+                  request.targetK,
+                  cohortNodeIndices as number[],
+                  observedEdges,
+                  diagnostic.candidates,
+                  nodeIdByIndex
+                );
+              }
+            } catch (error) {
+              structuralKCoreCounterfactualWhyNotMessage = error instanceof Error
+                ? `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${error.message}`
+                : `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${String(error)}`;
+            }
+          }
+          structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
           return;
         }
+        structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
         const emptyCandidateOptimum = result?.Result === "SATISFIABLE" && compiled.candidates.length === 0;
         if (result?.Result !== "OPTIMUM FOUND" && !emptyCandidateOptimum) {
           structuralKCoreCounterfactualError = `Il solver non ha provato una proposta ottima (${result?.Result ?? "risposta vuota"}).`;
@@ -3639,23 +5305,68 @@
       const nodeIdByIndex = new Map([...indexByNodeId].map(([nodeId, index]) => [index, nodeId]));
       const fullProgram = `${facts.trim()}\n\n${compiled.program}\n`;
       const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + taskTimeoutMs;
       solverRunning = true;
       const startedAt = performance.now();
       try {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`e scaduto il limite complessivo di ${taskTimeoutMs} ms`);
         const result = await callClingo(
           fullProgram,
           getKCoreMembershipCounterfactualSolverOptions(request.enumerateAllOptima === true),
-          taskTimeoutMs
+          remainingMs
         );
-        structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
         if (result?.Result === "ERROR") {
           structuralKCoreMembershipCounterfactualError = result.Error || "Errore del worker clingo.";
+          structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
+          return;
+        }
+        if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
+          !hasCompleteModelEnumeration(result)) {
+          structuralKCoreMembershipCounterfactualError = "clingo non conferma che tutte le proposte ottime di membership siano state enumerate; il risultato parziale è stato scartato.";
+          structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
           return;
         }
         if (result?.Result === "UNSATISFIABLE") {
           structuralKCoreMembershipCounterfactualHasRun = true;
+          const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+          if (whyNotRemainingMs <= 0) {
+            structuralKCoreMembershipCounterfactualWhyNotMessage = "Il solver ha provato l'infattibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+          } else {
+            try {
+              const observedEdges = (data.links as any[]).flatMap((link) => {
+                const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
+                const targetNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target)));
+                return sourceNode !== undefined && targetNode !== undefined
+                  ? [{ sourceNode, targetNode }]
+                  : [];
+              });
+              structuralKCoreMembershipCounterfactualWhyNot = await solveKCoreMembershipCompletionWhyNotByRounds(
+                request.targetK,
+                targetNodeIndex,
+                candidateNodeIndices as number[],
+                observedEdges,
+                candidatesForCohort,
+                nodeIdByIndex,
+                async (roundProgram) => {
+                  const remainingRoundMs = getRemainingSolverBudgetMs(deadline, performance.now());
+                  if (remainingRoundMs <= 0) {
+                    throw new Error(`e scaduto il limite complessivo di ${taskTimeoutMs} ms`);
+                  }
+                  return await callClingo(roundProgram, [], remainingRoundMs);
+                },
+                { stopAfterTargetRemoval: true, maxRoundsPerQuery: 4, adaptiveBatching: true }
+              );
+            } catch (error) {
+              structuralKCoreMembershipCounterfactualWhyNotMessage = error instanceof Error
+              ? `Il solver ha provato l'infattibilita, ma il certificato why-not non e stato completato o verificato: ${error.message}`
+              : `Il solver ha provato l'infattibilita, ma il certificato why-not non e stato completato o verificato: ${String(error)}`;
+            }
+          }
+          structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
           return;
         }
+        structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
         const emptyCandidateOptimum = result?.Result === "SATISFIABLE" && compiled.candidates.length === 0;
         if (result?.Result !== "OPTIMUM FOUND" && !emptyCandidateOptimum) {
           structuralKCoreMembershipCounterfactualError = `Il solver non ha provato un completamento ottimo (${result?.Result ?? "risposta vuota"}).`;
@@ -3688,6 +5399,8 @@
     includeKCoreNumbers?: boolean;
     group: string;
     pathEdgeTypeSequence?: string[];
+    pathTemporalSemantics?: "static" | TypedPathTemporalSemantics;
+    strictTemporalOrder?: boolean;
     enumerateAllOptima?: boolean;
     enumerateAllMaximalKPlex?: boolean;
     startNodeId?: string;
@@ -3697,6 +5410,7 @@
     maximumCommunityCount?: number;
     explainKCoreExclusions?: boolean;
     explainCommunityContributions?: boolean;
+    explainCommunityInfeasibility?: boolean;
     explainPathMinimality?: boolean;
     explainTypedPathNoRoute?: boolean;
   }) {
@@ -3708,41 +5422,24 @@
     showStructuralPanel = true;
     clearStructuralTaskResult();
 
-    const requirementName = request.task === "kPlex" || request.task === "maximalKPlex"
-      ? "kPlex"
-      : request.task === "kCore"
-        ? "kCore"
-        : request.task === "components"
-          ? "connectedComponents"
-          : request.task === "weakComponents"
-            ? "weakComponents"
-          : request.task === "strongComponents"
-            ? "strongComponents"
-          : request.task === "dominatingSet"
-            ? "dominatingSet"
-            : request.task === "minimumNodeSeparator"
-              ? "minimumNodeSeparator"
-              : request.task === "minimumCostNodeSeparator"
-                ? "minimumCostNodeSeparator"
-              : request.task === "minimumEdgeSeparator"
-                ? "minimumEdgeSeparator"
-                : request.task === "minimumCostEdgeSeparator"
-                  ? "minimumCostEdgeSeparator"
-                : request.task === "communities"
-                  ? "communities"
-                  : request.task === "typedPath"
-                    ? "typedPath"
-                  : "boundedPath";
-    const requiredCapabilities = [
-      ...(getGraphTaskRequirements(requirementName, request.task === "kCore" ? graphDirection : undefined) ?? []),
-      ...(request.task === "communities" && configuredCommunityConstraints?.useEdgeWeights === true
-        ? ["modularityWeights"]
-        : []),
-      ...((request.task === "typedPath" || request.task === "minimumNodeSeparator" || request.task === "minimumCostNodeSeparator" ||
-        request.task === "minimumEdgeSeparator" || request.task === "minimumCostEdgeSeparator") && graphDirection === "directed"
-        ? ["directedEdges"]
-        : []),
-    ];
+    const taskContract = getGraphTaskContract(request.task, {
+      direction: graphDirection,
+      temporalSemantics: request.pathTemporalSemantics ?? "static",
+      useEdgeWeights: request.task === "communities" && configuredCommunityConstraints?.useEdgeWeights === true
+    });
+    if (!taskContract) {
+      structuralError = `Il task '${request.task}' non ha un contratto registrato.`;
+      return;
+    }
+    const enumeration = resolveTaskEnumeration(request.task, {
+      enumerateAllOptima: request.enumerateAllOptima,
+      enumerateAllMaximalKPlex: request.enumerateAllMaximalKPlex
+    });
+    if (!enumeration) {
+      structuralError = `La modalit\u00e0 di enumerazione richiesta per '${request.task}' non \u00e8 dichiarata nel contratto ASP.`;
+      return;
+    }
+    const requiredCapabilities = taskContract.requiredCapabilities.slice();
     const capabilitiesForRequest = request.task === "minimumCostNodeSeparator"
       ? {
           ...graphCapabilities,
@@ -3790,7 +5487,7 @@
       return;
     }
 
-    const { facts, reverseIndex, indexByNodeId } = buildAspFactsFromCurrentData();
+    const { facts, reverseIndex, indexByNodeId, temporalEncoding } = buildAspFactsFromCurrentData();
     if (!facts.trim()) {
       structuralError = "Non sono stati generati fatti ASP dalla proiezione corrente.";
       return;
@@ -3824,24 +5521,6 @@
         : "Scegli due nodi terminali distinti da separare.";
       return;
     }
-    if (request.task === "dominatingSet") {
-      const targetGroup = request.targetGroup ?? "";
-      const candidateNodes = request.group
-        ? data.nodes.filter((node: any) => extractGroups(node).includes(request.group))
-        : data.nodes;
-      const targetNodes = targetGroup
-        ? data.nodes.filter((node: any) => extractGroups(node).includes(targetGroup))
-        : data.nodes;
-      if (candidateNodes.length === 0) {
-        structuralError = "Il gruppo selezionato non contiene candidati nell'attuale proiezione visibile.";
-        return;
-      }
-      if (targetNodes.length === 0) {
-        structuralError = "Il gruppo selezionato non contiene nodi obiettivo da coprire nella proiezione visibile.";
-        return;
-      }
-    }
-
     const edgeSeparatorFacts = edgeSeparatorTask
       ? buildMinimumEdgeSeparatorFacts(
         data.links,
@@ -3857,6 +5536,7 @@
       )
       : null;
     let communityEdgeLinks: any[] = [];
+    let communityEdgeRecords: NonNullable<typeof communityPairMembershipContext>["communityEdgeRecords"] = [];
     let communityEdgeIdentityFacts: ReturnType<typeof buildMinimumEdgeSeparatorFacts> | null = null;
     const pathEdgeWitnessFacts = request.task === "path"
       ? buildPathEdgeFacts(
@@ -3869,6 +5549,7 @@
       )
       : null;
     let typedPathProgram = "";
+    let temporalTypedPathEdgeRecords: TypedPathTemporalEdgeRecord[] = [];
     if (request.task === "typedPath") {
       try {
         const edgeTypeSequence = request.pathEdgeTypeSequence ?? [];
@@ -3879,18 +5560,47 @@
         if (!pathCandidateNodeIds.has(request.startNodeId) || !pathCandidateNodeIds.has(request.goalNodeId)) {
           throw new Error("I nodi iniziale e finale devono appartenere al gruppo selezionato.");
         }
-        if (edgeTypeSequence.length + 1 > pathCandidateNodes.length) {
+        if (edgeTypeSequence.length + 1 > pathCandidateNodes.length && request.explainTypedPathNoRoute !== true) {
           throw new Error("La sequenza richiede piu nodi distinti di quanti ne contiene il gruppo selezionato.");
         }
         if (edgeTypeSequence.some((edgeType) => !availableStructuralEdgeTypes.includes(edgeType))) {
           throw new Error("Ogni passo del cammino deve usare un tipo d'arco disponibile nella proiezione corrente.");
+        }
+        const temporalSemantics = request.pathTemporalSemantics ?? "static";
+        if (temporalSemantics !== "static") {
+          let recordIndex = 0;
+          for (const link of data.links) {
+            const sourceId = normalizeGraphId(getGraphEndpointId(link.source));
+            const targetId = normalizeGraphId(getGraphEndpointId(link.target));
+            const sourceNode = indexByNodeId.get(sourceId);
+            const targetNode = indexByNodeId.get(targetId);
+            if (!sourceNode || !targetNode) continue;
+            recordIndex += 1;
+            const validityFrom = temporalEncoding.encode(link.analysis?.validity?.from);
+            const validityTo = temporalEncoding.encode(link.analysis?.validity?.to);
+            if (validityFrom === null || validityTo === null) {
+              throw new Error("Ogni arco della proiezione deve avere un intervallo temporale valido e mappato.");
+            }
+            temporalTypedPathEdgeRecords.push({
+              recordIndex,
+              sourceNode,
+              targetNode,
+              edgeType: String(link.analysis?.type ?? ""),
+              validityFrom,
+              validityTo
+            });
+          }
         }
         typedPathProgram = buildTypedPathProgram({
           startNode: startIndex!,
           goalNode: goalIndex!,
           edgeTypeSequence,
           direction: graphDirection,
-          group: request.group
+          group: request.group,
+          ...(temporalSemantics !== "static" ? { temporalSemantics } : {}),
+          ...(temporalSemantics === "orderedByStart"
+            ? { strictTemporalOrder: request.strictTemporalOrder === true }
+            : {})
         });
       } catch (error) {
         structuralError = error instanceof Error ? error.message : String(error);
@@ -3898,11 +5608,17 @@
       }
     }
     let communityFacts: ReturnType<typeof buildModularityFacts> | null = null;
+    let factoredCommunityPartitions: ParsedModularityPartition[] | null = null;
     let communityPairwiseObjectiveFacts = "";
     let communityComponentFacts = "";
     let communityProgram = "";
+    let communityConstraintDiagnosisProgram = "";
+    let communityConstraintDiagnosisSpecs: CommunityConstraintRelaxationSpec[] = [];
+    let communityOptions: ModularityCommunityOptions | null = null;
     let communityDomainCount = 0;
     let communityCandidateNodes: any[] = [];
+    let communityCandidateIndexes: number[] = [];
+    let communityCandidateReverseIndex: Record<number, string> = {};
     if (request.task === "communities") {
       try {
         if (communityConfigurationError) throw new Error(communityConfigurationError);
@@ -3924,16 +5640,41 @@
           return;
         }
         const candidateNodeIds = new Set(candidateNodes.map((node: any) => node.id));
-        const candidateIndexes = candidateNodes
-          .map((node: any) => indexByNodeId.get(node.id))
-          .filter((index: number | undefined): index is number => index !== undefined);
+        const candidateIndexes: number[] = [];
+        for (const node of candidateNodes) {
+          const candidateIndex = indexByNodeId.get(node.id);
+          if (candidateIndex !== undefined) candidateIndexes.push(candidateIndex);
+        }
+        communityCandidateIndexes = [...candidateIndexes];
+        const candidateReverseIndex: Record<number, string> = {};
+        for (const candidateIndex of candidateIndexes) {
+          const candidateId = (reverseIndex as Record<number, string>)[candidateIndex];
+          if (candidateId) candidateReverseIndex[candidateIndex] = candidateId;
+        }
+        communityCandidateReverseIndex = candidateReverseIndex;
         communityEdgeLinks = [];
+        communityEdgeRecords = [];
         const communityEdges = data.links.flatMap((link: any) => {
           const sourceId = normalizeGraphId(getGraphEndpointId(link.source));
           const targetId = normalizeGraphId(getGraphEndpointId(link.target));
           if (!candidateNodeIds.has(sourceId) || !candidateNodeIds.has(targetId)) return [];
           const source = indexByNodeId.get(sourceId);
           const target = indexByNodeId.get(targetId);
+          if (source !== undefined && target !== undefined) {
+            const mappedSourceId = link.sourceId ?? link.analysis?.id;
+            communityEdgeRecords.push({
+              identity: getStructuralEdgeIdentity(link),
+              sourceNodeId: sourceId,
+              targetNodeId: targetId,
+              sourceIndex: source,
+              targetIndex: target,
+              ...(mappedSourceId === undefined || mappedSourceId === null ? {} : { sourceId: String(mappedSourceId) }),
+              sourceIdGenerated: link.sourceIdGenerated === true,
+              ...(configuredCommunityConstraints?.useEdgeWeights === true
+                ? { weight: link.analysis?.weight as number | string }
+                : {})
+            });
+          }
           if (source && target && request.explainCommunityContributions === true) communityEdgeLinks.push(link);
           return source && target ? [{
             source,
@@ -3985,7 +5726,9 @@
         const attributeBounds = resolveCommunityAttributeBounds(
           configuredCommunityConstraints?.attributeBounds,
           candidateNodes,
-          indexByNodeId
+          indexByNodeId,
+          request.explainCommunityInfeasibility === true,
+          request.explainCommunityInfeasibility === true
         );
         const minCount = requestedMinimum > 0
           ? requestedMinimum
@@ -4004,7 +5747,7 @@
         if (separateDisconnectedComponents) {
           communityComponentFacts = communityFacts.connectedComponentFacts;
         }
-        communityProgram = buildMaximumModularityProgram({
+        communityOptions = {
           weighted: configuredCommunityConstraints?.useEdgeWeights === true,
           separateDisconnectedComponents,
           minCount,
@@ -4016,7 +5759,16 @@
           ...(communityPairwiseObjectiveFacts && communityFacts.pairwiseObjectiveOffset !== undefined
             ? { pairwiseObjectiveOffset: communityFacts.pairwiseObjectiveOffset }
             : {})
-        });
+        };
+        communityProgram = buildMaximumModularityProgram(communityOptions);
+        if (request.explainCommunityInfeasibility === true) {
+          const builtDiagnosis = buildCommunityConstraintRelaxationProgram({
+            ...communityOptions,
+            diagnosisCosts: configuredCommunityConstraints?.diagnosisCosts
+          });
+          communityConstraintDiagnosisProgram = builtDiagnosis.program;
+          communityConstraintDiagnosisSpecs = builtDiagnosis.constraints;
+        }
       } catch (error) {
         structuralError = error instanceof Error ? error.message : String(error);
         return;
@@ -4125,6 +5877,29 @@
         result = search.result;
         kPlexSearchComplete = true;
         kPlexMaximumSize = search.maximumSize;
+      } else if (request.task === "communities" && communityFacts && communityOptions &&
+        communityFacts.candidateCount > MAX_PAIRWISE_MODULARITY_CANDIDATES &&
+        communityOptions?.minCount === undefined && communityOptions?.maxCount === undefined &&
+        (communityOptions?.mustLinkPairs?.length ?? 0) === 0 &&
+        (communityOptions?.cannotLinkPairs?.length ?? 0) === 0 &&
+        (communityOptions?.attributeBounds?.length ?? 0) === 0) {
+        const factored = await solveModularityByPositiveWeightComponents(
+          communityFacts,
+          communityCandidateReverseIndex,
+          {
+            enumerateAllOptima: request.enumerateAllOptima === true,
+            includeContributions: communityOptions.includeContributions,
+            solve: (componentProgram, componentSolverOptions) =>
+              runClingoWithinTaskBudget(componentProgram, componentSolverOptions)
+          }
+        );
+        if (factored) {
+          factoredCommunityPartitions = factored.partitions;
+          result = factored.result;
+        } else {
+          result = await runClingoWithinTaskBudget(fullProgram, solverOptions);
+        }
+
       } else {
         result = await runClingoWithinTaskBudget(
           fullProgram,
@@ -4138,6 +5913,20 @@
       }
       if (result?.Result === "ERROR") {
         structuralError = result.Error || "Errore del worker clingo.";
+        return;
+      }
+      if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
+        !(request.task === "communities"
+          ? hasCompleteOptimalModelEnumeration(result)
+          : hasCompleteModelEnumeration(result))) {
+        structuralError = request.task === "communities"
+          ? "L'ottimo della modularità è stato provato, ma clingo non conferma che tutti gli ottimi siano stati enumerati. Il riepilogo di co-appartenenza non è disponibile."
+          : "clingo non conferma che tutti gli ottimi richiesti siano stati enumerati; il risultato parziale è stato scartato.";
+        return;
+      }
+      if (request.task === "maximalKPlex" && request.enumerateAllMaximalKPlex === true &&
+        (result?.Result !== "SATISFIABLE" || !hasCompleteModelEnumeration(result))) {
+        structuralError = `clingo non conferma che tutti i k-plex massimali siano stati enumerati (${result?.Result ?? "risposta vuota"}); l'elenco parziale è stato scartato.`;
         return;
       }
       if (request.task === "kCore" && request.explainKCoreExclusions === true) {
@@ -4279,38 +6068,127 @@
         return;
       }
       if (request.task === "typedPath" && result?.Result === "UNSATISFIABLE") {
-        structuralError = "Nessun cammino semplice collega i nodi scelti rispettando la sequenza esatta dei tipi d'arco nella proiezione e nel gruppo selezionati.";
+        structuralError = request.pathTemporalSemantics === "coValid"
+          ? "Nessun cammino semplice rispetta la sequenza tipizzata con tutti gli archi validi nello stesso istante."
+          : request.pathTemporalSemantics === "orderedByStart"
+            ? `Nessun cammino semplice rispetta la sequenza tipizzata con inizi di validità ${request.strictTemporalOrder === true ? "strettamente crescenti" : "non decrescenti"}.`
+            : "Nessun cammino semplice collega i nodi scelti rispettando la sequenza esatta dei tipi d'arco nella proiezione e nel gruppo selezionati.";
         if (request.explainTypedPathNoRoute === true) {
           const edgeTypeSequence = request.pathEdgeTypeSequence ?? [];
-          const noRouteProgram = buildTypedPathNoRouteProgram({
+          const temporalSemantics = request.pathTemporalSemantics ?? "static";
+          const noRouteOptions = {
             startNode: startIndex!,
             goalNode: goalIndex!,
             edgeTypeSequence,
             direction: graphDirection,
             group: request.group
-          });
-          const noRouteResult = await runClingoWithinTaskBudget(
-            `${facts.trim()}\n\n${noRouteProgram}\n`,
-            []
-          );
-          if (noRouteResult?.Result === "SATISFIABLE") {
-            structuralTypedPathNoRouteCertificate = parseTypedPathNoRouteCertificate(
-              noRouteResult?.Call?.[0]?.Witnesses,
-              reverseIndex,
-              edgeTypeSequence
-            ) ?? undefined;
-            if (!structuralTypedPathNoRouteCertificate) {
-              structuralError += " Il solver non ha restituito un certificato completo dei prefissi raggiungibili.";
+          };
+          if (temporalSemantics === "static") {
+            const noRouteProgram = buildTypedPathNoRouteProgram(noRouteOptions);
+            const noRouteResult = await runClingoWithinTaskBudget(
+              `${facts.trim()}\n\n${noRouteProgram}\n`,
+              []
+            );
+            if (noRouteResult?.Result === "SATISFIABLE") {
+              structuralTypedPathNoRouteCertificate = parseTypedPathNoRouteCertificate(
+                noRouteResult?.Call?.[0]?.Witnesses,
+                reverseIndex,
+                edgeTypeSequence
+              ) ?? undefined;
+              if (!structuralTypedPathNoRouteCertificate) {
+                structuralError += " Il solver non ha restituito un certificato completo dei prefissi raggiungibili.";
+              }
+            } else {
+              const failureDetail = typeof noRouteResult?.Error === "string" ? noRouteResult.Error.trim() : "";
+              structuralError += ` Il certificato why-not del cammino tipizzato non è stato completato (${noRouteResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
             }
           } else {
-            const failureDetail = typeof noRouteResult?.Error === "string" ? noRouteResult.Error.trim() : "";
-            structuralError += ` Il certificato why-not del cammino tipizzato non è stato completato (${noRouteResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
+            const temporalOptions = {
+              ...noRouteOptions,
+              temporalSemantics,
+              ...(temporalSemantics === "orderedByStart"
+                ? { strictTemporalOrder: request.strictTemporalOrder === true }
+                : {})
+            } as TypedPathOptions & { temporalSemantics: TypedPathTemporalSemantics };
+            const noRouteProgram = buildTypedPathTemporalNoRouteProgram(temporalOptions);
+            const noRouteResult = await runClingoWithinTaskBudget(
+              `${facts.trim()}\n\n${noRouteProgram}\n`,
+              getStructuralCounterfactualSolverOptions(),
+              0
+            );
+            if (noRouteResult?.Result === "OPTIMUM FOUND") {
+              const candidateNodeIds = (request.group
+                ? data.nodes.filter((node: any) => extractGroups(node).includes(request.group))
+                : data.nodes).map((node: any) => String(node.id));
+              structuralTypedPathNoRouteCertificate = parseTypedPathTemporalNoRouteCertificate(
+                noRouteResult?.Call?.[0]?.Witnesses,
+                temporalOptions,
+                temporalTypedPathEdgeRecords,
+                candidateNodeIds,
+                reverseIndex,
+                typedPathEdgeIdentityFacts?.reverseEdgeIndex ?? {},
+                temporalEncoding.decode
+              ) ?? undefined;
+              if (!structuralTypedPathNoRouteCertificate) {
+                structuralError += " Il witness why-not temporale non coincide con il controllo indipendente della massima lunghezza del walk.";
+              }
+            } else {
+              const failureDetail = typeof noRouteResult?.Error === "string" ? noRouteResult.Error.trim() : "";
+              structuralError += ` Il certificato why-not temporale non è stato completato (${noRouteResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
+            }
           }
         }
         return;
       }
       if (request.task === "dominatingSet" && result?.Result === "UNSATISFIABLE") {
         structuralError = "Nessun insieme dei candidati selezionati copre tutti i nodi obiettivo.";
+        const feasibilityProgram = buildDominatingSetFeasibilityProgram(
+          request.group,
+          request.targetGroup ?? ""
+        );
+        const feasibilityResult = await runClingoWithinTaskBudget(
+          `${facts.trim()}\n\n${feasibilityProgram}\n`,
+          []
+        );
+        if (feasibilityResult?.Result !== "SATISFIABLE") {
+          const failureDetail = typeof feasibilityResult?.Error === "string"
+            ? feasibilityResult.Error.trim()
+            : "";
+          structuralError += ` Il certificato why-not non è stato completato (${feasibilityResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
+          return;
+        }
+
+        const certificate = parseDominatingSetFeasibilityCertificate(
+          feasibilityResult?.Call?.[0]?.Witnesses,
+          reverseIndex
+        );
+        if (!certificate) {
+          structuralError += " Il solver non ha restituito un certificato why-not interpretabile.";
+          return;
+        }
+
+        const candidateIds: string[] = data.nodes
+          .filter((node: any) => !request.group || extractGroups(node).includes(request.group))
+          .map((node: any) => String(normalizeGraphId(node.id)));
+        const targetIds: string[] = data.nodes
+          .filter((node: any) => !request.targetGroup || extractGroups(node).includes(request.targetGroup))
+          .map((node: any) => String(normalizeGraphId(node.id)));
+        const expectedUncoverableIds = verifyDominatingSetFeasibilityCertificate(
+          certificate,
+          candidateIds,
+          targetIds,
+          data.links.map((link: any) => [
+            String(normalizeGraphId(getLinkEndId(link.source))),
+            String(normalizeGraphId(getLinkEndId(link.target)))
+          ] as [string, string])
+        );
+        if (!expectedUncoverableIds) {
+          structuralError += " Il certificato ASP non coincide con il controllo indipendente sulla proiezione corrente ed è stato scartato.";
+          return;
+        }
+
+        structuralDominatingSetUncoverableTargetNodeIds = expectedUncoverableIds;
+        structuralError = `Copertura impossibile: ${expectedUncoverableIds.length} ${expectedUncoverableIds.length === 1 ? "target non ha" : "target non hanno"} alcun candidato eleggibile che coincida o sia adiacente. Il certificato why-not è verificato sulla proiezione corrente.`;
         return;
       }
       if (request.task === "minimumNodeSeparator" && result?.Result === "UNSATISFIABLE") {
@@ -4323,6 +6201,39 @@
       }
       if (request.task === "communities" && result?.Result === "UNSATISFIABLE") {
         structuralError = "I vincoli di comunità configurati non ammettono una partizione del gruppo selezionato.";
+        if (request.explainCommunityInfeasibility !== true) return;
+        if (!communityConstraintDiagnosisProgram || communityConstraintDiagnosisSpecs.length === 0) {
+          structuralCommunityConstraintDiagnosisError = "Non ci sono vincoli di configurazione rilassabili nella query: controlla proiezione, attributi e prerequisiti del task.";
+          return;
+        }
+        const diagnosisProgram = [communityFacts?.facts.trim(), communityConstraintDiagnosisProgram]
+          .filter(Boolean)
+          .join("\n\n") + "\n";
+        const diagnosisResult = await runClingoWithinTaskBudget(
+          diagnosisProgram,
+          getStructuralSolverOptions("communities", request.enumerateAllOptima === true),
+          0
+        );
+        if (diagnosisResult?.Result !== "OPTIMUM FOUND") {
+          structuralCommunityConstraintDiagnosisError = diagnosisResult?.Error ??
+            `La diagnosi non ha provato il minimo rilassamento entro il budget residuo (${diagnosisResult?.Result ?? "risposta vuota"}).`;
+          return;
+        }
+        try {
+          structuralCommunityConstraintDiagnoses = parseCommunityConstraintDiagnosisResult(
+            diagnosisResult,
+            communityCandidateReverseIndex,
+            communityConstraintDiagnosisSpecs,
+            { requireAllOptima: request.enumerateAllOptima === true }
+          );
+          if (structuralCommunityConstraintDiagnoses.length === 0) {
+            structuralCommunityConstraintDiagnosisError = "Il solver non ha restituito una diagnosi minima verificabile.";
+          } else {
+            structuralCommunityConstraintDiagnosesAllEnumerated = request.enumerateAllOptima === true;
+          }
+        } catch (error) {
+          structuralCommunityConstraintDiagnosisError = error instanceof Error ? error.message : String(error);
+        }
         return;
       }
       const emptyEdgeCutIsTrivial = edgeSeparatorTask &&
@@ -4368,18 +6279,43 @@
         structuralPathMinimality = path.minimalityCertificate;
         structuralEdgeSourceIdById = pathEdgeWitnessFacts?.displayIdByEdgeId ?? {};
       } else if (request.task === "typedPath") {
-        const typedPath = parseWitnessTypedPath(
-          result?.Call?.[0]?.Witnesses,
-          reverseIndex,
-          typedPathEdgeIdentityFacts?.reverseEdgeIndex ?? {},
-          request.pathEdgeTypeSequence?.length ?? 0
-        );
+        const typedPath = request.pathTemporalSemantics && request.pathTemporalSemantics !== "static"
+          ? parseWitnessTemporalTypedPath(
+            result?.Call?.[0]?.Witnesses,
+            reverseIndex,
+            typedPathEdgeIdentityFacts?.reverseEdgeIndex ?? {},
+            temporalTypedPathEdgeRecords,
+            {
+              startNode: startIndex!,
+              goalNode: goalIndex!,
+              edgeTypeSequence: request.pathEdgeTypeSequence ?? [],
+              direction: graphDirection,
+              group: request.group,
+              temporalSemantics: request.pathTemporalSemantics,
+              ...(request.pathTemporalSemantics === "orderedByStart"
+                ? { strictTemporalOrder: request.strictTemporalOrder === true }
+                : {})
+            },
+            temporalEncoding.decode
+          )
+          : parseWitnessTypedPath(
+            result?.Call?.[0]?.Witnesses,
+            reverseIndex,
+            typedPathEdgeIdentityFacts?.reverseEdgeIndex ?? {},
+            request.pathEdgeTypeSequence?.length ?? 0
+          );
         if (!typedPath) {
-          structuralError = "Il solver non ha restituito un cammino tipizzato leggibile con un arco testimone per ogni passo.";
+          structuralError = "Il solver non ha restituito un cammino tipizzato leggibile e verificabile per ogni passo e semantica selezionati.";
           return;
         }
         structuralResults = [typedPath.nodeIds];
         structuralPathEdgeIdsByStep = typedPath.edgeIdsByStep;
+        structuralPathTemporalSemantics = request.pathTemporalSemantics ?? "static";
+        if (request.pathTemporalSemantics && request.pathTemporalSemantics !== "static") {
+          const temporalPath = typedPath as TypedPathTemporalResult;
+          structuralPathCommonTimeValue = temporalPath.commonTimeValue;
+          structuralPathStartTimeValuesByStep = temporalPath.startTimeValuesByStep ?? [];
+        }
         structuralEdgeSourceIdById = typedPathEdgeIdentityFacts?.displayIdByEdgeId ?? {};
       } else if (request.task === "dominatingSet") {
         const explanations = parseWitnessDominatingSetExplanations(
@@ -4430,11 +6366,13 @@
             : "Nessuna partizione soddisfa i vincoli di comunità configurati.";
           return;
         }
-        structuralCommunityPartitions = addCommunityAttributeBoundCounts(
+        structuralCommunityPartitions = deriveCommunityAttributeBoundCounts(
           selectMaximumModularityPartitions(
-            parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, reverseIndex)
+            factoredCommunityPartitions ??
+              parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, reverseIndex)
           ),
-          communityCandidateNodes
+          communityCandidateNodes,
+          configuredCommunityConstraints?.attributeBounds
         );
         if (request.explainCommunityContributions === true && communityEdgeIdentityFacts) {
           structuralCommunityPartitions = structuralCommunityPartitions.map((partition) => ({
@@ -4449,6 +6387,29 @@
         if (structuralCommunityPartitions.length === 0) {
           structuralError = "Il solver non ha restituito una partizione comunitaria leggibile.";
           return;
+        }
+        if (result?.Result === "OPTIMUM FOUND" && communityFacts && communityOptions) {
+          communityPairMembershipContext = {
+            baseFacts: [
+              facts.trim(),
+              communityFacts.facts.trim(),
+              communityComponentFacts.trim(),
+              communityPairwiseObjectiveFacts.trim()
+            ].filter(Boolean).join("\n\n") + "\n",
+            graphFacts: facts.trim(),
+            options: communityOptions,
+            reverseIndex: communityCandidateReverseIndex,
+            indexByNodeId: new Map(communityCandidateNodes.flatMap((node: any) => {
+              const nodeId = String(node.id);
+              const index = indexByNodeId.get(nodeId);
+              return index === undefined ? [] : [[nodeId, index] as [string, number]];
+            })),
+            candidateNodeIds: new Set(communityCandidateNodes.map((node: any) => String(node.id))),
+            globalScaledScore: structuralCommunityPartitions[0].scaledScore,
+            communityEdgeRecords: [...communityEdgeRecords],
+            candidateIndexes: [...communityCandidateIndexes],
+            resolution: configuredCommunityConstraints?.resolution ?? 1
+          };
         }
       } else if (request.task === "kPlex" || request.task === "maximalKPlex") {
         const maximalExplanations = request.task === "maximalKPlex"
@@ -4571,6 +6532,7 @@
           }, 0)
           : undefined
       };
+      clearGraphNeighborhoodFocus();
       if (edgeSeparatorTask) {
         highlightedEdgeIds = new Set(structuralResults[0] ?? []);
         cliqueNodes = new Set();
@@ -4592,6 +6554,295 @@
     } catch (error) {
       structuralError = error instanceof Error ? error.message : String(error);
     } finally {
+      solverRunning = false;
+    }
+  }
+
+  async function probeCommunityPairOptimumMembership(pair: [string, string]) {
+    if (solverRunning || !clingoWorker) return;
+    structuralCommunityPairMembership = null;
+    structuralCommunityPairMembershipError = "";
+    structuralCommunityPairMembershipTimeMs = undefined;
+    const context = communityPairMembershipContext;
+    if (!context) {
+      structuralCommunityPairMembershipError = "Ricalcola prima la modularitÃ : l'ottimo di riferimento non Ã¨ piÃ¹ disponibile per la proiezione corrente.";
+      return;
+    }
+    if (!Array.isArray(pair) || pair.length !== 2 || pair.some((nodeId) => typeof nodeId !== "string" || !nodeId)) {
+      structuralCommunityPairMembershipError = "Scegli due nodi candidati distinti.";
+      return;
+    }
+    const [leftNodeId, rightNodeId] = pair;
+    if (leftNodeId === rightNodeId) {
+      structuralCommunityPairMembershipError = "Scegli due nodi diversi.";
+      return;
+    }
+    if (!context.candidateNodeIds.has(leftNodeId) || !context.candidateNodeIds.has(rightNodeId)) {
+      structuralCommunityPairMembershipError = "Entrambi i nodi devono appartenere al dominio candidato dell'analisi di modularitÃ .";
+      return;
+    }
+    const leftNode = context.indexByNodeId.get(leftNodeId);
+    const rightNode = context.indexByNodeId.get(rightNodeId);
+    if (leftNode === undefined || rightNode === undefined) {
+      structuralCommunityPairMembershipError = "La coppia selezionata non Ã¨ mappabile nel dominio ASP corrente.";
+      return;
+    }
+
+    try {
+      const programs = buildCommunityPairMembershipPrograms(context.options, [leftNode, rightNode]);
+      const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      const deadline = performance.now() + timeoutMs;
+      const startedAt = performance.now();
+      solverRunning = true;
+      structuralCommunityPairMembershipRunning = true;
+      const probe = async (kind: "together" | "separate", program: string): Promise<number | null> => {
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`budget complessivo esaurito prima della query ${kind === "together" ? "must-link" : "cannot-link"}`);
+        const result = await callClingo(
+          `${context.baseFacts}\n${program}\n`,
+          getStructuralSolverOptions("communities"),
+          remainingMs
+        );
+        if (result?.Result === "ERROR") {
+          throw new Error(result.Error || `Errore del worker clingo nella query ${kind}.`);
+        }
+        if (result?.Result === "UNSATISFIABLE") return null;
+        if (result?.Result !== "OPTIMUM FOUND") {
+          throw new Error(`clingo non ha provato l'ottimo della query ${kind === "together" ? "must-link" : "cannot-link"} (${result?.Result ?? "risposta vuota"}).`);
+        }
+        const optimumPartitions = selectMaximumModularityPartitions(
+          parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, context.reverseIndex)
+        );
+        if (optimumPartitions.length === 0) {
+          throw new Error(`La query ${kind} non ha restituito un punteggio di modularitÃ  leggibile.`);
+        }
+        const selectedPartition = optimumPartitions[0];
+        const pairIsTogether = selectedPartition.communities.some((community) =>
+          community.includes(leftNodeId) && community.includes(rightNodeId)
+        );
+        if ((kind === "together" && !pairIsTogether) || (kind === "separate" && pairIsTogether)) {
+          throw new Error(`Il witness ottimo della query ${kind} non rispetta il vincolo di coppia richiesto.`);
+        }
+        return selectedPartition.scaledScore;
+      };
+      const togetherScore = await probe("together", programs.together);
+      const separateScore = await probe("separate", programs.separate);
+      structuralCommunityPairMembership = classifyCommunityPairOptimumMembership(
+        pair,
+        context.globalScaledScore,
+        togetherScore,
+        separateScore
+      );
+      structuralCommunityPairMembershipTimeMs = performance.now() - startedAt;
+    } catch (error) {
+      structuralCommunityPairMembershipError = error instanceof Error
+        ? `Classificazione scartata: ${error.message}`
+        : `Classificazione scartata: ${String(error)}`;
+      structuralCommunityPairMembershipTimeMs = undefined;
+    } finally {
+      structuralCommunityPairMembershipRunning = false;
+      solverRunning = false;
+    }
+  }
+
+  async function runCommunityTopologyCounterfactual(request: {
+    pair: [string, string];
+    relation: "always" | "sometimes" | "never";
+  }) {
+    if (solverRunning || !clingoWorker) return;
+    structuralCommunityTopologyCounterfactual = null;
+    structuralCommunityTopologyCounterfactualError = "";
+    structuralCommunityTopologyCounterfactualTimeMs = undefined;
+    const context = communityPairMembershipContext;
+    if (!context) {
+      structuralCommunityTopologyCounterfactualError = "Ricalcola prima la modularità sulla proiezione corrente.";
+      return;
+    }
+    if (!Array.isArray(request?.pair) || request.pair.length !== 2 ||
+      request.pair.some((nodeId) => typeof nodeId !== "string" || !nodeId) ||
+      request.pair[0] === request.pair[1] ||
+      !["always", "sometimes", "never"].includes(request.relation)) {
+      structuralCommunityTopologyCounterfactualError = "Seleziona una coppia distinta e una relazione obiettivo valida.";
+      return;
+    }
+    if (request.pair.some((nodeId) => !context.candidateNodeIds.has(nodeId))) {
+      structuralCommunityTopologyCounterfactualError = "La coppia deve appartenere al dominio candidato dell'analisi corrente.";
+      return;
+    }
+
+    const configuredEdits = configuredCommunityConstraints?.topologyCounterfactuals?.edgeEdits ?? [];
+    const projectedNodeBySourceId = new Map<string, string>();
+    for (const node of originalData?.nodes ?? []) {
+      const nodeId = String(node.id);
+      if (!context.candidateNodeIds.has(nodeId)) continue;
+      const sourceId = normalizeGraphId(node.sourceId ?? node.id);
+      if (projectedNodeBySourceId.has(sourceId) && projectedNodeBySourceId.get(sourceId) !== nodeId) {
+        structuralCommunityTopologyCounterfactualError = `L'ID sorgente nodo '${sourceId}' non identifica un nodo univoco nella proiezione.`;
+        return;
+      }
+      projectedNodeBySourceId.set(sourceId, nodeId);
+    }
+
+    const availableEdits: CommunityTopologyEdgeEdit[] = [];
+    const removedEdgeByEditId = new Map<string, string>();
+    const addedEndpointByEditId = new Map<string, [string, string]>();
+    for (const edit of configuredEdits as CommunityTopologyEdgeEdit[]) {
+      if (edit.action === "add") {
+        const sourceNodeId = projectedNodeBySourceId.get(normalizeGraphId(edit.sourceNodeId));
+        const targetNodeId = projectedNodeBySourceId.get(normalizeGraphId(edit.targetNodeId));
+        if (!sourceNodeId || !targetNodeId) continue;
+        availableEdits.push(edit);
+        addedEndpointByEditId.set(edit.id, [sourceNodeId, targetNodeId]);
+        continue;
+      }
+      const matchingRecords = context.communityEdgeRecords.filter((edge) =>
+        edge.sourceIdGenerated !== true && edge.sourceId === String(edit.edgeId)
+      );
+      if (matchingRecords.length !== 1) continue;
+      availableEdits.push(edit);
+      removedEdgeByEditId.set(edit.id, matchingRecords[0].identity);
+    }
+    if (availableEdits.length === 0) {
+      structuralCommunityTopologyCounterfactualError = "Nessun edge edit configurato è applicabile al gruppo e alla proiezione visibile correnti.";
+      return;
+    }
+
+    const pairIndexes = request.pair.map((nodeId) => context.indexByNodeId.get(nodeId));
+    if (pairIndexes.some((index) => index === undefined)) {
+      structuralCommunityTopologyCounterfactualError = "La coppia selezionata non è mappabile nel dominio ASP corrente.";
+      return;
+    }
+
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    const deadline = performance.now() + timeoutMs;
+    const startedAt = performance.now();
+    solverRunning = true;
+    structuralCommunityTopologyCounterfactualRunning = true;
+    const runAsp = async (program: string, options: string[], phase: string) => {
+      const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+      if (remainingMs <= 0) throw new Error(`budget complessivo esaurito prima della fase ${phase}`);
+      const result = await callClingo(program, options, remainingMs);
+      if (result?.Result === "ERROR") throw new Error(result.Error || `Errore del worker clingo nella fase ${phase}.`);
+      return result;
+    };
+
+    try {
+      const outcome = await searchMinimumCostCommunityTopologyCounterfactual({
+        edits: availableEdits,
+        nodeIds: request.pair,
+        requestedRelation: request.relation,
+        solveSelection: async (selectionProgram) => {
+          const result = await runAsp(
+            selectionProgram,
+            getStructuralCounterfactualSolverOptions(),
+            "selezione degli edit"
+          );
+          return result;
+        },
+        evaluateGraph: async (editIndexes) => {
+          const removedIdentities = new Set(editIndexes.flatMap((editIndex) => {
+            const edit = availableEdits[editIndex];
+            const edgeIdentity = removedEdgeByEditId.get(edit.id);
+            return edgeIdentity ? [edgeIdentity] : [];
+          }));
+          const edgeRecords = context.communityEdgeRecords
+            .filter((edge) => !removedIdentities.has(edge.identity))
+            .map((edge) => ({
+              source: edge.sourceIndex,
+              target: edge.targetIndex,
+              ...(context.options.weighted ? { weight: edge.weight } : {})
+            }));
+          for (const editIndex of editIndexes) {
+            const edit = availableEdits[editIndex];
+            if (edit.action !== "add") continue;
+            const endpoints = addedEndpointByEditId.get(edit.id);
+            if (!endpoints) throw new Error(`Endpoint mancanti per l'edit '${edit.id}'.`);
+            const source = context.indexByNodeId.get(endpoints[0]);
+            const target = context.indexByNodeId.get(endpoints[1]);
+            if (source === undefined || target === undefined) throw new Error(`Endpoint non mappabili per l'edit '${edit.id}'.`);
+            edgeRecords.push({
+              source,
+              target,
+              ...(context.options.weighted ? { weight: edit.weight } : {})
+            });
+          }
+          const modularityFacts = buildModularityFacts(context.candidateIndexes, edgeRecords, {
+            weighted: context.options.weighted === true,
+            resolution: context.resolution,
+            includePairwiseObjective: context.candidateIndexes.length <= MAX_PAIRWISE_MODULARITY_CANDIDATES
+          });
+          if (modularityFacts.edgeCount === 0 || modularityFacts.totalWeight === 0) return null;
+
+          const {
+            pairwiseObjectiveOffset: _basePairwiseObjectiveOffset,
+            separateDisconnectedComponents: _baseComponentPruning,
+            includeContributions: _baseContributions,
+            ...semanticOptions
+          } = context.options;
+          const options: ModularityCommunityOptions = {
+            ...semanticOptions,
+            weighted: modularityFacts.weighted,
+            includeContributions: false,
+            ...(modularityFacts.pairwiseObjectiveFacts && modularityFacts.pairwiseObjectiveOffset !== undefined
+              ? { pairwiseObjectiveOffset: modularityFacts.pairwiseObjectiveOffset }
+              : {})
+          };
+          const programs = buildCommunityPairMembershipPrograms(
+            options,
+            pairIndexes as [number, number]
+          );
+          const factsForVariant = [
+            context.graphFacts,
+            modularityFacts.facts.trim(),
+            modularityFacts.pairwiseObjectiveFacts?.trim() ?? ""
+          ].filter(Boolean).join("\n\n");
+          const probe = async (kind: "together" | "separate", program: string): Promise<number | null> => {
+            const result = await runAsp(
+              `${factsForVariant}\n\n${program}\n`,
+              getStructuralSolverOptions("communities"),
+              `ottimo ${kind === "together" ? "must-link" : "cannot-link"}`
+            );
+            if (result?.Result === "UNSATISFIABLE") return null;
+            if (result?.Result !== "OPTIMUM FOUND") {
+              throw new Error(`clingo non ha provato l'ottimo ${kind === "together" ? "must-link" : "cannot-link"} (${result?.Result ?? "risposta vuota"}).`);
+            }
+            const optima = selectMaximumModularityPartitions(
+              parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, context.reverseIndex)
+            );
+            if (optima.length === 0) throw new Error(`Punteggio dell'ottimo ${kind} mancante o illeggibile.`);
+            const witnessHasRequiredRelation = optima[0].communities.some((community) =>
+              community.includes(request.pair[0]) && community.includes(request.pair[1])
+            );
+            if ((kind === "together" && !witnessHasRequiredRelation) ||
+              (kind === "separate" && witnessHasRequiredRelation)) {
+              throw new Error(`Il witness ottimo ${kind} non rispetta il vincolo interrogato.`);
+            }
+            return optima[0].scaledScore;
+          };
+          const togetherScaledScore = await probe("together", programs.together);
+          const separateScaledScore = await probe("separate", programs.separate);
+          if (togetherScaledScore === null && separateScaledScore === null) return null;
+          const modularityDenominator = 4n * BigInt(modularityFacts.totalWeight) ** 2n * BigInt(modularityFacts.resolutionDenominator);
+          return {
+            togetherScaledScore,
+            separateScaledScore,
+            modularityDenominator: String(modularityDenominator)
+          };
+        }
+      });
+      if (outcome.status === "not-found") {
+        structuralCommunityTopologyCounterfactualError = `Nessun sottoinsieme dei ${outcome.candidateCount} candidati raggiunge la relazione richiesta dopo ${outcome.testedEditSets} grafi modificati esaminati; la ricerca è completa.`;
+        return;
+      }
+      structuralCommunityTopologyCounterfactual = outcome.result;
+      structuralCommunityTopologyCounterfactualTimeMs = performance.now() - startedAt;
+    } catch (error) {
+      structuralCommunityTopologyCounterfactualError = error instanceof Error
+        ? `Ricerca senza certificato di minimo: ${error.message}`
+        : `Ricerca senza certificato di minimo: ${String(error)}`;
+      structuralCommunityTopologyCounterfactualTimeMs = undefined;
+    } finally {
+      structuralCommunityTopologyCounterfactualRunning = false;
       solverRunning = false;
     }
   }
@@ -4625,11 +6876,8 @@
 
     try {
       const provenanceProjectedData = getProvenanceProjectedData();
-      const { facts, reverseSourceIndex, reverseEdgeIndex, temporalEncoding } = buildAspFactsFromGraph(
-        provenanceProjectedData,
-        extractGroups,
-        { includeEdgeProvenance: false }
-      );
+      const { facts, reverseSourceIndex, reverseEdgeIndex, temporalEncoding } =
+        buildAppAspFactsFromGraph(provenanceProjectedData);
       if (!facts.trim()) {
         integrityError = "Non sono stati generati fatti ASP dal grafo importato.";
         return;
@@ -4649,6 +6897,10 @@
         integrityTimeMs = performance.now() - startedAt;
         if (result?.Result === "ERROR") {
           integrityError = result.Error || "Errore del worker clingo.";
+          return;
+        }
+        if (result?.Result !== "UNSATISFIABLE" && !hasCompleteModelEnumeration(result)) {
+          integrityError = `clingo non conferma che l'enumerazione delle violazioni sia completa (${result?.Result ?? "risposta vuota"}).`;
           return;
         }
         if (!["SATISFIABLE", "OPTIMUM FOUND"].includes(String(result?.Result))) {
@@ -4673,6 +6925,7 @@
 
   async function runTypedMotifAnalysis(request: { templateIndex: number; group: string }) {
     if (solverRunning || !clingoWorker) return;
+    clearMotifScenarioAnalysis();
     showSolverPanel = false;
     showStructuralPanel = false;
     showIntegrityPanel = false;
@@ -4682,6 +6935,14 @@
     motifMatches = [];
     motifHasRun = false;
     motifTimeMs = undefined;
+    motifCount = undefined;
+    motifCountHasRun = false;
+    motifCountError = "";
+    motifCountTimeMs = undefined;
+    motifCountPartitionCount = undefined;
+    motifCountProgress = undefined;
+    motifCountNotice = "";
+    motifCountAbortController = undefined;
     motifNearMatches = [];
     motifNearMatchHasRun = false;
     motifNearMatchError = "";
@@ -4720,7 +6981,10 @@
       const template = buildTypedMotifProgram(
         motifTemplates[request.templateIndex],
         graphDirection,
-        request.group
+        request.group,
+        false,
+        false,
+        temporalEncoding
       );
       const fullProgram = `${facts.trim()}\n\n${template.program}\n`;
       const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
@@ -4738,7 +7002,7 @@
           motifHasRun = true;
           return;
         }
-        if (result?.Result !== "SATISFIABLE") {
+        if (result?.Result !== "SATISFIABLE" || !hasCompleteModelEnumeration(result)) {
           motifError = `Il solver non ha completato l'enumerazione: ${result?.Result ?? "risposta vuota"}.`;
           return;
         }
@@ -4761,8 +7025,542 @@
     }
   }
 
+  async function compareProvenanceScenarioMotifs(request: { templateIndex: number; group: string }) {
+    if (solverRunning || !clingoWorker) return;
+    clearMotifAnalysis();
+    motifScenarioComparison = null;
+    motifScenarioComparisonError = "";
+    motifScenarioComparisonProgress = "";
+    showSolverPanel = false;
+    showStructuralPanel = false;
+    showIntegrityPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showMotifPanel = true;
+
+    if (provenanceScenarioConfig?.worldAssumption !== "finite-exhaustive-worlds") {
+      motifScenarioComparisonError = "Il confronto brave/cautious richiede worldAssumption: 'finite-exhaustive-worlds'.";
+      return;
+    }
+    if (!Array.isArray(provenanceScenarios) || provenanceScenarios.length === 0) {
+      motifScenarioComparisonError = "La configurazione non dichiara scenari di provenienza validi.";
+      return;
+    }
+    if (!Number.isInteger(request.templateIndex) || !motifTemplates[request.templateIndex]) {
+      motifScenarioComparisonError = "Seleziona un template di motivo presente in graphAnalysis.motifs.";
+      return;
+    }
+    const templateInput = motifTemplates[request.templateIndex];
+    if (!typedMotifDataReadiness.available) {
+      motifScenarioComparisonError = typedMotifDataReadiness.reasons.join("; ");
+      return;
+    }
+    if (templateInput.temporal && !temporalMotifDataReadiness.available) {
+      motifScenarioComparisonError = temporalMotifDataReadiness.reasons.join("; ");
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      motifScenarioComparisonError = blockingDiagnostic.message;
+      return;
+    }
+    if (!originalData?.nodes?.length) {
+      motifScenarioComparisonError = "Il grafo di origine non contiene nodi da confrontare.";
+      return;
+    }
+    const sourceGraph = originalData;
+    const confidenceRange = getEdgeConfidenceRange();
+    const confidenceThreshold = graphCapabilities.edgeConfidence?.available === true
+      ? minimumEdgeConfidence
+      : null;
+
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    const deadline = performance.now() + timeoutMs;
+    const scenarioInputs: ProvenanceMotifScenarioInput[] = [];
+    let activeScenarioLabel = "";
+    let totalTimeMs = 0;
+    solverRunning = true;
+    try {
+      for (let index = 0; index < provenanceScenarios.length; index += 1) {
+        const scenario = provenanceScenarios[index];
+        activeScenarioLabel = String(scenario.label ?? scenario.id);
+        motifScenarioComparisonProgress = `Scenario ${index + 1}/${provenanceScenarios.length}: ${activeScenarioLabel}`;
+        const sourceLinks = filterLinksByProvenanceScenario(sourceGraph.links ?? [], {
+          sources: scenario.sources,
+          unattributedEdges: provenanceScenarioConfig.unattributedEdges,
+          referenceMatching: provenanceScenarioConfig.referenceMatching ?? "any"
+        });
+        const confidenceQualifiedLinks = filterLinksByMinimumConfidence(
+          sourceLinks,
+          confidenceThreshold,
+          confidenceRange
+        );
+        const timelineQualifiedLinks = getTimelineQualifiedLinks(confidenceQualifiedLinks);
+        const scenarioVisibleNodeIds = projectVisibleNodeIdsForLinks(timelineQualifiedLinks);
+        const candidateNodes = sourceGraph.nodes.filter((node: any) =>
+          scenarioVisibleNodeIds.has(String(node.id))
+        );
+        const candidateNodeIds = new Set(candidateNodes.map((node: any) => normalizeGraphId(node.id)));
+        const scenarioLinks = timelineQualifiedLinks.filter((link: any) =>
+          candidateNodeIds.has(normalizeGraphId(getLinkEndId(link.source))) &&
+          candidateNodeIds.has(normalizeGraphId(getLinkEndId(link.target)))
+        );
+        const graphForScenario = { ...sourceGraph, nodes: candidateNodes, links: scenarioLinks };
+        const { facts, reverseIndex, reverseSourceIndex, reverseEdgeIndex, temporalEncoding } =
+          buildAppAspFactsFromGraph(graphForScenario);
+        const compiledTemplate = buildTypedMotifProgram(
+          templateInput,
+          graphDirection,
+          request.group,
+          false,
+          false,
+          temporalEncoding
+        );
+        const fullProgram = `${facts.trim()}\n\n${compiledTemplate.program}\n`;
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`è scaduto il limite complessivo di ${timeoutMs} ms`);
+        const startedAt = performance.now();
+        const result = await callClingo(fullProgram, [], remainingMs);
+        const timeMs = performance.now() - startedAt;
+        totalTimeMs += timeMs;
+        if (result?.Result === "ERROR") throw new Error(result.Error || "clingo ha restituito un errore");
+        let matches: TypedMotifMatch[] = [];
+        if (result?.Result !== "UNSATISFIABLE") {
+          if (result?.Result !== "SATISFIABLE" || !hasCompleteModelEnumeration(result)) {
+            throw new Error(`clingo non ha completato l'enumerazione del motivo (${result?.Result ?? "risposta vuota"})`);
+          }
+          matches = parseTypedMotifMatches(
+            result?.Call?.[0]?.Witnesses,
+            compiledTemplate,
+            reverseIndex,
+            reverseSourceIndex,
+            reverseEdgeIndex,
+            new Set(),
+            temporalEncoding.decode
+          );
+        }
+        scenarioInputs.push({
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label ?? scenario.id,
+          nodesCount: candidateNodes.length,
+          linksCount: scenarioLinks.length,
+          timeMs,
+          enumerationComplete: true,
+          matches
+        });
+      }
+
+      motifScenarioComparison = summarizeProvenanceScenarioMotifs(
+        templateInput.id,
+        templateInput.label ?? templateInput.id,
+        Object.keys(templateInput.roles),
+        scenarioInputs,
+        {
+          selectedGroup: request.group,
+          graphDirection,
+          timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+          minimumEdgeConfidence: confidenceThreshold,
+          viewFilters: getScenarioViewFilterSnapshot()
+        }
+      );
+      motifScenarioComparisonTimeMs = totalTimeMs;
+    } catch (error) {
+      motifScenarioComparison = null;
+      const message = error instanceof Error ? error.message : String(error);
+      motifScenarioComparisonError = `Confronto interrotto nello scenario '${activeScenarioLabel}'. Nessun risultato parziale è stato presentato. ${message}`;
+    } finally {
+      solverRunning = false;
+      motifScenarioComparisonProgress = "";
+    }
+  }
+
+  async function countTypedMotifMatches(request: { templateIndex: number; group: string }) {
+    if (solverRunning || !clingoWorker) return;
+    clearMotifScenarioAnalysis();
+    showSolverPanel = false;
+    showStructuralPanel = false;
+    showIntegrityPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showMotifPanel = true;
+    motifError = "";
+    motifMatches = [];
+    motifHasRun = false;
+    motifTimeMs = undefined;
+    motifCount = undefined;
+    motifCountHasRun = false;
+    motifCountError = "";
+    motifCountTimeMs = undefined;
+    motifCountPartitionCount = undefined;
+    motifCountProgress = undefined;
+    motifCountNotice = "";
+    motifCountAbortController = undefined;
+    motifNearMatches = [];
+    motifNearMatchHasRun = false;
+    motifNearMatchError = "";
+    motifNearMatchTimeMs = undefined;
+    resetMotifCounterfactual();
+
+    if (!Number.isInteger(request.templateIndex) || !motifTemplates[request.templateIndex]) {
+      motifCountError = "Seleziona un template di motivo presente in graphAnalysis.motifs.";
+      return;
+    }
+    const selectedTemplate = motifTemplates[request.templateIndex];
+    const motifCountContract = getGraphTaskContract("motifCount", {
+      direction: graphDirection,
+      temporalSemantics: selectedTemplate.temporal?.semantics ?? "static"
+    });
+    const motifCountRequirements = checkGraphTaskRequirements(
+      graphCapabilities,
+      motifCountContract?.requiredCapabilities.slice() ?? []
+    );
+    if (!motifCountContract || !motifCountRequirements.available) {
+      motifCountError = motifCountRequirements.reasons.join("; ") || "Il conteggio dei motivi non ha un contratto ASP valido.";
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      motifCountError = blockingDiagnostic.message;
+      return;
+    }
+    if (!data?.nodes?.length) {
+      motifCountError = "La proiezione visibile corrente non contiene nodi da analizzare.";
+      return;
+    }
+    if (!motifCountPartitionSettings.enabled && motifCountPartitionSettings.error) {
+      motifCountError = motifCountPartitionSettings.error;
+      return;
+    }
+
+    try {
+      const { facts, temporalEncoding } = buildAspFactsFromCurrentData();
+      if (!facts.trim()) {
+        motifCountError = "Non sono stati generati fatti ASP dalla proiezione visibile corrente.";
+        return;
+      }
+      const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      solverRunning = true;
+      const startedAt = performance.now();
+      try {
+        if (motifCountPartitionSettings.enabled) {
+          const controller = new AbortController();
+          motifCountAbortController = controller;
+          const partitionDomain = resolveTypedMotifCountPartitionDomain(selectedTemplate);
+          const partitioned = await runTypedMotifCountPartitions({
+            edgeCount: data.links?.length ?? 0,
+            roleNodeCount: data.nodes.length,
+            partitionDomain,
+            settings: motifCountPartitionSettings.settings,
+            perPartitionTimeoutMs: taskTimeoutMs,
+            signal: controller.signal,
+            onProgress: (progress) => {
+              motifCountProgress = progress;
+            },
+            runPartition: async (partitionIndexes, timeoutMs, signal) => {
+              const counted = buildTypedMotifCountProgram(
+                selectedTemplate,
+                graphDirection,
+                request.group,
+                {
+                  temporalEncoding,
+                  ...(partitionDomain === "firstPatternEdge"
+                    ? { firstPatternEdgeIndexes: partitionIndexes }
+                    : { firstRoleNodeIndexes: partitionIndexes })
+                }
+              );
+              const fullProgram = `${facts.trim()}\n\n${counted.program}\n`;
+              return callClingo(fullProgram, [], timeoutMs, 1, signal);
+            }
+          });
+          motifCountTimeMs = performance.now() - startedAt;
+          if (partitioned.status === "complete") {
+            motifCount = partitioned.count;
+            motifCountPartitionCount = partitioned.partitionCount;
+            motifCountHasRun = true;
+          } else if (partitioned.status === "cancelled") {
+            motifCountNotice = "Conteggio annullato; il totale parziale non è stato pubblicato.";
+          } else if (partitioned.status === "timeout") {
+            motifCountError = `Budget complessivo di ${motifCountPartitionSettings.settings.maxDurationMs.toLocaleString("it-IT")} ms esaurito dopo ${partitioned.completedPartitions}/${partitioned.partitionCount} partizioni; nessun totale parziale è stato pubblicato.`;
+          } else {
+            motifCountError = partitioned.message;
+          }
+        } else {
+          const counted = buildTypedMotifCountProgram(
+            selectedTemplate,
+            graphDirection,
+            request.group,
+            { temporalEncoding }
+          );
+          const fullProgram = `${facts.trim()}\n\n${counted.program}\n`;
+          const result = await callClingo(fullProgram, [], taskTimeoutMs, 1);
+          motifCountTimeMs = performance.now() - startedAt;
+          if (result?.Result === "ERROR") {
+            motifCountError = result.Error || "Errore del worker clingo.";
+            return;
+          }
+          if (result?.Result !== "SATISFIABLE" || result?.Models?.More !== "no") {
+            motifCountError = `Il solver non ha restituito un conteggio aggregato completo: ${result?.Result ?? "risposta vuota"}.`;
+            return;
+          }
+          const count = parseTypedMotifCount(result?.Call?.[0]?.Witnesses);
+          if (count === undefined) {
+            motifCountError = "Il solver non ha restituito un singolo valore di conteggio valido.";
+            return;
+          }
+          motifCount = count;
+          motifCountHasRun = true;
+        }
+      } finally {
+        solverRunning = false;
+        motifCountProgress = undefined;
+        motifCountAbortController = undefined;
+      }
+    } catch (error) {
+      solverRunning = false;
+      motifCountProgress = undefined;
+      motifCountAbortController = undefined;
+      motifCountError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function cancelTypedMotifCount() {
+    if (!motifCountAbortController) return;
+    motifCountNotice = "Annullamento in corso; il totale parziale verrà scartato.";
+    motifCountAbortController.abort();
+  }
+
+  async function runSignedTriadAnalysis(request: { group: string }) {
+    if (solverRunning || !clingoWorker) return;
+    clearSignedTriadScenarioAnalysis();
+    showSolverPanel = false;
+    showStructuralPanel = false;
+    showIntegrityPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showMotifPanel = true;
+    signedTriadError = "";
+    signedTriadResults = [];
+    signedTriadHasRun = false;
+    signedTriadTimeMs = undefined;
+    selectedSignedTriadGroup = request.group;
+
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      signedTriadError = blockingDiagnostic.message;
+      return;
+    }
+    const readiness = prepareSignedTriads(
+      signedTriadConfig,
+      graphSchemaVersion,
+      graphDirection,
+      data?.nodes ?? [],
+      data?.links ?? [],
+      new Set(Object.keys(GRAPH_CONFIG.graphMapping?.edge?.attributes ?? {})),
+      extractGroups,
+      request.group,
+      typeof GRAPH_CONFIG.graphMapping?.edge?.typeField === "string" && GRAPH_CONFIG.graphMapping.edge.typeField.trim() !== ""
+    );
+    if (!readiness.available) {
+      signedTriadError = readiness.reasons.join(" ");
+      return;
+    }
+    if (!data?.nodes?.length) {
+      signedTriadError = "La proiezione visibile corrente non contiene nodi da analizzare.";
+      return;
+    }
+
+    try {
+      const { facts, reverseIndex } = buildAspFactsFromCurrentData();
+      if (!facts.trim()) {
+        signedTriadError = "Non sono stati generati fatti ASP dalla proiezione visibile corrente.";
+        return;
+      }
+      const program = `${facts.trim()}\n\n${buildSignedTriadProgram(readiness)}\n`;
+      const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      solverRunning = true;
+      const startedAt = performance.now();
+      try {
+        const result = await callClingo(program, [], taskTimeoutMs);
+        signedTriadTimeMs = performance.now() - startedAt;
+        if (result?.Result === "ERROR") {
+          signedTriadError = result.Error || "Errore del worker clingo.";
+          return;
+        }
+        if (result?.Result !== "SATISFIABLE") {
+          signedTriadError = `Il solver non ha completato la classificazione: ${result?.Result ?? "risposta vuota"}.`;
+          return;
+        }
+        if (!hasCompleteModelEnumeration(result)) {
+          signedTriadError = "clingo non conferma che tutte le triadi siano state classificate; il risultato parziale è stato scartato.";
+          return;
+        }
+        signedTriadResults = parseSignedTriadResults(
+          result?.Call?.[0]?.Witnesses,
+          reverseIndex,
+          readiness.dyads
+        );
+        signedTriadHasRun = true;
+      } finally {
+        solverRunning = false;
+      }
+    } catch (error) {
+      solverRunning = false;
+      signedTriadError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function compareSignedTriadScenarios(request: { group: string }) {
+    if (solverRunning || !clingoWorker) return;
+    clearSignedTriadAnalysis();
+    showSolverPanel = false;
+    showStructuralPanel = false;
+    showIntegrityPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showMotifPanel = true;
+    selectedSignedTriadGroup = request.group;
+
+    if (!signedTriadConfig) {
+      signedTriadScenarioComparisonError = "graphAnalysis.signedTriads non è configurato.";
+      return;
+    }
+    if (provenanceScenarioConfig?.worldAssumption !== "finite-exhaustive-worlds") {
+      signedTriadScenarioComparisonError = "Il confronto richiede worldAssumption: 'finite-exhaustive-worlds'.";
+      return;
+    }
+    if (!Array.isArray(provenanceScenarios) || provenanceScenarios.length < 2) {
+      signedTriadScenarioComparisonError = "Configura almeno due scenari di provenienza validi.";
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      signedTriadScenarioComparisonError = blockingDiagnostic.message;
+      return;
+    }
+    if (!originalData?.nodes) {
+      signedTriadScenarioComparisonError = "Il grafo di origine non è disponibile.";
+      return;
+    }
+
+    const sourceGraph = originalData;
+    const confidenceRange = getEdgeConfidenceRange();
+    const confidenceThreshold = graphCapabilities.edgeConfidence?.available === true
+      ? minimumEdgeConfidence
+      : null;
+    const timeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+    const deadline = performance.now() + timeoutMs;
+    const scenarioInputs: SignedTriadScenarioInput[] = [];
+    let activeScenarioLabel = "";
+    let totalTimeMs = 0;
+    solverRunning = true;
+    try {
+      for (let index = 0; index < provenanceScenarios.length; index += 1) {
+        const scenario = provenanceScenarios[index];
+        activeScenarioLabel = String(scenario.label ?? scenario.id);
+        signedTriadScenarioComparisonProgress = `Scenario ${index + 1}/${provenanceScenarios.length}: ${activeScenarioLabel}`;
+        const sourceLinks = filterLinksByProvenanceScenario(sourceGraph.links ?? [], {
+          sources: scenario.sources,
+          unattributedEdges: provenanceScenarioConfig.unattributedEdges,
+          referenceMatching: provenanceScenarioConfig.referenceMatching ?? "any"
+        });
+        const confidenceQualifiedLinks = filterLinksByMinimumConfidence(
+          sourceLinks,
+          confidenceThreshold,
+          confidenceRange
+        );
+        const timelineQualifiedLinks = getTimelineQualifiedLinks(confidenceQualifiedLinks);
+        const scenarioVisibleNodeIds = projectVisibleNodeIdsForLinks(timelineQualifiedLinks);
+        const candidateNodes = sourceGraph.nodes.filter((node: any) =>
+          scenarioVisibleNodeIds.has(String(node.id))
+        );
+        const candidateNodeIds = new Set(candidateNodes.map((node: any) => normalizeGraphId(node.id)));
+        const scenarioLinks = timelineQualifiedLinks.filter((link: any) =>
+          candidateNodeIds.has(normalizeGraphId(getLinkEndId(link.source))) &&
+          candidateNodeIds.has(normalizeGraphId(getLinkEndId(link.target)))
+        );
+
+        const candidateGroupNodes = request.group
+          ? candidateNodes.filter((node: any) => extractGroups(node).map((group) => String(group).trim()).includes(request.group))
+          : candidateNodes;
+        if (candidateNodes.length === 0 || candidateGroupNodes.length === 0) {
+          scenarioInputs.push({
+            scenarioId: scenario.id,
+            scenarioLabel: scenario.label ?? scenario.id,
+            nodesCount: candidateNodes.length,
+            linksCount: scenarioLinks.length,
+            timeMs: 0,
+            enumerationComplete: true,
+            triads: []
+          });
+          continue;
+        }
+
+        const graphForScenario = { ...sourceGraph, nodes: candidateNodes, links: scenarioLinks };
+        const preparation = prepareSignedTriads(
+          signedTriadConfig,
+          graphForScenario.schemaVersion,
+          graphForScenario.direction,
+          graphForScenario.nodes,
+          graphForScenario.links,
+          new Set(Object.keys(GRAPH_CONFIG.graphMapping?.edge?.attributes ?? {})),
+          extractGroups,
+          request.group,
+          typeof GRAPH_CONFIG.graphMapping?.edge?.typeField === "string" && GRAPH_CONFIG.graphMapping.edge.typeField.trim() !== ""
+        );
+        if (!preparation.available) {
+          throw new Error(preparation.reasons.join(" "));
+        }
+        const { facts, reverseIndex } = buildAppAspFactsFromGraph(graphForScenario);
+        if (!facts.trim()) throw new Error("Non sono stati generati fatti ASP per lo scenario.");
+        const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
+        if (remainingMs <= 0) throw new Error(`è scaduto il limite complessivo di ${timeoutMs} ms`);
+        const startedAt = performance.now();
+        const result = await callClingo(
+          `${facts.trim()}\n\n${buildSignedTriadProgram(preparation)}\n`,
+          [],
+          remainingMs
+        );
+        const timeMs = performance.now() - startedAt;
+        totalTimeMs += timeMs;
+        if (result?.Result === "ERROR") throw new Error(result.Error || "clingo ha restituito un errore");
+        if (result?.Result !== "SATISFIABLE" || !hasCompleteModelEnumeration(result)) {
+          throw new Error(`clingo non ha completato la classificazione nello scenario '${activeScenarioLabel}' (${result?.Result ?? "risposta vuota"}).`);
+        }
+        scenarioInputs.push({
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label ?? scenario.id,
+          nodesCount: candidateNodes.length,
+          linksCount: scenarioLinks.length,
+          timeMs,
+          enumerationComplete: true,
+          triads: parseSignedTriadResults(
+            result?.Call?.[0]?.Witnesses,
+            reverseIndex,
+            preparation.dyads
+          )
+        });
+      }
+
+      signedTriadScenarioComparison = summarizeSignedTriadScenarios(scenarioInputs, {
+        attribute: signedTriadConfig.attribute,
+        positiveValues: signedTriadConfig.positiveValues,
+        negativeValues: signedTriadConfig.negativeValues,
+        edgeTypes: Array.isArray(signedTriadConfig.edgeTypes) ? signedTriadConfig.edgeTypes : [],
+        selectedGroup: request.group,
+        timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+        minimumEdgeConfidence: confidenceThreshold,
+        viewFilters: getScenarioViewFilterSnapshot()
+      });
+      signedTriadScenarioComparisonTimeMs = totalTimeMs;
+    } catch (error) {
+      signedTriadScenarioComparison = null;
+      const message = error instanceof Error ? error.message : String(error);
+      signedTriadScenarioComparisonError = `Confronto interrotto nello scenario '${activeScenarioLabel}'. Nessun risultato parziale è stato presentato. ${message}`;
+    } finally {
+      solverRunning = false;
+      signedTriadScenarioComparisonProgress = "";
+    }
+  }
+
   async function runTypedMotifNearMatch(request: { templateIndex: number; group: string }) {
     if (solverRunning || !clingoWorker) return;
+    clearMotifScenarioAnalysis();
     motifNearMatches = [];
     motifNearMatchHasRun = false;
     motifNearMatchError = "";
@@ -4771,12 +7569,17 @@
       motifNearMatchError = "Seleziona un template di motivo presente in graphAnalysis.motifs.";
       return;
     }
-    if (!typedMotifDataReadiness.available) {
-      motifNearMatchError = typedMotifDataReadiness.reasons.join("; ");
-      return;
-    }
-    if (motifTemplates[request.templateIndex].temporal && !temporalMotifDataReadiness.available) {
-      motifNearMatchError = temporalMotifDataReadiness.reasons.join("; ");
+    const selectedTemplate = motifTemplates[request.templateIndex];
+    const nearMatchContract = getGraphTaskContract("typedMotifNearMatch", {
+      direction: graphDirection,
+      temporalSemantics: selectedTemplate.temporal?.semantics ?? "static"
+    });
+    const nearMatchRequirements = checkGraphTaskRequirements(
+      graphCapabilities,
+      nearMatchContract?.requiredCapabilities.slice() ?? []
+    );
+    if (!nearMatchContract || !nearMatchRequirements.available) {
+      motifNearMatchError = nearMatchRequirements.reasons.join("; ") || "Il near-match non ha un contratto ASP valido.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -4794,10 +7597,9 @@
         motifNearMatchError = "Non sono stati generati fatti ASP dalla proiezione visibile corrente.";
         return;
       }
-      const templateInput = motifTemplates[request.templateIndex];
-      const template = templateInput.temporal
-        ? buildTypedMotifTemporalNearMatchProgram(templateInput, graphDirection, request.group)
-        : buildTypedMotifNearMatchProgram(templateInput, graphDirection, request.group);
+      const template = selectedTemplate.temporal
+        ? buildTypedMotifTemporalNearMatchProgram(selectedTemplate, graphDirection, request.group, temporalEncoding)
+        : buildTypedMotifNearMatchProgram(selectedTemplate, graphDirection, request.group, temporalEncoding);
       const fullProgram = `${facts.trim()}\n\n${template.program}\n`;
       const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
       solverRunning = true;
@@ -4837,6 +7639,7 @@
 
   async function runTypedMotifCompletionCounterfactual(request: { templateIndex: number; group: string }) {
     if (solverRunning || !clingoWorker) return;
+    clearMotifScenarioAnalysis();
     resetMotifCounterfactual();
     if (!motifHasRun || motifMatches.length > 0) {
       motifCounterfactualError = "Esegui prima il motivo selezionato e verifica che non abbia istanze.";
@@ -4851,12 +7654,16 @@
       return;
     }
     const templateInput = motifTemplates[request.templateIndex];
-    if (!typedMotifDataReadiness.available) {
-      motifCounterfactualError = typedMotifDataReadiness.reasons.join("; ");
-      return;
-    }
-    if (templateInput.temporal && !temporalMotifDataReadiness.available) {
-      motifCounterfactualError = temporalMotifDataReadiness.reasons.join("; ");
+    const completionContract = getGraphTaskContract("motifCompletionCounterfactual", {
+      direction: graphDirection,
+      temporalSemantics: templateInput.temporal?.semantics ?? "static"
+    });
+    const completionRequirements = checkGraphTaskRequirements(
+      graphCapabilities,
+      completionContract?.requiredCapabilities.slice() ?? []
+    );
+    if (!completionContract || !completionRequirements.available) {
+      motifCounterfactualError = completionRequirements.reasons.join("; ") || "Il controfattuale del motivo non ha un contratto ASP valido.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -5039,11 +7846,200 @@
     motifHasRun = false;
     motifError = "";
     motifTimeMs = undefined;
+    motifCount = undefined;
+    motifCountHasRun = false;
+    motifCountError = "";
+    motifCountTimeMs = undefined;
+    motifCountPartitionCount = undefined;
+    motifCountProgress = undefined;
+    motifCountNotice = "";
+    motifCountAbortController = undefined;
     motifNearMatches = [];
     motifNearMatchHasRun = false;
     motifNearMatchError = "";
     motifNearMatchTimeMs = undefined;
+    clearMotifScenarioAnalysis();
     resetMotifCounterfactual();
+    clearContextualCliqueAnalysis();
+  }
+
+  function clearMotifScenarioAnalysis() {
+    motifScenarioComparison = null;
+    motifScenarioComparisonError = "";
+    motifScenarioComparisonProgress = "";
+    motifScenarioComparisonTimeMs = undefined;
+  }
+
+  function clearSignedTriadAnalysis() {
+    const wasFocused = focusedSignedTriadEdgeIds !== null;
+    signedTriadResults = [];
+    signedTriadHasRun = false;
+    signedTriadError = "";
+    signedTriadTimeMs = undefined;
+    clearSignedTriadScenarioAnalysis();
+    focusedSignedTriadEdgeIds = null;
+    focusedSignedTriadKey = "";
+    refreshLinkVisuals();
+    refreshNodeVisuals();
+    if (wasFocused) graph3D?.zoomToFit(500, 100);
+  }
+
+  function clearSignedTriadScenarioAnalysis() {
+    signedTriadScenarioComparison = null;
+    signedTriadScenarioComparisonError = "";
+    signedTriadScenarioComparisonProgress = "";
+    signedTriadScenarioComparisonTimeMs = undefined;
+  }
+
+  function clearContextualCliqueAnalysis() {
+    contextualCliqueResults = [];
+    contextualCliqueHasRun = false;
+    contextualCliqueError = "";
+    contextualCliqueTimeMs = undefined;
+  }
+
+  async function runContextualClique(request: { selectedGroup: string; enumerateAllOptima: boolean }) {
+    if (solverRunning) return;
+    clearContextualCliqueAnalysis();
+    showSolverPanel = false;
+    showStructuralPanel = false;
+    showIntegrityPanel = false;
+    showProvenanceScenarioAnalysisPanel = false;
+    showMotifPanel = true;
+    contextualCliqueGroup = typeof request?.selectedGroup === "string" ? request.selectedGroup : "";
+    contextualCliqueEnumerateAllOptima = request?.enumerateAllOptima === true;
+
+    if (!contextualCliqueConfig) {
+      contextualCliqueError = "graphAnalysis.contextualClique non è configurato.";
+      return;
+    }
+    if (!clingoWorker) {
+      contextualCliqueError = "Il worker clingo non è disponibile.";
+      return;
+    }
+    if (!contextualCliqueAvailable) {
+      contextualCliqueError = contextualCliqueRequirementReasons.join(" ") || "I prerequisiti del task non sono soddisfatti.";
+      return;
+    }
+    const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
+    if (blockingDiagnostic) {
+      contextualCliqueError = blockingDiagnostic.message;
+      return;
+    }
+    if (!data?.nodes?.length) {
+      contextualCliqueError = "La proiezione visibile corrente non contiene nodi da analizzare.";
+      return;
+    }
+
+    try {
+      const enumeration = resolveTaskEnumeration("contextualClique", {
+        enumerateAllOptima: contextualCliqueEnumerateAllOptima
+      });
+      if (!enumeration) throw new Error("Il contratto del task non definisce un protocollo di enumerazione.");
+      const { facts, reverseIndex, reverseSourceIndex, indexByNodeId } = buildAspFactsFromCurrentData();
+      if (!facts.trim()) throw new Error("Non sono stati generati fatti ASP dalla proiezione visibile corrente.");
+
+      const program = buildContextualCliqueProgram(contextualCliqueConfig, graphDirection, {
+        selectedGroup: contextualCliqueGroup
+      });
+      const incidenceIndex = buildContextualCliqueIncidenceIndex(data, contextualCliqueConfig, indexByNodeId);
+      const fullProgram = `${facts.trim()}\n\n${program}\n`;
+      const options = [enumeration === "all-maximum" ? "--opt-mode=optN" : "--opt-mode=opt"];
+      const taskTimeoutMs = resolveSolverTaskTimeoutMs(GRAPH_CONFIG.solver?.taskTimeoutMs);
+      solverRunning = true;
+      const startedAt = performance.now();
+      try {
+        const result = await callClingo(fullProgram, options, taskTimeoutMs);
+        contextualCliqueTimeMs = performance.now() - startedAt;
+        if (result?.Result === "ERROR") {
+          contextualCliqueError = result.Error || "Errore del worker clingo.";
+          return;
+        }
+        if (result?.Result === "UNSATISFIABLE") {
+          contextualCliqueResults = [];
+          contextualCliqueHasRun = true;
+          return;
+        }
+        if (!hasCompleteOptimalModelEnumeration(result)) {
+          contextualCliqueError = `clingo non ha provato l'ottimo e completato l'enumerazione richiesta (${result?.Result ?? "risposta vuota"}).`;
+          return;
+        }
+        const parsed = parseContextualCliqueResults(
+          result?.Call?.[0]?.Witnesses,
+          reverseIndex,
+          reverseSourceIndex,
+          incidenceIndex,
+          contextualCliqueConfig.minimumSize ?? 3
+        );
+        if (parsed.length === 0) {
+          contextualCliqueError = "clingo ha provato un ottimo, ma il witness non contiene supporti contestuali verificabili; i risultati sono stati scartati.";
+          return;
+        }
+        const optimumSize = parsed[0].nodeIds.length;
+        if (parsed.some((group) => group.nodeIds.length !== optimumSize)) {
+          contextualCliqueError = "clingo ha restituito gruppi di cardinalità diverse nella stessa enumerazione degli ottimi; i risultati sono stati scartati.";
+          return;
+        }
+        contextualCliqueResults = parsed;
+        contextualCliqueHasRun = true;
+      } finally {
+        solverRunning = false;
+      }
+    } catch (error) {
+      solverRunning = false;
+      contextualCliqueResults = [];
+      contextualCliqueError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function highlightContextualClique(result: ContextualCliqueResult) {
+    clearGraphNeighborhoodFocus();
+    const nodeIds = new Set([
+      ...result.nodeIds,
+      ...result.pairWitnesses.map((pair) => pair.contextNodeId)
+    ]);
+    const supportingSourceIds = new Set(result.pairWitnesses.flatMap((pair) =>
+      pair.supportingEdges.map((edge) => edge.edgeId)
+    ));
+    highlightedEdgeIds = new Set((data?.links ?? [])
+      .filter((link: any) => supportingSourceIds.has(String(link.sourceId ?? link.analysis?.id ?? "")))
+      .map((link: any) => getStructuralEdgeIdentity(link)));
+    refreshLinkVisuals();
+    cliqueNodes = nodeIds;
+    if (result.nodeIds[0]) selectRoot(result.nodeIds[0]);
+    refreshNodeVisuals();
+  }
+
+  function showSignedTriadInGraph(triad: SignedTriadResult, isolateOtherEdges = false) {
+    const edgeIdentities = new Set(triad.dyads.flatMap((dyad) =>
+      dyad.edgeRecords.map((record) => getStructuralEdgeIdentity({
+        source: "",
+        target: "",
+        sourceId: record.id
+      }))
+    ));
+    neighborhoodFocusNodeIds = null;
+    neighborhoodFocusInfo = null;
+    focusedSignedTriadEdgeIds = isolateOtherEdges ? edgeIdentities : null;
+    focusedSignedTriadKey = isolateOtherEdges ? triad.nodeIds.join("\u0000") : "";
+    refreshRenderedGraphData();
+    cliqueNodes = new Set(triad.nodeIds);
+    highlightedEdgeIds = edgeIdentities;
+    refreshLinkVisuals();
+    if (triad.nodeIds[0]) selectRoot(triad.nodeIds[0]);
+    refreshNodeVisuals();
+    if (isolateOtherEdges) {
+      const focusedNodeIds = new Set(triad.nodeIds);
+      graph3D?.zoomToFit(500, 100, (node: any) => focusedNodeIds.has(String(node.id)));
+    }
+  }
+
+  function clearSignedTriadGraphFocus() {
+    focusedSignedTriadEdgeIds = null;
+    focusedSignedTriadKey = "";
+    refreshLinkVisuals();
+    refreshNodeVisuals();
+    graph3D?.zoomToFit(500, 100);
   }
 
   function highlightTypedMotifCounterfactual(counterfactual: TypedMotifCounterfactual) {
@@ -5051,6 +8047,7 @@
   }
 
   function highlightTypedMotif(match: TypedMotifMatch) {
+    clearGraphNeighborhoodFocus();
     highlightedEdgeIds = new Set(match.supportingEdges.flatMap((edge) => edge.edgeIds));
     refreshLinkVisuals();
     cliqueNodes = new Set(match.nodeIds);
@@ -5058,7 +8055,24 @@
     refreshNodeVisuals();
   }
 
+  function inspectProvenanceMotifWitness(request: { scenarioId: string; match: TypedMotifMatch }) {
+    if (solverRunning || !request || !provenanceScenarios.some((scenario: any) => scenario.id === request.scenarioId) ||
+      !request.match || !Array.isArray(request.match.supportingEdges)) return;
+    setProvenanceScenario(request.scenarioId);
+    showMotifPanel = false;
+    highlightTypedMotif(request.match);
+  }
+
+  function inspectSignedTriadScenarioWitness(request: { scenarioId: string; triad: SignedTriadResult }) {
+    if (solverRunning || !request || !provenanceScenarios.some((scenario: any) => scenario.id === request.scenarioId) ||
+      !request.triad || !Array.isArray(request.triad.dyads) || request.triad.dyads.length !== 3) return;
+    setProvenanceScenario(request.scenarioId);
+    showMotifPanel = false;
+    showSignedTriadInGraph(request.triad);
+  }
+
   function highlightTypedMotifNearMatch(match: TypedMotifNearMatch) {
+    clearGraphNeighborhoodFocus();
     const nodeIds = Object.values(match.roles).map((role) => role.nodeId);
     highlightedEdgeIds = new Set(match.supportingEdges.flatMap((edge) => edge.edgeIds));
     refreshLinkVisuals();
@@ -5068,6 +8082,7 @@
   }
 
   function highlightIntegrityViolation(violation: IntegrityViolation) {
+    clearGraphNeighborhoodFocus();
     const sourceNodes = Array.isArray(originalData?.nodes) ? originalData.nodes : [];
     const sourceLinks = Array.isArray(originalData?.links) ? originalData.links : [];
     const wantedEdgeIds = new Set(violation.edgeIds ?? (violation.subjectId ? [violation.subjectId] : []));
@@ -5115,15 +8130,10 @@
         candidate?.to
       ]);
       const provenanceProjectedData = getProvenanceProjectedData();
-      const { facts, reverseEdgeIndex, reverseSourceIndex, indexByNodeId, temporalEncoding } = buildAspFactsFromGraph(
-        provenanceProjectedData,
-        extractGroups,
-        {
-          includeEdgeProvenance: false,
-          includeRawTemporalValues: edgeIntervalReplacements.length > 0,
-          additionalTemporalValues
-        }
-      );
+      const { facts, reverseEdgeIndex, reverseSourceIndex, indexByNodeId, temporalEncoding } =
+        buildAppAspFactsFromGraph(provenanceProjectedData, additionalTemporalValues, {
+          includeRawTemporalValues: edgeIntervalReplacements.length > 0
+        });
       if (repairSuggestions?.nodeTypeReplacements?.length && !GRAPH_CONFIG.graphMapping?.node?.typeField) {
         throw new TypeError("Le sostituzioni di tipo nodo richiedono graphMapping.node.typeField");
       }
@@ -5224,16 +8234,16 @@
       graph3D = new ForceGraph3D(container)
         .nodeId("id")
         .nodeLabel("label")
+        .nodeVisibility(isGraphDisplayNodeVisible)
         .backgroundColor(GRAPH_CONFIG.graph.backgroundColor)
         .nodeOpacity(GRAPH_CONFIG.graph.nodeOpacity)
         .linkOpacity(GRAPH_CONFIG.graph.linkOpacity)
-        .linkColor((link: any) => highlightedEdgeIds.size > 0
-          ? highlightedEdgeIds.has(getStructuralEdgeIdentity(link)) ? H.clique : "#334155"
-          : null)
+        .linkVisibility(isGraphDisplayLinkVisible)
+        .linkColor(getDisplayLinkColor)
         .linkWidth((link: any) => {
           const baseWidth = Number(GRAPH_CONFIG.graph.linkWidth) || 0.4;
           if (highlightedEdgeIds.size === 0) return baseWidth;
-          return highlightedEdgeIds.has(getStructuralEdgeIdentity(link))
+          return graphDisplayLinkMatchesIdentities(link, highlightedEdgeIds, (edge: GraphDisplayLink) => getStructuralEdgeIdentity(edge))
             ? Math.max(baseWidth * 4, 1.5)
             : Math.max(baseWidth * 0.5, 0.2);
         })
@@ -5241,6 +8251,10 @@
           link.analysis?.direction === "directed" ? 4 : 0
         )
         .linkDirectionalArrowRelPos(0.96);
+
+      if (aggregateParallelEdgesForDisplay || edgeTypeColorsConfigured) {
+        graph3D.linkLabel(getDisplayLinkLabel);
+      }
 
       graphResizeObserver = new ResizeObserver(() => {
         if (!graph3D || !container) return;
@@ -5264,6 +8278,28 @@
         .d3Force("charge", forceManyBody().strength(F.charge))
         .d3Force("center", forceCenter())
         .d3Force("link", forceLink().distance(F.linkDistance).strength(F.linkStrength));
+
+      const nodeCollisionRadius = Number(F.nodeCollisionRadius);
+      if (Number.isFinite(nodeCollisionRadius) && nodeCollisionRadius > 0) {
+        graph3D.d3Force(
+          "collision",
+          forceCollide(nodeCollisionRadius).strength(1).iterations(2)
+        );
+      }
+
+      if (fitGraphToViewEnabled) {
+        graph3D
+          .onEngineTick(() => {
+            graphLayoutRunning = true;
+          })
+          .onEngineStop(() => {
+            graphLayoutRunning = false;
+            if (fitOnEngineStop) {
+              fitOnEngineStop = false;
+              graph3D?.zoomToFit(500, 180);
+            }
+          });
+      }
 
       loadDataset();
     })();
@@ -5317,6 +8353,8 @@
 --solver-right: {UI.solverPanel.right}px;
 --solver-width: {UI.solverPanel.width}px;
 --solver-max-height: {UI.solverPanel.maxHeight};
+--mobile-status-reserve: 48px;
+--mobile-filter-timeline-reserve: {timelineControlEnabled ? "147px" : "0px"};
 --solver-padding: {UI.solverPanel.padding}px;
 --solver-radius: {UI.solverPanel.borderRadius}px;
 --solver-bg: {UI.solverPanel.background};
@@ -5488,6 +8526,32 @@
   {/if}
   <div bind:this={container} class="graph"></div>
 
+  {#if aggregateParallelEdgesForDisplay || edgeTypeColorsConfigured || neighborhoodFocusInfo}
+    <div class="graph-visualization-note" role="status" aria-live="polite">
+      {#if neighborhoodFocusInfo}
+        {#if neighborhoodFocusInfo.nodeCount >= (data?.nodes?.length ?? 0)}
+          Il focus include tutti i {neighborhoodFocusInfo.nodeCount} nodi filtrati: nessun nodo escluso. {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee. ASP, risultati ed export usano la proiezione filtrata completa.
+        {:else}
+          Vicinato isolato: {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee, su {data?.links?.length ?? 0} record filtrati. ASP, risultati ed export usano la proiezione filtrata completa.
+        {/if}
+      {:else if aggregateParallelEdgesForDisplay}
+        Vista aggregata: {data?.links?.length ?? 0} record di contatto in {graphDisplayLinkCount} linee. Le analisi mantengono i record distinti; passa su una linea per vedere gli ID.
+      {:else}
+        I colori degli archi seguono i tipi di relazione dichiarati nella legenda.
+      {/if}
+      {#if graphEdgeTypeLegend.length > 0}
+        <ul class="graph-edge-type-legend" aria-label="Legenda dei tipi di arco">
+          {#each graphEdgeTypeLegend as entry (entry.type)}
+            <li>
+              <span class="graph-edge-type-swatch" style={`background-color: ${entry.color};`}></span>
+              <span>{entry.type}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+
 <!-- TOOLBAR -->
 <div bind:this={toolbarElement} class="toolbar">
   {#if solverEnabled}
@@ -5539,7 +8603,7 @@
       </button>
     {/if}
 
-    {#if motifTemplates.length > 0}
+    {#if motifTemplates.length > 0 || signedTriadConfig || contextualCliqueConfig}
       <button
         type="button"
         disabled={solverRunning}
@@ -5552,7 +8616,7 @@
           motifError = "";
         }}
       >
-        Motivi tipizzati ASP
+        {motifAnalysisButtonLabel}
       </button>
     {/if}
 
@@ -5617,6 +8681,9 @@
 
   <button on:click={() => (showSuggestions = false, searchNode(query))}>Search</button>
   <button on:click={resetView}>Reset</button>
+  {#if fitGraphToViewEnabled}
+    <button type="button" on:click={fitGraphToView}>Adatta rete</button>
+  {/if}
 
   <div class="zoom-inline">
     <button on:click={zoomIn}>+</button>
@@ -5755,6 +8822,11 @@
   {selectedNode}
   {selectedDetails}
   {rootSelectedId}
+  directedGraph={graphDirection === "directed"}
+  neighborhoodFocus={neighborhoodFocusInfo}
+  totalGraphNodeCount={data?.nodes?.length ?? 0}
+  onFocusNeighborhood={focusGraphNeighborhood}
+  onClearNeighborhoodFocus={clearGraphNeighborhoodFocus}
   neighborIds={
   Array.from(neighborMap.get(rootSelectedId ?? "") ?? [])
     .map(id => {
@@ -5808,6 +8880,7 @@
   stats={solverStats}
   error={solverError}
   maximumCliques={maximumCliques}
+  maximumCliquesForMembership={maximumCliqueMembershipCliques}
   allCliques={allCliques}
   supportingEdgesByClique={cliqueSupportingEdgesByKey}
   {edgeProvenanceBySourceId}
@@ -5818,12 +8891,19 @@
   clingoStats={clingoInvocationStats}
   showClingoStats={showClingoSolverStatsDiagnostics}
   selectedNodeId={selectedId}
+  {sourceIdByNodeId}
+  {cliqueMembershipDiagnosis}
+  {cliqueMembershipDiagnosisTargetNodeId}
+  {cliqueMembershipDiagnosisRunning}
+  {cliqueMembershipDiagnosisError}
   bind:minSize={minCliqueSize}
   bind:topPerSize={topPerSize}
   bind:selectedGroup
   {availableGroups}
   on:close={() => showSolverPanel = false}
+  on:diagnoseMaximumMembership={(e) => explainMaximumCliqueMembership(String(e.detail ?? ""))}
   on:highlight={(e) => {
+    clearGraphNeighborhoodFocus();
     const clique = e.detail as string[];
 
     const supportingEdges = cliqueSupportingEdgesByKey[getCliqueSignature(clique)] ?? [];
@@ -5837,6 +8917,18 @@
 
     if (clique[0]) selectRoot(clique[0]);
 
+    refreshNodeVisuals();
+  }}
+  on:highlightMembershipWitness={(e) => {
+    clearGraphNeighborhoodFocus();
+    const diagnosis = e.detail as CliqueMaximumMembershipDiagnosis;
+    highlightedEdgeIds = new Set(diagnosis.supportingEdges.map((edge) => getStructuralEdgeIdentity({
+      source: edge.sourceNodeId,
+      target: edge.targetNodeId,
+      ...(edge.edgeId ? { sourceId: edge.edgeId } : {})
+    })));
+    refreshLinkVisuals();
+    cliqueNodes = new Set(diagnosis.witnessNodeIds);
     refreshNodeVisuals();
   }}
 />
@@ -5854,6 +8946,7 @@
   viewFilters={provenanceScenarioViewFilters}
   on:close={() => showProvenanceScenarioAnalysisPanel = false}
   on:highlight={(event) => {
+    clearGraphNeighborhoodFocus();
     const nodeIds = event.detail as string[];
     highlightedEdgeIds = new Set();
     cliqueNodes = new Set(nodeIds);
@@ -5874,6 +8967,7 @@
   bind:enumerateAllOptima={structuralEnumerateAllOptima}
   bind:enumerateAllMaximalKPlex={structuralEnumerateAllMaximalKPlex}
   bind:explainCommunityContributions={structuralExplainCommunityContributions}
+  bind:explainCommunityInfeasibility={structuralExplainCommunityInfeasibility}
   bind:minimumCommunityCount={structuralCommunityMinCount}
   bind:maximumCommunityCount={structuralCommunityMaxCount}
   bind:selectedGroup={selectedStructuralGroup}
@@ -5881,8 +8975,16 @@
   bind:startNodeId={selectedPathStartId}
   bind:goalNodeId={selectedPathGoalId}
   bind:pathEdgeTypeSequence={structuralPathEdgeTypeSequence}
+  bind:pathTemporalSemantics={structuralPathTemporalSemantics}
+  bind:pathStrictTemporalOrder={structuralPathStrictTemporalOrder}
   {availableGroups}
   availableNodes={availablePathNodes}
+  componentScenarioNodes={(originalData?.nodes ?? []).map((node: any) => ({
+    id: String(node.id),
+    label: String(node.label ?? node.id)
+  }))}
+  bind:componentScenarioTargetNodeId={provenanceComponentScenarioTargetNodeId}
+  connectedComponentsAvailable={graphCapabilities.undirectedAdjacency?.available === true}
   nodeLabelById={Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [String(node.id), String(node.label ?? node.id)]))}
   provenanceScenarioCount={provenanceScenarios.length}
   provenanceKCoreComparison={provenanceKCoreScenarioComparison}
@@ -5901,6 +9003,24 @@
   provenanceKPlexConfidenceThreshold={provenanceKPlexScenarioConfidenceThreshold}
   provenanceKPlexTimelineWindow={provenanceKPlexScenarioTimelineWindow}
   provenanceKPlexViewFilters={provenanceKPlexScenarioViewFilters}
+  provenanceComponentComparison={provenanceComponentScenarioComparison}
+  provenanceComponentComparisonRunning={solverRunning && provenanceComponentScenarioComparisonProgress !== ""}
+  provenanceComponentComparisonProgress={provenanceComponentScenarioComparisonProgress}
+  provenanceComponentComparisonError={provenanceComponentScenarioComparisonError}
+  provenanceComponentSelectedGroup={provenanceComponentScenarioSelectedGroup}
+  provenanceComponentConfidenceThreshold={provenanceComponentScenarioConfidenceThreshold}
+  provenanceComponentTimelineWindow={provenanceComponentScenarioTimelineWindow}
+  provenanceComponentViewFilters={provenanceComponentScenarioViewFilters}
+  provenanceDominatingSetComparison={provenanceDominatingSetScenarioComparison}
+  provenanceDominatingSetComparisonRunning={solverRunning && provenanceDominatingSetScenarioComparisonProgress !== ""}
+  provenanceDominatingSetComparisonProgress={provenanceDominatingSetScenarioComparisonProgress}
+  provenanceDominatingSetComparisonError={provenanceDominatingSetScenarioComparisonError}
+  provenanceDominatingSetScenarioWhyNot={provenanceDominatingSetScenarioWhyNot}
+  provenanceDominatingSetCandidateGroup={provenanceDominatingSetScenarioCandidateGroup}
+  provenanceDominatingSetTargetGroup={provenanceDominatingSetScenarioTargetGroup}
+  provenanceDominatingSetConfidenceThreshold={provenanceDominatingSetScenarioConfidenceThreshold}
+  provenanceDominatingSetTimelineWindow={provenanceDominatingSetScenarioTimelineWindow}
+  provenanceDominatingSetViewFilters={provenanceDominatingSetScenarioViewFilters}
   directedGraph={graphDirection === "directed"}
   weakComponentsAvailable={weakComponentsDataReadiness.available}
   strongComponentsAvailable={strongComponentsDataReadiness.available}
@@ -5909,6 +9029,8 @@
   availableEdgeTypes={availableStructuralEdgeTypes}
   typedPathRequirementsAvailable={typedPathDataReadiness.available}
   typedPathRequirementReasons={typedPathDataReadiness.reasons}
+  typedPathTemporalRequirementsAvailable={typedPathTemporalDataReadiness.available}
+  typedPathTemporalRequirementReasons={typedPathTemporalDataReadiness.reasons}
   costEdgeSeparatorRequirementsAvailable={costEdgeSeparatorDataReadiness.available}
   costEdgeSeparatorRequirementReasons={costEdgeSeparatorDataReadiness.reasons}
   costNodeSeparatorRequirementsAvailable={costNodeSeparatorDataReadiness.available}
@@ -5919,12 +9041,27 @@
   edgeProvenanceById={structuralEdgeProvenanceById}
   {edgeProvenanceReferencesBySourceId}
   resultSets={structuralResults}
+  kPlexMembershipNodes={availableKPlexMembershipNodes}
+  bind:kPlexMembershipTargetNodeId={structuralKPlexMembershipDiagnosisTargetNodeId}
+  kPlexMembershipDiagnosis={structuralKPlexMembershipDiagnosis}
+  kPlexMembershipDiagnosisRunning={structuralKPlexMembershipDiagnosisRunning}
+  kPlexMembershipDiagnosisError={structuralKPlexMembershipDiagnosisError}
+  kPlexMembershipDiagnosisTimeMs={structuralKPlexMembershipDiagnosisTimeMs}
+  kPlexMembershipCounterfactualEnabled={Array.isArray(motifCounterfactualEdgeAdditions) && motifCounterfactualEdgeAdditions.length > 0}
+  kPlexMembershipCounterfactualConfiguredCount={Array.isArray(motifCounterfactualEdgeAdditions) ? motifCounterfactualEdgeAdditions.length : 0}
+  kPlexMembershipCounterfactualCandidateCount={structuralKPlexMembershipCounterfactualCandidateCount}
+  kPlexMembershipCounterfactual={structuralKPlexMembershipCounterfactual}
+  kPlexMembershipCounterfactualRunning={structuralKPlexMembershipCounterfactualRunning}
+  kPlexMembershipCounterfactualError={structuralKPlexMembershipCounterfactualError}
+  kPlexMembershipCounterfactualTimeMs={structuralKPlexMembershipCounterfactualTimeMs}
   separatorReachableBySet={structuralSeparatorReachableBySetKey}
   kPlexMissingPairsBySet={structuralKPlexMissingPairsBySetKey}
   kPlexMaximalityBySet={structuralKPlexMaximalityBySetKey}
   kPlexCounterfactualEnabled={Array.isArray(motifCounterfactualEdgeAdditions) && motifCounterfactualEdgeAdditions.length > 0}
   kPlexCounterfactualCandidateCount={Array.isArray(motifCounterfactualEdgeAdditions) ? motifCounterfactualEdgeAdditions.length : 0}
   kPlexCounterfactualProposals={structuralKPlexCounterfactuals}
+  kPlexCounterfactualWhyNot={structuralKPlexCounterfactualWhyNot}
+  kPlexCounterfactualWhyNotMessage={structuralKPlexCounterfactualWhyNotMessage}
   kPlexCounterfactualHasRun={structuralKPlexCounterfactualHasRun}
   kPlexCounterfactualError={structuralKPlexCounterfactualError}
   kPlexCounterfactualTimeMs={structuralKPlexCounterfactualTimeMs}
@@ -5933,12 +9070,16 @@
   kCoreCounterfactualUnavailableReason={graphDirection === "directed" ? "Il controfattuale del k-core e definito qui solo per grafi non orientati." : ""}
   kCoreCounterfactualCandidateCount={Array.isArray(motifCounterfactualEdgeAdditions) ? motifCounterfactualEdgeAdditions.length : 0}
   kCoreCounterfactualProposals={structuralKCoreCounterfactuals}
+  kCoreCounterfactualWhyNot={structuralKCoreCounterfactualWhyNot}
+  kCoreCounterfactualWhyNotMessage={structuralKCoreCounterfactualWhyNotMessage}
   kCoreCounterfactualHasRun={structuralKCoreCounterfactualHasRun}
   kCoreCounterfactualError={structuralKCoreCounterfactualError}
   kCoreCounterfactualTimeMs={structuralKCoreCounterfactualTimeMs}
   kCoreCounterfactualExcludedCandidateCount={structuralKCoreCounterfactualExcludedCandidateCount}
   kCoreMembershipCandidateNodeIds={[...typedPathCandidateNodeIds].map(String)}
   kCoreMembershipCounterfactualProposals={structuralKCoreMembershipCounterfactuals}
+  kCoreMembershipCounterfactualWhyNot={structuralKCoreMembershipCounterfactualWhyNot}
+  kCoreMembershipCounterfactualWhyNotMessage={structuralKCoreMembershipCounterfactualWhyNotMessage}
   kCoreMembershipCounterfactualHasRun={structuralKCoreMembershipCounterfactualHasRun}
   kCoreMembershipCounterfactualError={structuralKCoreMembershipCounterfactualError}
   kCoreMembershipCounterfactualTimeMs={structuralKCoreMembershipCounterfactualTimeMs}
@@ -5949,11 +9090,39 @@
   kCoreProfileTimeMs={structuralKCoreProfileTimeMs}
   bind:explainKCoreExclusions={structuralExplainKCoreExclusions}
   dominatingSetSupportBySet={structuralDominatingSetSupportBySetKey}
+  dominatingSetUncoverableTargetNodeIds={structuralDominatingSetUncoverableTargetNodeIds}
   communityPartitions={structuralCommunityPartitions}
+  communityPairMembershipEnabled={communityPairMembershipContext !== null}
+  communityPairMembershipResult={structuralCommunityPairMembership}
+  communityPairMembershipError={structuralCommunityPairMembershipError}
+  communityPairMembershipRunning={structuralCommunityPairMembershipRunning}
+  communityPairMembershipTimeMs={structuralCommunityPairMembershipTimeMs}
+  communityTopologyCounterfactualEnabled={communityPairMembershipContext !== null &&
+    (configuredCommunityConstraints?.topologyCounterfactuals?.edgeEdits?.length ?? 0) > 0}
+  communityTopologyEdgeEdits={configuredCommunityConstraints?.topologyCounterfactuals?.edgeEdits ?? []}
+  communityTopologyCounterfactualResult={structuralCommunityTopologyCounterfactual}
+  communityTopologyCounterfactualError={structuralCommunityTopologyCounterfactualError}
+  communityTopologyCounterfactualRunning={structuralCommunityTopologyCounterfactualRunning}
+  communityTopologyCounterfactualTimeMs={structuralCommunityTopologyCounterfactualTimeMs}
+  communityConstraintDiagnoses={structuralCommunityConstraintDiagnoses}
+  communityConstraintDiagnosisError={structuralCommunityConstraintDiagnosisError}
+  communityConstraintDiagnosesAllEnumerated={structuralCommunityConstraintDiagnosesAllEnumerated}
   pathEdgeIdsByStep={structuralPathEdgeIdsByStep}
+  pathCommonTimeValue={structuralPathCommonTimeValue}
+  pathStartTimeValuesByStep={structuralPathStartTimeValuesByStep}
   pathMinimality={structuralPathMinimality}
   pathNoRouteCertificate={structuralPathNoRouteCertificate}
   typedPathNoRouteCertificate={structuralTypedPathNoRouteCertificate}
+  typedPathCounterfactualEnabled={Array.isArray(motifCounterfactualEdgeAdditions) && motifCounterfactualEdgeAdditions.length > 0}
+  typedPathCounterfactualRequirementReasons={typedPathDataReadiness.available ? [] : typedPathDataReadiness.reasons}
+  typedPathCounterfactualCandidateCount={Array.isArray(motifCounterfactualEdgeAdditions) ? motifCounterfactualEdgeAdditions.length : 0}
+  typedPathCounterfactualExcludedCandidateCount={structuralTypedPathCounterfactualExcludedCandidateCount}
+  typedPathCounterfactualProposals={structuralTypedPathCounterfactuals}
+  typedPathCounterfactualWhyNot={structuralTypedPathCounterfactualWhyNot}
+  typedPathCounterfactualWhyNotError={structuralTypedPathCounterfactualWhyNotError}
+  typedPathCounterfactualHasRun={structuralTypedPathCounterfactualHasRun}
+  typedPathCounterfactualError={structuralTypedPathCounterfactualError}
+  typedPathCounterfactualTimeMs={structuralTypedPathCounterfactualTimeMs}
   bind:explainPathMinimality={structuralExplainPathMinimality}
   bind:explainTypedPathNoRoute={structuralExplainTypedPathNoRoute}
   modularity={structuralStats?.modularity}
@@ -5980,17 +9149,35 @@
   minimumCutCost={structuralStats?.minimumCutCost}
   minimumNodeRemovalCost={structuralStats?.minimumNodeRemovalCost}
   on:run={(event) => runStructuralAnalysis(event.detail)}
+  on:probeCommunityPairMembership={(event) => probeCommunityPairOptimumMembership(event.detail)}
+  on:searchCommunityTopologyCounterfactual={(event) => runCommunityTopologyCounterfactual(event.detail)}
+  on:clearCommunityPairMembership={() => {
+    structuralCommunityPairMembership = null;
+    structuralCommunityPairMembershipError = "";
+    structuralCommunityPairMembershipTimeMs = undefined;
+    structuralCommunityTopologyCounterfactual = null;
+    structuralCommunityTopologyCounterfactualError = "";
+    structuralCommunityTopologyCounterfactualTimeMs = undefined;
+  }}
   on:compareScenarios={(event) => runProvenanceScenarioKCoreComparison(event.detail)}
   on:compareKPlexScenarios={(event) => runProvenanceScenarioKPlexComparison(event.detail)}
+  on:compareComponentScenarios={(event) => runProvenanceScenarioComponentComparison(event.detail)}
+  on:compareDominatingSetScenarios={(event) => runProvenanceScenarioDominatingSetComparison(event.detail)}
   on:kPlexCompletion={(event) => runKPlexCompletionCounterfactual(event.detail)}
   on:kPlexCohortChange={clearKPlexCounterfactual}
+  on:diagnoseKPlexMaximumMembership={(event) => explainMaximumKPlexMembership(String(event.detail ?? ""))}
+  on:searchKPlexMaximumMembershipCounterfactual={(event) => searchKPlexMaximumMembershipCounterfactual(String(event.detail ?? ""))}
+  on:clearKPlexMembershipDiagnosis={clearKPlexMaximumMembershipDiagnosis}
   on:kCoreCompletion={(event) => runKCoreCompletionCounterfactual(event.detail)}
   on:kCoreCohortChange={clearKCoreCounterfactual}
   on:kCoreMembershipCompletion={(event) => runKCoreMembershipCompletionCounterfactual(event.detail)}
   on:kCoreMembershipCriteriaChange={clearKCoreMembershipCounterfactual}
+  on:typedPathCompletion={(event) => runTypedPathCounterfactual(event.detail)}
+  on:typedPathCompletionCriteriaChange={clearTypedPathCounterfactual}
   on:criteriaChange={clearStructuralTaskResult}
   on:close={() => showStructuralPanel = false}
   on:highlight={(event) => {
+    clearGraphNeighborhoodFocus();
     const selectedNodes = event.detail as string[];
     highlightedEdgeIds = new Set();
     refreshLinkVisuals();
@@ -5999,6 +9186,7 @@
     refreshNodeVisuals();
   }}
   on:highlightEdges={(event) => {
+    clearGraphNeighborhoodFocus();
     const selectedEdges = event.detail as string[];
     highlightedEdgeIds = new Set(selectedEdges);
     cliqueNodes = new Set();
@@ -6006,6 +9194,7 @@
     refreshNodeVisuals();
   }}
   on:highlightSeparatorSide={(event) => {
+    clearGraphNeighborhoodFocus();
     const reachableNodes = event.detail as string[];
     highlightedEdgeIds = new Set();
     cliqueNodes = new Set(reachableNodes);
@@ -6013,6 +9202,7 @@
     refreshNodeVisuals();
   }}
   on:highlightCommunity={(event) => {
+    clearGraphNeighborhoodFocus();
     const witness = event.detail as { nodeIds: string[]; edgeIds: string[] };
     cliqueNodes = new Set(witness.nodeIds);
     highlightedEdgeIds = new Set(witness.edgeIds);
@@ -6020,6 +9210,7 @@
     refreshNodeVisuals();
   }}
   on:highlightKCore={(event) => {
+    clearGraphNeighborhoodFocus();
     const witness = event.detail as { nodeIds: string[]; edgeIds: string[] };
     cliqueNodes = new Set(witness.nodeIds);
     highlightedEdgeIds = new Set(witness.edgeIds);
@@ -6027,6 +9218,7 @@
     refreshNodeVisuals();
   }}
   on:highlightKCoreProfile={(event) => {
+    clearGraphNeighborhoodFocus();
     const nodeIds = event.detail as string[];
     const directedMode = structuralKCoreMode === "in" || structuralKCoreMode === "out" || structuralKCoreMode === "mutual"
       ? structuralKCoreMode as DirectedKCoreMode
@@ -6041,6 +9233,7 @@
     refreshNodeVisuals();
   }}
   on:highlightKCorePeeling={(event) => {
+    clearGraphNeighborhoodFocus();
     const witness = event.detail as { nodeIds: string[]; edgeIds: string[] };
     cliqueNodes = new Set(witness.nodeIds);
     highlightedEdgeIds = new Set(witness.edgeIds);
@@ -6049,6 +9242,7 @@
     refreshNodeVisuals();
   }}
   on:highlightDominatingSet={(event) => {
+    clearGraphNeighborhoodFocus();
     const witness = event.detail as { nodeIds: string[]; edgeIds: string[] };
     cliqueNodes = new Set(witness.nodeIds);
     highlightedEdgeIds = new Set(witness.edgeIds);
@@ -6056,6 +9250,7 @@
     refreshNodeVisuals();
   }}
   on:highlightTypedPath={(event) => {
+    clearGraphNeighborhoodFocus();
     const path = event.detail as { nodeIds: string[]; edgeIds: string[] };
     highlightedEdgeIds = new Set(path.edgeIds);
     cliqueNodes = new Set(path.nodeIds);
@@ -6089,7 +9284,7 @@
   on:highlight={(event) => highlightIntegrityViolation(event.detail as IntegrityViolation)}
 />
 
-{#if motifTemplates.length > 0}
+{#if motifTemplates.length > 0 || signedTriadConfig || contextualCliqueConfig}
 <MotifAnalysisPanel
   open={showMotifPanel}
   running={solverRunning}
@@ -6100,6 +9295,11 @@
   bind:selectedGroup={selectedMotifGroup}
   {availableGroups}
   matches={motifMatches}
+  scenarioComparisonAvailable={provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds" && provenanceScenarios.length > 0}
+  scenarioComparison={motifScenarioComparison}
+  scenarioComparisonError={motifScenarioComparisonError}
+  scenarioComparisonProgress={motifScenarioComparisonProgress}
+  scenarioComparisonTimeMs={motifScenarioComparisonTimeMs}
   nearMatches={motifNearMatches}
   nearMatchHasRun={motifNearMatchHasRun}
   nearMatchError={motifNearMatchError}
@@ -6113,7 +9313,45 @@
   counterfactualCandidateCount={motifCounterfactualEdgeAdditions?.length ?? 0}
   {edgeProvenanceBySourceId}
   {edgeProvenanceReferencesBySourceId}
+  signedTriadsEnabled={Boolean(signedTriadConfig)}
+  signedTriadAttribute={signedTriadConfig?.attribute ?? ""}
+  signedTriadPositiveValues={Array.isArray(signedTriadConfig?.positiveValues) ? signedTriadConfig.positiveValues : []}
+  signedTriadNegativeValues={Array.isArray(signedTriadConfig?.negativeValues) ? signedTriadConfig.negativeValues : []}
+  signedTriadEdgeTypes={Array.isArray(signedTriadConfig?.edgeTypes) ? signedTriadConfig.edgeTypes : []}
+  signedTriadRequirementsAvailable={signedTriadPreparation.available}
+  signedTriadRequirementReasons={signedTriadPreparation.reasons}
+  bind:signedTriadGroup={selectedSignedTriadGroup}
+  signedTriadResults={signedTriadResults}
+  signedTriadHasRun={signedTriadHasRun}
+  signedTriadError={signedTriadError}
+  signedTriadTimeMs={signedTriadTimeMs}
+  signedTriadFocusedKey={focusedSignedTriadKey}
+  signedTriadScenarioComparisonAvailable={Boolean(signedTriadConfig) && provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds" && provenanceScenarios.length > 1}
+  {signedTriadScenarioComparison}
+  signedTriadScenarioComparisonError={signedTriadScenarioComparisonError}
+  signedTriadScenarioComparisonProgress={signedTriadScenarioComparisonProgress}
+  signedTriadScenarioComparisonTimeMs={signedTriadScenarioComparisonTimeMs}
+  contextualCliqueConfig={contextualCliqueConfig}
+  contextualCliqueAvailable={contextualCliqueAvailable}
+  contextualCliqueRequirementReasons={contextualCliqueRequirementReasons}
+  bind:contextualCliqueGroup
+  bind:contextualCliqueEnumerateAllOptima
+  contextualCliqueResults={contextualCliqueResults}
+  contextualCliqueHasRun={contextualCliqueHasRun}
+  contextualCliqueError={contextualCliqueError}
+  contextualCliqueTimeMs={contextualCliqueTimeMs}
+  {sourceIdByNodeId}
+  nodeLabelById={Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [String(node.id), String(node.label ?? node.id)]))}
   timeMs={motifTimeMs}
+  {motifCount}
+  motifCountHasRun={motifCountHasRun}
+  motifCountError={motifCountError}
+  motifCountTimeMs={motifCountTimeMs}
+  {motifCountPartitionCount}
+  motifCountPartitionSize={motifCountPartitionSettings.enabled ? motifCountPartitionSettings.settings.partitionSize : undefined}
+  motifCountMaxDurationMs={motifCountPartitionSettings.enabled ? motifCountPartitionSettings.settings.maxDurationMs : undefined}
+  {motifCountProgress}
+  {motifCountNotice}
   {workerWasmMemoryStats}
   clingoTiming={clingoInvocationTiming}
   showClingoTiming={showClingoTimingDiagnostics}
@@ -6126,6 +9364,10 @@
   graphNodesCount={data?.nodes?.length ?? 0}
   graphEdgesCount={data?.links?.length ?? 0}
   on:run={(event) => runTypedMotifAnalysis(event.detail)}
+  on:compareScenarios={(event) => compareProvenanceScenarioMotifs(event.detail)}
+  on:inspectScenarioMatch={(event) => inspectProvenanceMotifWitness(event.detail)}
+  on:count={(event) => countTypedMotifMatches(event.detail)}
+  on:cancelCount={cancelTypedMotifCount}
   on:diagnose={(event) => runTypedMotifNearMatch(event.detail)}
   on:counterfactual={(event) => runTypedMotifCompletionCounterfactual(event.detail)}
   on:clear={clearMotifAnalysis}
@@ -6133,6 +9375,16 @@
   on:highlight={(event) => highlightTypedMotif(event.detail as TypedMotifMatch)}
   on:highlightNearMatch={(event) => highlightTypedMotifNearMatch(event.detail as TypedMotifNearMatch)}
   on:highlightCounterfactual={(event) => highlightTypedMotifCounterfactual(event.detail as TypedMotifCounterfactual)}
+  on:runSignedTriads={(event) => runSignedTriadAnalysis(event.detail)}
+  on:compareSignedTriadScenarios={(event) => compareSignedTriadScenarios(event.detail)}
+  on:inspectSignedTriadScenarioWitness={(event) => inspectSignedTriadScenarioWitness(event.detail)}
+  on:clearSignedTriads={clearSignedTriadAnalysis}
+  on:highlightSignedTriad={(event) => showSignedTriadInGraph(event.detail as SignedTriadResult)}
+  on:focusSignedTriad={(event) => showSignedTriadInGraph(event.detail as SignedTriadResult, true)}
+  on:clearSignedTriadFocus={clearSignedTriadGraphFocus}
+  on:runContextualClique={(event) => runContextualClique(event.detail)}
+  on:clearContextualClique={clearContextualCliqueAnalysis}
+  on:highlightContextualClique={(event) => highlightContextualClique(event.detail as ContextualCliqueResult)}
 />
 {/if}
 {/if}
@@ -6150,6 +9402,56 @@
   .graph {
     width: 100vw;
     height: 100vh;
+  }
+
+  .graph-visualization-note {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 32;
+    max-width: min(520px, calc(100vw - 24px));
+    box-sizing: border-box;
+    padding: 8px 11px;
+    border: 1px solid rgba(148, 163, 184, 0.8);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.95);
+    color: #0f172a;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+    font: 12px/1.4 system-ui, sans-serif;
+  }
+
+  .graph-edge-type-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    max-height: 96px;
+    overflow-y: auto;
+    margin: 6px 0 0;
+    padding: 6px 0 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.45);
+    list-style: none;
+  }
+
+  .graph-edge-type-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .graph-edge-type-swatch {
+    flex: 0 0 10px;
+    width: 10px;
+    height: 10px;
+    border: 1px solid rgba(15, 23, 42, 0.4);
+    border-radius: 50%;
+  }
+
+  @media (max-width: 600px) {
+    .graph-visualization-note {
+      bottom: calc(12px + var(--mobile-status-reserve, 48px));
+    }
   }
 
   .graph-data-diagnostics {
@@ -6509,7 +9811,10 @@
       top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
       max-height: min(
         var(--filter-max-height),
-        calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px)
+        calc(
+          100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px -
+          var(--mobile-status-reserve, 48px) - var(--mobile-filter-timeline-reserve, 0px)
+        )
       );
     }
   }

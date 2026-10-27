@@ -2,16 +2,38 @@
   import { createEventDispatcher } from "svelte";
   import { csvCell, downloadCsvText } from "../csvExport";
   import StructuralCompletionCounterfactualPanel from "./StructuralCompletionCounterfactualPanel.svelte";
-  import { buildCompactKCoreWitnessCsv, buildDominatingSetWitnessCsv, buildKCoreWitnessCsv, buildKPlexWitnessCsv, buildModularityCertificateCsv, buildSeparatorCertificateCsv } from "../graph/structuralCsvExport.ts";
-  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+  import TypedPathCounterfactualPanel from "./TypedPathCounterfactualPanel.svelte";
+  import { buildCompactKCoreWitnessCsv, buildDominatingSetInfeasibilityCsv, buildDominatingSetWitnessCsv, buildKCoreWitnessCsv, buildKPlexMaximumMembershipDiagnosisCsv, buildKPlexWitnessCsv, buildModularityCertificateCsv, buildProvenanceScenarioDominatingSetInfeasibilityCsv, buildSeparatorCertificateCsv, buildTypedPathTemporalNoRouteCsv } from "../graph/structuralCsvExport.ts";
+  import { buildCommunityCoassignmentCsv, buildCommunityPairMembershipCsv, getCommunityPairObjectiveLosses, summarizeCommunityCoassignment, type CommunityCoassignmentSummary, type CommunityPairOptimumMembership } from "../graph/communityOptimumStability.ts";
+  import { buildCommunityConstraintDiagnosisCsv, type CommunityConstraintDiagnosis, type CommunityConstraintRelaxationSpec } from "../graph/communityConstraintDiagnosis.ts";
+  import { buildCommunityTopologyCounterfactualCsv, type CommunityTopologyCounterfactualResult, type CommunityTopologyEdgeEdit } from "../graph/communityTopologyCounterfactual.ts";
   import {
+    summarizeMaximumKPlexMembershipAcrossOptima,
+    type KPlexMaximumMembershipDiagnosis,
+    type KPlexMaximumMembershipOptimaSummary
+  } from "../graph/kplexMembershipDiagnosis.ts";
+  import {
+    MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES,
+    buildKPlexMaximumMembershipCounterfactualCsv,
+    type KPlexMaximumMembershipCounterfactualSearchOutcome
+  } from "../graph/kplexMembershipCounterfactual.ts";
+  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+  import { getOwnRecordValue } from "../graph/recordUtils";
+  import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
+  import { getStructuralResultPressedState } from "../graph/structuralResultSelection";
+  import {
+    buildProvenanceScenarioComponentsCsv,
+    buildProvenanceScenarioDominatingSetCsv,
     buildProvenanceScenarioKCoreCsv,
     buildProvenanceScenarioKPlexCsv,
+    type ProvenanceScenarioComponentComparison,
+    type ProvenanceScenarioComponentTask,
+    type ProvenanceScenarioDominatingSetComparison,
     type ProvenanceScenarioKCoreComparison,
     type ProvenanceScenarioKPlexComparison
   } from "../graph/provenanceScenarioAnalysis";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
-  import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCoverageWitness, KPlexCompletionProposal, KCoreMembershipCompletionProposal, StructuralEdgeCompletionProposal, KCorePeelingCertificate, KCoreSupportingPair, MinimumHopPathMinimalityCertificate, ModularityPartition, StructuralTask, TypedPathNoRouteCertificate } from "../graph/structuralTasks";
+import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCoverageWitness, KPlexCompletionProposal, KPlexCompletionWhyNot, KCoreCompletionWhyNot, KCoreMembershipCompletionWhyNot, KCoreMembershipCompletionProposal, StructuralEdgeCompletionProposal, KCorePeelingCertificate, KCoreSupportingPair, MinimumHopPathMinimalityCertificate, ModularityPartition, StructuralTask, TypedPathNoRouteCertificate, TypedPathTemporalNoRouteCertificate, TypedPathCounterfactualProposal, TypedPathCounterfactualWhyNot, TypedPathTemporalSemantics } from "../graph/structuralTasks";
   import type { MaximalKPlexWitnessExplanation } from "../graph/structuralTasks";
 
   export let open = false;
@@ -32,11 +54,26 @@
   export let kCoreNumbers: Record<string, number> | null = null;
   export let kCoreProfileTimeMs: number | undefined;
   export let explainCommunityContributions = false;
+  export let explainCommunityInfeasibility = false;
   export let explainPathMinimality = false;
   export let explainTypedPathNoRoute = false;
   export let minimumCommunityCount = 0;
   export let maximumCommunityCount = 0;
   export let communityPartitions: ModularityPartition[] = [];
+  export let communityPairMembershipEnabled = false;
+  export let communityPairMembershipResult: CommunityPairOptimumMembership | null = null;
+  export let communityPairMembershipError = "";
+  export let communityPairMembershipRunning = false;
+  export let communityPairMembershipTimeMs: number | undefined;
+  export let communityTopologyCounterfactualEnabled = false;
+  export let communityTopologyEdgeEdits: CommunityTopologyEdgeEdit[] = [];
+  export let communityTopologyCounterfactualResult: CommunityTopologyCounterfactualResult | null = null;
+  export let communityTopologyCounterfactualError = "";
+  export let communityTopologyCounterfactualRunning = false;
+  export let communityTopologyCounterfactualTimeMs: number | undefined;
+  export let communityConstraintDiagnoses: CommunityConstraintDiagnosis[] = [];
+  export let communityConstraintDiagnosisError = "";
+  export let communityConstraintDiagnosesAllEnumerated = false;
   export let modularity: number | undefined;
   export let communityScaledTotalWeight: number | undefined;
   export let communityDisplayTotalWeight: string | undefined;
@@ -49,17 +86,33 @@
   export let configuredCommunityAttributeBoundCount = 0;
   export let communityConfigurationError = "";
   export let pathEdgeTypeSequence: string[] = [];
+  export let pathTemporalSemantics: "static" | TypedPathTemporalSemantics = "static";
+  export let pathStrictTemporalOrder = false;
   export let availableEdgeTypes: string[] = [];
   export let typedPathRequirementsAvailable = false;
   export let typedPathRequirementReasons: string[] = [];
+  export let typedPathTemporalRequirementsAvailable = false;
+  export let typedPathTemporalRequirementReasons: string[] = [];
   export let costEdgeSeparatorRequirementsAvailable = false;
   export let costEdgeSeparatorRequirementReasons: string[] = [];
   export let costNodeSeparatorRequirementsAvailable = false;
   export let costNodeSeparatorRequirementReasons: string[] = [];
   export let pathEdgeIdsByStep: string[][] = [];
+  export let pathCommonTimeValue: number | undefined;
+  export let pathStartTimeValuesByStep: number[] = [];
   export let pathMinimality: MinimumHopPathMinimalityCertificate | undefined;
   export let pathNoRouteCertificate: BoundedPathNoRouteCertificate | undefined;
-  export let typedPathNoRouteCertificate: TypedPathNoRouteCertificate | undefined;
+  export let typedPathNoRouteCertificate: TypedPathNoRouteCertificate | TypedPathTemporalNoRouteCertificate | undefined;
+  export let typedPathCounterfactualEnabled = false;
+  export let typedPathCounterfactualRequirementReasons: string[] = [];
+  export let typedPathCounterfactualCandidateCount = 0;
+  export let typedPathCounterfactualExcludedCandidateCount = 0;
+  export let typedPathCounterfactualProposals: TypedPathCounterfactualProposal[] = [];
+  export let typedPathCounterfactualHasRun = false;
+  export let typedPathCounterfactualError = "";
+  export let typedPathCounterfactualTimeMs: number | undefined;
+  export let typedPathCounterfactualWhyNot: TypedPathCounterfactualWhyNot | undefined;
+  export let typedPathCounterfactualWhyNotError = "";
   export let selectedGroup = "";
   export let selectedTargetGroup = "";
   export let availableGroups: string[] = [];
@@ -73,11 +126,29 @@
   export let startNodeId = "";
   export let goalNodeId = "";
   export let resultSets: string[][] = [];
+  export let kPlexMembershipNodes: Array<{ id: string; label: string }> = [];
+  export let kPlexMembershipTargetNodeId = "";
+  export let kPlexMembershipDiagnosis: KPlexMaximumMembershipDiagnosis | null = null;
+  export let kPlexMembershipDiagnosisRunning = false;
+  export let kPlexMembershipDiagnosisError = "";
+  export let kPlexMembershipDiagnosisTimeMs: number | undefined;
+  export let kPlexMembershipCounterfactualEnabled = false;
+  export let kPlexMembershipCounterfactualConfiguredCount = 0;
+  export let kPlexMembershipCounterfactualCandidateCount = 0;
+  export let kPlexMembershipCounterfactual: KPlexMaximumMembershipCounterfactualSearchOutcome | null = null;
+  export let kPlexMembershipCounterfactualRunning = false;
+  export let kPlexMembershipCounterfactualError = "";
+  export let kPlexMembershipCounterfactualTimeMs: number | undefined;
+  let kPlexMembershipAcrossOptima: KPlexMaximumMembershipOptimaSummary | null = null;
+  let kPlexMembershipAcrossOptimaError = "";
+  let kPlexMembershipEnumerationConflict = false;
   export let kPlexMissingPairsBySet: Record<string, Array<[string, string]>> = {};
   export let kPlexMaximalityBySet: Record<string, MaximalKPlexWitnessExplanation> = {};
   export let kPlexCounterfactualEnabled = false;
   export let kPlexCounterfactualCandidateCount = 0;
   export let kPlexCounterfactualProposals: KPlexCompletionProposal[] = [];
+  export let kPlexCounterfactualWhyNot: KPlexCompletionWhyNot | null = null;
+  export let kPlexCounterfactualWhyNotMessage = "";
   export let kPlexCounterfactualHasRun = false;
   export let kPlexCounterfactualError = "";
   export let kPlexCounterfactualTimeMs: number | undefined;
@@ -86,12 +157,16 @@
   export let kCoreCounterfactualUnavailableReason = "";
   export let kCoreCounterfactualCandidateCount = 0;
   export let kCoreCounterfactualProposals: KPlexCompletionProposal[] = [];
+  export let kCoreCounterfactualWhyNot: KCoreCompletionWhyNot | null = null;
+  export let kCoreCounterfactualWhyNotMessage = "";
   export let kCoreCounterfactualHasRun = false;
   export let kCoreCounterfactualError = "";
   export let kCoreCounterfactualTimeMs: number | undefined;
   export let kCoreCounterfactualExcludedCandidateCount = 0;
   export let kCoreMembershipCandidateNodeIds: string[] = [];
   export let kCoreMembershipCounterfactualProposals: KCoreMembershipCompletionProposal[] = [];
+  export let kCoreMembershipCounterfactualWhyNot: KCoreMembershipCompletionWhyNot | null = null;
+  export let kCoreMembershipCounterfactualWhyNotMessage = "";
   export let kCoreMembershipCounterfactualHasRun = false;
   export let kCoreMembershipCounterfactualError = "";
   export let kCoreMembershipCounterfactualTimeMs: number | undefined;
@@ -99,6 +174,7 @@
   export let kCoreSupportBySet: Record<string, KCoreSupportingPair[]> = {};
   export let kCorePeelingBySet: Record<string, KCorePeelingCertificate[]> = {};
   export let dominatingSetSupportBySet: Record<string, DominatingSetCoverageWitness[]> = {};
+  export let dominatingSetUncoverableTargetNodeIds: string[] = [];
   export let separatorReachableBySet: Record<string, string[]> = {};
   export let timeMs: number | undefined;
   export let graphNodesCount: number | undefined;
@@ -129,6 +205,64 @@
   export let provenanceKPlexConfidenceThreshold: number | null = null;
   export let provenanceKPlexTimelineWindow = "";
   export let provenanceKPlexViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let componentScenarioNodes: Array<{ id: string; label: string }> = [];
+  export let componentScenarioTargetNodeId = "";
+  export let connectedComponentsAvailable = false;
+  export let provenanceComponentComparison: ProvenanceScenarioComponentComparison | null = null;
+  export let provenanceComponentComparisonRunning = false;
+  export let provenanceComponentComparisonProgress = "";
+  export let provenanceComponentComparisonError = "";
+  export let provenanceComponentSelectedGroup = "";
+  export let provenanceComponentConfidenceThreshold: number | null = null;
+  export let provenanceComponentTimelineWindow = "";
+  export let provenanceComponentViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let provenanceDominatingSetComparison: ProvenanceScenarioDominatingSetComparison | null = null;
+  export let provenanceDominatingSetComparisonRunning = false;
+  export let provenanceDominatingSetComparisonProgress = "";
+  export let provenanceDominatingSetComparisonError = "";
+  export let provenanceDominatingSetCandidateGroup = "";
+  export let provenanceDominatingSetTargetGroup = "";
+  export let provenanceDominatingSetConfidenceThreshold: number | null = null;
+  export let provenanceDominatingSetTimelineWindow = "";
+  export let provenanceDominatingSetViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  $: provenanceKCoreBraveOnlyCount = provenanceKCoreComparison?.memberships.filter(
+    (membership) => membership.scenarioSupportCount > 0 && !membership.stableAcrossEveryScenario
+  ).length ?? 0;
+  $: provenanceKCoreNotBraveCount = provenanceKCoreComparison?.memberships.filter(
+    (membership) => membership.scenarioSupportCount === 0
+  ).length ?? 0;
+  $: provenanceKPlexBraveOnlyCount = provenanceKPlexComparison?.memberships.filter(
+    (membership) => membership.optimalAnswerSetCount > 0 && !membership.stableAcrossEveryOptimalAnswerSet
+  ).length ?? 0;
+  $: provenanceKPlexNotBraveCount = provenanceKPlexComparison?.memberships.filter(
+    (membership) => membership.optimalAnswerSetCount === 0
+  ).length ?? 0;
+  $: provenanceDominatingSetBraveOnlyCount = provenanceDominatingSetComparison?.memberships.filter(
+    (membership) => membership.selectedMinimumSetCount > 0 && !membership.selectedInEveryScenarioMinimumSet
+  ).length ?? 0;
+  $: provenanceDominatingSetNotBraveCount = provenanceDominatingSetComparison?.memberships.filter(
+    (membership) => membership.selectedMinimumSetCount === 0
+  ).length ?? 0;
+  $: provenanceComponentBraveOnlyCount = provenanceComponentComparison?.memberships.filter(
+    (membership) => membership.sameComponentScenarioCount > 0 && !membership.sameComponentInEveryDeclaredScenario
+  ).length ?? 0;
+  $: provenanceComponentNotBraveCount = provenanceComponentComparison?.memberships.filter(
+    (membership) => membership.sameComponentScenarioCount === 0 && membership.comparableScenarioCount > 0
+  ).length ?? 0;
+  $: provenanceComponentUndefinedCount = provenanceComponentComparison?.memberships.filter(
+    (membership) => membership.comparableScenarioCount === 0
+  ).length ?? 0;
+  export let provenanceDominatingSetScenarioWhyNot: {
+    scenarioId: string;
+    scenarioLabel: string;
+    scenarioSources: string[];
+    uncoverableTargetNodeIds: string[];
+    candidateGroup: string;
+    targetGroup: string;
+    confidenceThreshold: number | null;
+    timelineWindow: string;
+    viewFilters: { types: string[]; groups: string[] };
+  } | null = null;
 
   let selectedKplexSignature = "";
   let kPlexCompletionTargetS = 1;
@@ -141,9 +275,20 @@
   let selectedDominatingSignature = "";
   let selectedDominatingTargetId = "";
   let selectedSeparatorSignature = "";
+  let selectedCommunityStabilityNodeId = "";
+  let selectedCommunityPairLeftNodeId = "";
+  let selectedCommunityPairRightNodeId = "";
+  let selectedCommunityTopologyTarget: "always" | "sometimes" | "never" = "always";
+  let communityStabilityError = "";
+  let communityCoassignmentSummary: CommunityCoassignmentSummary | null = null;
   let previousKCoreSourceParameter = Number(parameter);
   let previousKCoreMembershipSourceParameter = Number(parameter);
   let previousKCoreMembershipCandidateDomain = "";
+
+  $: if (componentScenarioTargetNodeId &&
+    !componentScenarioNodes.some((node) => node.id === componentScenarioTargetNodeId)) {
+    componentScenarioTargetNodeId = "";
+  }
 
   const dispatch = createEventDispatcher();
   $: if (task === "kCore" && Number.isSafeInteger(Number(parameter)) &&
@@ -197,7 +342,7 @@
         ? { generated_record_key: generatedRecordKey, provenance_references: [] }
         : identity?.legacyEndpointPair
           ? { legacy_endpoint_pair: identity.legacyEndpointPair.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId), provenance_references: [] }
-        : { edge_id: sourceId, provenance_references: edgeProvenanceReferencesBySourceId[sourceId] ?? [] };
+        : { edge_id: sourceId, provenance_references: getOwnRecordValue<string[]>(edgeProvenanceReferencesBySourceId, sourceId) ?? [] };
     });
   }
 
@@ -233,8 +378,11 @@
       enumerateAllMaximalKPlex,
       explainKCoreExclusions,
       explainCommunityContributions,
+      explainCommunityInfeasibility,
       explainPathMinimality,
       explainTypedPathNoRoute,
+      pathTemporalSemantics,
+      pathStrictTemporalOrder,
       selectedGroup,
       selectedTargetGroup,
       startNodeId,
@@ -243,7 +391,8 @@
       minimumCommunityCount,
       maximumCommunityCount,
       communityUsesEdgeWeights,
-      communityResolution
+      communityResolution,
+      componentScenarioTargetNodeId
     ]);
     if (previousQuerySignature && querySignature !== previousQuerySignature) {
       dispatch("criteriaChange");
@@ -278,6 +427,15 @@
                 : task === "typedPath"
                   ? "cammino con sequenza tipizzata"
                 : "cammino minimo";
+  $: taskContract = getGraphTaskContract(task, {
+    direction: directedGraph ? "directed" : "undirected",
+    temporalSemantics: pathTemporalSemantics,
+    useEdgeWeights: task === "communities" && communityUsesEdgeWeights
+  });
+  $: taskEnumerationDescription = getTaskEnumerationDescription(task, {
+    enumerateAllOptima,
+    enumerateAllMaximalKPlex
+  });
   $: parameterLabel = task === "kPlex" || task === "maximalKPlex" ? "s" : task === "kCore" ? "k" : "max archi";
   $: kCoreNeighborLabel = !directedGraph
     ? "vicini"
@@ -323,10 +481,67 @@
   );
   $: invalidTypedPath = task === "typedPath" && (
     !typedPathRequirementsAvailable ||
+    (pathTemporalSemantics !== "static" && !typedPathTemporalRequirementsAvailable) ||
     pathEdgeTypeSequence.length === 0 ||
     pathEdgeTypeSequence.some((edgeType) => !availableEdgeTypes.includes(edgeType))
   );
   $: resultSize = resultSets[0]?.length ?? 0;
+  $: if (task === "kPlex" && resultSets.length > 0 &&
+    !kPlexMembershipNodes.some((node) => node.id === kPlexMembershipTargetNodeId)) {
+    kPlexMembershipTargetNodeId = kPlexMembershipNodes[0]?.id ?? "";
+  }
+  $: {
+    kPlexMembershipAcrossOptima = null;
+    kPlexMembershipAcrossOptimaError = "";
+    if (task === "kPlex" && enumerateAllOptima && resultSets.length > 0) {
+      try {
+        kPlexMembershipAcrossOptima = summarizeMaximumKPlexMembershipAcrossOptima(
+          kPlexMembershipTargetNodeId,
+          resultSets,
+          {
+            candidateNodeIds: kPlexMembershipNodes.map((node) => node.id),
+            globalMaximumSize: resultSets[0]?.length ?? 0
+          }
+        );
+      } catch (error) {
+        kPlexMembershipAcrossOptimaError = error instanceof Error
+          ? error.message
+          : "L'enumerazione dei k-plex massimi non è verificabile.";
+      }
+    }
+    kPlexMembershipEnumerationConflict = Boolean(
+      kPlexMembershipDiagnosis && kPlexMembershipAcrossOptima &&
+      (kPlexMembershipDiagnosis.outcome === "included-in-maximum") !==
+        (kPlexMembershipAcrossOptima.targetOptimalKplexes > 0)
+    );
+  }
+  $: communityStabilityNodeIds = [...new Set(communityPartitions.flatMap((partition) => partition.communities.flat()))]
+    .sort((left, right) => left.localeCompare(right));
+  $: communityPairObjectiveLosses = communityPairMembershipResult
+    ? getCommunityPairObjectiveLosses(communityPairMembershipResult)
+    : null;
+  $: if (communityStabilityNodeIds.length > 0 && !communityStabilityNodeIds.includes(selectedCommunityStabilityNodeId)) {
+    selectedCommunityStabilityNodeId = communityStabilityNodeIds[0];
+  }
+  $: if (communityStabilityNodeIds.length > 0 && !communityStabilityNodeIds.includes(selectedCommunityPairLeftNodeId)) {
+    selectedCommunityPairLeftNodeId = communityStabilityNodeIds[0];
+  }
+  $: if (communityStabilityNodeIds.length > 1 &&
+    (!communityStabilityNodeIds.includes(selectedCommunityPairRightNodeId) ||
+      selectedCommunityPairRightNodeId === selectedCommunityPairLeftNodeId)) {
+    selectedCommunityPairRightNodeId = communityStabilityNodeIds.find((nodeId) => nodeId !== selectedCommunityPairLeftNodeId) ?? "";
+  }
+  $: {
+    communityStabilityError = "";
+    communityCoassignmentSummary = null;
+    if (task === "communities" && enumerateAllOptima && communityPartitions.length > 0 && selectedCommunityStabilityNodeId) {
+      try {
+        communityCoassignmentSummary = summarizeCommunityCoassignment(communityPartitions, selectedCommunityStabilityNodeId);
+      } catch (error) {
+        communityStabilityError = error instanceof Error ? error.message : "Impossibile calcolare il riepilogo di co-appartenenza.";
+      }
+    }
+  }
   $: selectedKplexMissingPairs = kPlexMissingPairsBySet[selectedKplexSignature] ?? [];
   $: selectedKplexMaximality = kPlexMaximalityBySet[selectedKplexSignature];
   $: selectedKcoreSupportPairs = kCoreSupportBySet[selectedKcoreSignature] ?? [];
@@ -411,14 +626,27 @@
       enumerateAllMaximalKPlex,
       explainKCoreExclusions,
       explainCommunityContributions,
+      explainCommunityInfeasibility,
       explainPathMinimality,
       explainTypedPathNoRoute,
       startNodeId,
       goalNodeId,
       pathEdgeTypeSequence: [...pathEdgeTypeSequence],
+      pathTemporalSemantics,
+      strictTemporalOrder: pathStrictTemporalOrder,
       minimumCommunityCount: Number(minimumCommunityCount),
       maximumCommunityCount: Number(maximumCommunityCount)
     });
+  }
+
+  function requestCommunityPairMembership() {
+    if (!selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
+      selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId) return;
+    dispatch("probeCommunityPairMembership", [selectedCommunityPairLeftNodeId, selectedCommunityPairRightNodeId]);
+  }
+
+  function clearCommunityPairMembershipResult() {
+    dispatch("clearCommunityPairMembership");
   }
 
   function requestScenarioKCoreComparison() {
@@ -434,6 +662,21 @@
       s: Number(parameter),
       group: selectedGroupAppliesToTask ? selectedGroup : "",
       enumerateAllOptima
+    });
+  }
+
+  function requestScenarioComponentComparison() {
+    dispatch("compareComponentScenarios", {
+      task: task as ProvenanceScenarioComponentTask,
+      targetNodeId: componentScenarioTargetNodeId,
+      group: selectedGroupAppliesToTask ? selectedGroup : ""
+    });
+  }
+
+  function requestScenarioDominatingSetComparison() {
+    dispatch("compareDominatingSetScenarios", {
+      candidateGroup: selectedGroupAppliesToTask ? selectedGroup : "",
+      targetGroup: selectedTargetGroup
     });
   }
 
@@ -467,9 +710,83 @@
     );
   }
 
+  function exportScenarioComponentComparison() {
+    if (!provenanceComponentComparison) return;
+    downloadCsvText(
+      `${provenanceComponentComparison.task}_provenance_scenario_components.csv`,
+      buildProvenanceScenarioComponentsCsv(
+        provenanceComponentComparison,
+        nodeLabelById,
+        provenanceComponentSelectedGroup,
+        provenanceComponentConfidenceThreshold,
+        provenanceComponentTimelineWindow,
+        provenanceComponentViewFilters
+      )
+    );
+  }
+
+  function exportScenarioDominatingSetComparison() {
+    if (!provenanceDominatingSetComparison) return;
+    downloadCsvText(
+      "dominating_set_provenance_scenario_comparison.csv",
+      buildProvenanceScenarioDominatingSetCsv(
+        provenanceDominatingSetComparison,
+        nodeLabelById,
+        provenanceDominatingSetConfidenceThreshold,
+        provenanceDominatingSetTimelineWindow,
+        provenanceDominatingSetViewFilters
+      )
+    );
+  }
+
+  function exportScenarioDominatingSetWhyNot() {
+    if (!provenanceDominatingSetScenarioWhyNot) return;
+    downloadCsvText(
+      "dominating_set_provenance_scenario_why_not.csv",
+      buildProvenanceScenarioDominatingSetInfeasibilityCsv({
+        ...provenanceDominatingSetScenarioWhyNot,
+        sourceIdByNodeId,
+        nodeLabels: nodeLabelById
+      })
+    );
+  }
+
   function exportResults() {
     if (task === "typedPath") {
       if (!resultSets[0] || pathEdgeIdsByStep.length !== pathEdgeTypeSequence.length) return;
+      if (pathTemporalSemantics !== "static") {
+        const rows = ["step,edge_type,from_node,to_node,temporal_semantics,common_time_value,step_start_time_value,supporting_edge_ids,supporting_edge_provenance,structured_witness_json"];
+        pathEdgeTypeSequence.forEach((edgeType, index) => {
+          const sourceNode = sourceIdByNodeId[resultSets[0][index]] ?? resultSets[0][index];
+          const targetNode = sourceIdByNodeId[resultSets[0][index + 1]] ?? resultSets[0][index + 1];
+          const startTimeValue = pathStartTimeValuesByStep[index];
+          const edgeIds = structuredEdgeIds(pathEdgeIdsByStep[index]);
+          rows.push([
+            index + 1,
+            edgeType,
+            sourceNode,
+            targetNode,
+            pathTemporalSemantics,
+            pathCommonTimeValue ?? "",
+            startTimeValue ?? "",
+            edgeIds.join(" | "),
+            edgeProvenanceSummary(pathEdgeIdsByStep[index]),
+            JSON.stringify({
+              step: index + 1,
+              edge_type: edgeType,
+              from_node: sourceNode,
+              to_node: targetNode,
+              temporal_semantics: pathTemporalSemantics,
+              ...(pathCommonTimeValue !== undefined ? { common_time_value: pathCommonTimeValue } : {}),
+              ...(startTimeValue !== undefined ? { step_start_time_value: startTimeValue } : {}),
+              supporting_edge_ids: edgeIds,
+              supporting_edge_evidence: structuredEdgeEvidence(pathEdgeIdsByStep[index])
+            })
+          ].map(csvCell).join(","));
+        });
+        downloadCsvText("typed_path_temporal.csv", rows.join("\n"));
+        return;
+      }
       const rows = ["step,edge_type,from_node,to_node,supporting_edge_ids,supporting_edge_provenance,structured_witness_json"];
       pathEdgeTypeSequence.forEach((edgeType, index) => {
         rows.push([
@@ -671,6 +988,106 @@
     }));
   }
 
+  function exportCommunityCoassignment() {
+    if (!communityCoassignmentSummary) return;
+    downloadCsvText("modularity_optimum_coassignment.csv", buildCommunityCoassignmentCsv({
+      summary: communityCoassignmentSummary,
+      sourceIdByNodeId,
+      nodeLabels: nodeLabelById,
+      selectedGroup: selectedGroup || "Tutti i nodi",
+      resolution: communityResolution,
+      resolutionNumerator: communityResolutionNumerator,
+      resolutionDenominator: communityResolutionDenominator,
+      weighted: communityUsesEdgeWeights
+    }));
+  }
+
+  function exportCommunityPairMembership() {
+    if (!communityPairMembershipResult) return;
+    downloadCsvText("modularity_pair_optimum_membership.csv", buildCommunityPairMembershipCsv({
+      result: communityPairMembershipResult,
+      sourceIdByNodeId,
+      nodeLabels: nodeLabelById,
+      selectedGroup: selectedGroup || "Tutti i nodi",
+      resolution: communityResolution,
+      resolutionNumerator: communityResolutionNumerator,
+      resolutionDenominator: communityResolutionDenominator,
+      weighted: communityUsesEdgeWeights
+    }));
+  }
+
+  function requestCommunityTopologyCounterfactual() {
+    if (!selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
+      selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId) return;
+    dispatch("searchCommunityTopologyCounterfactual", {
+      pair: [selectedCommunityPairLeftNodeId, selectedCommunityPairRightNodeId],
+      relation: selectedCommunityTopologyTarget
+    });
+  }
+
+  function exportCommunityTopologyCounterfactual() {
+    if (!communityTopologyCounterfactualResult) return;
+    downloadCsvText("modularity_pair_topology_counterfactual.csv", buildCommunityTopologyCounterfactualCsv({
+      result: communityTopologyCounterfactualResult,
+      sourceIdByNodeId,
+      nodeLabels: nodeLabelById,
+      selectedGroup: selectedGroup || "Tutti i nodi",
+      resolution: communityResolution,
+      weighted: communityUsesEdgeWeights
+    }));
+  }
+
+  function communityConstraintNodeLabel(nodeId: string): string {
+    const label = nodeLabelById[nodeId] ?? nodeId;
+    const sourceId = sourceIdByNodeId[nodeId] ?? nodeId;
+    return label === sourceId ? sourceId : `${label} (${sourceId})`;
+  }
+
+  function communityConstraintLabel(constraint: CommunityConstraintRelaxationSpec): string {
+    if (constraint.kind === "minimumCommunityCount") return `Numero minimo di comunità: ${constraint.count}`;
+    if (constraint.kind === "maximumCommunityCount") return `Numero massimo di comunità: ${constraint.count}`;
+    if (constraint.kind === "mustLink" || constraint.kind === "cannotLink") {
+      const pair = constraint.nodeIds ?? [];
+      const relationship = constraint.kind === "mustLink" ? "must-link" : "cannot-link";
+      return `${relationship}: ${pair.map(communityConstraintNodeLabel).join(" ↔ ") || constraint.pair.join(" ↔ ")}`;
+    }
+    if (constraint.kind !== "attributeBound") return "Vincolo di comunità";
+    return `Composizione per ${constraint.attributeName ?? "attributo"}=${JSON.stringify(constraint.attributeValue)}${constraint.minPerCommunity !== undefined ? `, minimo ${constraint.minPerCommunity}` : ""}${constraint.maxPerCommunity !== undefined ? `, massimo ${constraint.maxPerCommunity}` : ""} nodi per comunità`;
+  }
+
+  function exportCommunityConstraintDiagnoses() {
+    if (communityConstraintDiagnoses.length === 0) return;
+    downloadCsvText("modularity_constraint_diagnosis.csv", buildCommunityConstraintDiagnosisCsv({
+      diagnoses: communityConstraintDiagnoses,
+      sourceIdByNodeId,
+      nodeLabels: nodeLabelById,
+      selectedGroup: selectedGroup || "Tutti i nodi"
+    }));
+  }
+
+  function exportKPlexMaximumMembershipDiagnosis() {
+    if (!kPlexMembershipDiagnosis || kPlexMembershipAcrossOptimaError || kPlexMembershipEnumerationConflict) return;
+    downloadCsvText("maximum_k_plex_membership_diagnosis.csv", buildKPlexMaximumMembershipDiagnosisCsv(
+      {
+        ...kPlexMembershipDiagnosis,
+        ...(enumerateAllOptima && kPlexMembershipAcrossOptima
+          ? { optimalMembershipSummary: kPlexMembershipAcrossOptima }
+          : {})
+      },
+      sourceIdByNodeId,
+      selectedGroup
+    ));
+  }
+
+  function exportKPlexMaximumMembershipCounterfactual() {
+    if (kPlexMembershipCounterfactual?.status !== "found") return;
+    downloadCsvText("maximum_k_plex_membership_counterfactual.csv", buildKPlexMaximumMembershipCounterfactualCsv({
+      result: kPlexMembershipCounterfactual.result,
+      sourceIdByNodeId,
+      selectedGroup
+    }));
+  }
+
   function exportPathWitnessCSV() {
     const path = resultSets[0];
     if (!path || pathEdgeIdsByStep.length !== path.length - 1) return;
@@ -724,6 +1141,18 @@
 
   function exportTypedPathNoRouteCSV() {
     if (!typedPathNoRouteCertificate) return;
+    if ("temporalSemantics" in typedPathNoRouteCertificate) {
+      const csv = buildTypedPathTemporalNoRouteCsv({
+        certificate: typedPathNoRouteCertificate,
+        startNodeId,
+        goalNodeId,
+        selectedGroup,
+        sourceIdByNodeId,
+        sourceIdByEdgeId
+      });
+      downloadCsvText("typed_path_temporal_why_not_certificate.csv", csv);
+      return;
+    }
     const rows = [[
       "prefix_length", "next_edge_type", "reachable_node_ids", "goal_reachable_as_walk", "structured_witness_json"
     ].map(csvCell).join(",")];
@@ -737,6 +1166,14 @@
       ].map(csvCell).join(","));
     }
     downloadCsvText("typed_path_why_not_certificate.csv", rows.join("\n"));
+  }
+
+  function highlightTypedPathNoRouteWitness() {
+    if (!typedPathNoRouteCertificate || !("temporalSemantics" in typedPathNoRouteCertificate)) return;
+    dispatch("highlightTypedPath", {
+      nodeIds: typedPathNoRouteCertificate.walk.nodeIds,
+      edgeIds: typedPathNoRouteCertificate.walk.edgeIdsByStep.flat()
+    });
   }
 
   function highlightDominatingTarget(event: Event) {
@@ -761,6 +1198,18 @@
       structuredEdgeEvidence
     });
     downloadCsvText("dominating_set_witnesses.csv", csv);
+  }
+
+  function exportDominatingSetWhyNot() {
+    if (dominatingSetUncoverableTargetNodeIds.length === 0) return;
+    const csv = buildDominatingSetInfeasibilityCsv({
+      uncoverableTargetNodeIds: dominatingSetUncoverableTargetNodeIds,
+      sourceIdByNodeId,
+      nodeLabels: nodeLabelById,
+      candidateGroup: selectedGroup,
+      targetGroup: selectedTargetGroup
+    });
+    downloadCsvText("dominating_set_why_not.csv", csv);
   }
 
   function exportKplexExplanation() {
@@ -880,6 +1329,12 @@
   function removePathTypeStep(index: number) {
     pathEdgeTypeSequence = pathEdgeTypeSequence.filter((_, step) => step !== index);
   }
+
+  function displayMappedTime(value: number): string {
+    if (Math.abs(value) < 100_000_000_000) return String(value);
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : String(value);
+  }
 </script>
 
 {#if open}
@@ -887,13 +1342,13 @@
     <header>
       <div>
         <h3>Analisi strutturali ASP</h3>
-        <p>Strutture, cammini tipizzati, copertura, comunità e tagli sulla proiezione visibile corrente.</p>
+        <p>Strutture, cammini tipizzati, copertura, comunità e tagli sulla proiezione filtrata dai controlli attivi; il focus temporaneo del nodo modifica solo la vista.</p>
       </div>
       <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
     </header>
 
     <fieldset class="task-controls" disabled={running}>
-      <label>
+      <label class="analysis-task-label">
         Analisi
         <select bind:value={task}>
           <option value="kPlex">k-plex di cardinalità massima</option>
@@ -914,6 +1369,27 @@
           <option value="communities">Comunità per modularità</option>
         </select>
       </label>
+      {#if taskContract}
+        <details class="task-contract">
+          <summary>Semantica e contratto del risultato</summary>
+          <p>{taskContract.querySemantics}</p>
+          <p><strong>Enumerazione:</strong> {taskEnumerationDescription}.</p>
+          <p><strong>Predicati ASP di input:</strong> {taskContract.inputPredicates.join(", ")} (unione delle modalità; alcuni sono condizionali).</p>
+          <p><strong>Atomi del witness ASP:</strong> {taskContract.witnessPredicates.join(", ")}.</p>
+          <p><strong>Campi interpretati:</strong> {taskContract.resultFields.join(", ")}.</p>
+          <small>Encoding ASP `{taskContract.aspEncoding}` v{taskContract.encodingVersion}; parser `{taskContract.parser}`.</small>
+          {#each taskContract.supportingQueries ?? [] as supportingQuery}
+            <hr />
+            <p><strong>Query ausiliaria ASP: {supportingQuery.id}</strong></p>
+            <p>{supportingQuery.querySemantics}</p>
+            <p><strong>Enumerazione:</strong> {supportingQuery.supportedEnumeration.join(" / ")}.</p>
+            <p><strong>Input:</strong> {supportingQuery.inputPredicates.join(", ")}.</p>
+            <p><strong>Witness:</strong> {supportingQuery.witnessPredicates.join(", ")}.</p>
+            <p><strong>Campi interpretati:</strong> {supportingQuery.resultFields.join(", ")}.</p>
+            <small>Encoding ASP `{supportingQuery.aspEncoding}` v{supportingQuery.encodingVersion}; parser `{supportingQuery.parser}`. {supportingQuery.visualization}</small>
+          {/each}
+        </details>
+      {/if}
       {#if directedGraph && (!weakComponentsAvailable || !strongComponentsAvailable)}
         <ul class="task-readiness">
           {#each [...new Set([...weakComponentsRequirementReasons, ...strongComponentsRequirementReasons])] as reason}<li>{reason}</li>{/each}
@@ -976,6 +1452,28 @@
               {#each typedPathRequirementReasons as reason}<li>{reason}</li>{/each}
             </ul>
           {/if}
+          <label>
+            Semantica temporale
+            <select bind:value={pathTemporalSemantics}>
+              <option value="static">Statica (predefinita)</option>
+              <option value="coValid">Tutti gli archi validi allo stesso istante</option>
+              <option value="orderedByStart">Inizi di validità in ordine</option>
+            </select>
+          </label>
+          {#if pathTemporalSemantics === "coValid"}
+            <small>Gli intervalli sono chiusi: il cammino deve esistere insieme a un istante comune. Il risultato riporta il primo istante comune e tutti i record d'arco attivi in quell'istante.</small>
+          {:else if pathTemporalSemantics === "orderedByStart"}
+            <small>Ogni passo sceglie un record d'arco; l'inizio della sua validità non deve precedere quello del passo seguente. Gli intervalli non devono sovrapporsi.</small>
+            <label class="checkbox-label">
+              <span>Ordine stretto</span>
+              <span><input type="checkbox" bind:checked={pathStrictTemporalOrder} /> Richiedi inizi strettamente crescenti</span>
+            </label>
+          {/if}
+          {#if pathTemporalSemantics !== "static" && !typedPathTemporalRequirementsAvailable}
+            <ul class="task-readiness">
+              {#each typedPathTemporalRequirementReasons as reason}<li>{reason}</li>{/each}
+            </ul>
+          {/if}
         </div>
       {/if}
       {#if task === "path"}
@@ -990,10 +1488,70 @@
       {#if task === "typedPath"}
         <label class="checkbox-label">
           <span>Spiegazioni</span>
-          <span><input type="checkbox" bind:checked={explainTypedPathNoRoute} /> Mostra perché non c’è un cammino tipizzato</span>
+          <span><input type="checkbox" bind:checked={explainTypedPathNoRoute} /> Mostra perché non c'è un cammino tipizzato</span>
         </label>
         {#if explainTypedPathNoRoute}
-          <small class="field-note">Se la ricerca del cammino semplice fallisce, una seconda query ASP mostra i nodi raggiungibili dopo ogni prefisso. Distingue un prefisso bloccato da un typed walk che raggiunge la meta solo rivisitando nodi.</small>
+          {#if pathTemporalSemantics === "static"}
+            <small class="field-note">Se la ricerca del cammino semplice fallisce, una query ASP mostra i nodi raggiungibili dopo ogni prefisso e distingue un prefisso bloccato da un typed walk che raggiunge la meta solo rivisitando nodi.</small>
+          {:else}
+            <small class="field-note">Se il cammino semplice fallisce, una query ASP trova il temporal walk più lungo che rispetta questa semantica e mostra il vincolo che ne blocca l'estensione, oppure le visite ripetute che impediscono un cammino semplice. Usa lo stesso budget del task.</small>
+          {/if}
+        {/if}
+        {#if pathTemporalSemantics === "static"}
+          <TypedPathCounterfactualPanel
+            running={running}
+            enabled={typedPathCounterfactualEnabled}
+            requirementReasons={typedPathCounterfactualRequirementReasons}
+            temporalSemantics={pathTemporalSemantics}
+            strictTemporalOrder={pathStrictTemporalOrder}
+            candidateCount={typedPathCounterfactualCandidateCount}
+            excludedCandidateCount={typedPathCounterfactualExcludedCandidateCount}
+            proposals={typedPathCounterfactualProposals}
+            hasRun={typedPathCounterfactualHasRun}
+            error={typedPathCounterfactualError}
+            timeMs={typedPathCounterfactualTimeMs}
+            whyNot={typedPathCounterfactualWhyNot}
+            whyNotError={typedPathCounterfactualWhyNotError}
+            edgeTypeSequence={pathEdgeTypeSequence}
+            {startNodeId}
+            {goalNodeId}
+            selectedGroup={selectedGroup}
+            {sourceIdByNodeId}
+            {sourceIdByEdgeId}
+            {nodeLabelById}
+            on:run={(event) => dispatch("typedPathCompletion", event.detail)}
+            on:criteriaChange={() => dispatch("typedPathCompletionCriteriaChange")}
+            on:highlight={(event) => dispatch("highlight", event.detail)}
+          />
+        {:else}
+          <small class="field-note">La diagnosi temporale considera solo gli archi osservati; il controfattuale temporale usa separatamente gli intervalli e i costi dichiarati per gli archi candidati.</small>
+          <TypedPathCounterfactualPanel
+            running={running}
+            enabled={typedPathCounterfactualEnabled}
+            requirementReasons={!typedPathTemporalRequirementsAvailable
+              ? typedPathTemporalRequirementReasons
+              : typedPathCounterfactualRequirementReasons}
+            temporalSemantics={pathTemporalSemantics}
+            strictTemporalOrder={pathStrictTemporalOrder}
+            candidateCount={typedPathCounterfactualCandidateCount}
+            excludedCandidateCount={typedPathCounterfactualExcludedCandidateCount}
+            proposals={typedPathCounterfactualProposals}
+            hasRun={typedPathCounterfactualHasRun}
+            error={typedPathCounterfactualError}
+            timeMs={typedPathCounterfactualTimeMs}
+            whyNot={undefined}
+            whyNotError=""
+            edgeTypeSequence={pathEdgeTypeSequence}
+            {startNodeId}
+            {goalNodeId}
+            selectedGroup={selectedGroup}
+            {sourceIdByNodeId}
+            {sourceIdByEdgeId}
+            {nodeLabelById}
+            on:run={(event) => dispatch("typedPathCompletion", event.detail)}
+            on:criteriaChange={() => dispatch("typedPathCompletionCriteriaChange")}
+            on:highlight={(event) => dispatch("highlight", event.detail)}
+          />
         {/if}
       {/if}
       {#if task === "minimumCostEdgeSeparator" && !costEdgeSeparatorRequirementsAvailable}
@@ -1015,6 +1573,17 @@
             <option value={group}>{group}</option>
           {/each}
         </select>
+        </label>
+      {/if}
+      {#if provenanceScenarioCount > 1 && (task === "components" || task === "weakComponents" || task === "strongComponents")}
+        <label>
+          Nodo di riferimento per il confronto
+          <select bind:value={componentScenarioTargetNodeId} required>
+            <option value="" disabled>Scegli un nodo</option>
+            {#each componentScenarioNodes as node (node.id)}
+              <option value={node.id}>{node.label} · {node.id}</option>
+            {/each}
+          </select>
         </label>
       {/if}
       {#if task === "dominatingSet"}
@@ -1059,6 +1628,13 @@
         </label>
         {#if explainCommunityContributions}
           <small class="field-note">Mostra archi interni, volume e contributo intero per comunità; il risultato spiega il punteggio della partizione, non la sua interpretazione nel dominio.</small>
+        {/if}
+        <label class="checkbox-label">
+          <span>Infeasibilità</span>
+          <span><input type="checkbox" bind:checked={explainCommunityInfeasibility} /> Diagnosi minima dei vincoli</span>
+        </label>
+        {#if explainCommunityInfeasibility}
+          <small class="field-note">Solo se i vincoli non ammettono partizioni, una seconda query ASP cerca il minor numero di regole da sospendere. Mantiene fissi grafo e dati; ogni alternativa è una proposta non applicata. “Tutti gli ottimi” enumera anche le diagnosi equivalenti.</small>
         {/if}
       {/if}
       {#if task === "kCore"}
@@ -1129,6 +1705,31 @@
         </button>
         <small class="field-note">Richiede “Tutti gli ottimi”: enumera ogni k-plex di cardinalità massima per scenario, con gli stessi s, gruppo, filtri, timeline e soglia di confidenza. Può essere costoso; il budget totale è condiviso.</small>
       {/if}
+      {#if provenanceScenarioCount > 1 && (task === "components" || task === "weakComponents" || task === "strongComponents")}
+        <button
+          type="button"
+          class="run scenario-run"
+          on:click={requestScenarioComponentComparison}
+          disabled={running || !componentScenarioTargetNodeId ||
+            (task === "components" && !connectedComponentsAvailable) ||
+            (task === "weakComponents" && !weakComponentsAvailable) ||
+            (task === "strongComponents" && !strongComponentsAvailable)}
+        >
+          Confronta la componente del nodo in tutti gli scenari
+        </button>
+        <small class="field-note">Clingo calcola la partizione ASP con la stessa direzione, gruppo, filtri, timeline e soglia di confidenza. Un nodo non eleggibile in uno scenario resta distinto da un nodo presente ma separato.</small>
+      {/if}
+      {#if task === "dominatingSet" && provenanceScenarioCount > 1}
+        <button
+          type="button"
+          class="run scenario-run"
+          on:click={requestScenarioDominatingSetComparison}
+          disabled={running || !enumerateAllOptima}
+        >
+          Confronta le coperture minime su tutti gli scenari
+        </button>
+        <small class="field-note">Richiede “Tutti gli ottimi”: enumera ogni insieme dominante minimo per scenario, con gli stessi gruppi candidati e obiettivo, filtri, timeline e soglia di confidenza. Se manca una copertura in uno scenario o l’enumerazione non termina, non mostra confronti parziali. Un target group vuoto in uno scenario ha copertura vacua di taglia zero.</small>
+      {/if}
     </fieldset>
 
     {#if task === "kCore"}
@@ -1149,6 +1750,8 @@
         candidateEnabled={kCoreCounterfactualEnabled && !directedGraph}
         candidateCount={kCoreCounterfactualCandidateCount}
         proposals={kCoreMembershipCounterfactualProposals}
+        kCoreMembershipWhyNot={kCoreMembershipCounterfactualWhyNot}
+        kCoreMembershipWhyNotMessage={kCoreMembershipCounterfactualWhyNotMessage}
         hasRun={kCoreMembershipCounterfactualHasRun}
         error={kCoreMembershipCounterfactualError}
         timeMs={kCoreMembershipCounterfactualTimeMs}
@@ -1170,6 +1773,23 @@
     {#if error}
       <div class="error" role="alert">{error}</div>
     {/if}
+    {#if task === "dominatingSet" && dominatingSetUncoverableTargetNodeIds.length > 0}
+      <section class="dominating-explanation" aria-label="Certificato why-not della copertura">
+        <strong>Perché la copertura è impossibile</strong>
+        <p>ASP ha individuato target che nessun nodo candidato ammesso copre tramite selezione o adiacenza nella proiezione non orientata corrente.</p>
+        <ul>
+          {#each dominatingSetUncoverableTargetNodeIds as nodeId (nodeId)}
+            <li>
+              <button type="button" on:click={() => dispatch("highlight", [nodeId])}>
+                {nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <button type="button" on:click={exportDominatingSetWhyNot}>Esporta certificato why-not CSV</button>
+        <small>Il certificato descrive un limite strutturale dei gruppi e degli archi selezionati; non suggerisce modifiche ai dati.</small>
+      </section>
+    {/if}
     {#if provenanceKCoreComparisonRunning}
       <div class="scenario-status" role="status">{provenanceKCoreComparisonProgress || "Calcolo del k-core negli scenari dichiarati…"}</div>
     {/if}
@@ -1179,8 +1799,15 @@
     {#if provenanceKCoreComparison}
       <section class="scenario-comparison" aria-label="Stabilità del k-core tra scenari di provenienza">
         <div class="scenario-summary" role="status">
-          <strong>{provenanceKCoreComparison.stableNodeIds.length}</strong> nodi presenti in tutti gli scenari ·
-          <strong>{provenanceKCoreComparison.nonUniversalNodeIds.length}</strong> presenti in almeno uno ·
+          {#if provenanceKCoreComparison.worldAssumption === "finite-exhaustive-worlds"}
+            <strong>{provenanceKCoreComparison.stableNodeIds.length}</strong> membership cautious ·
+            <strong>{provenanceKCoreBraveOnlyCount}</strong> brave-only ·
+            <strong>{provenanceKCoreNotBraveCount}</strong> not-brave ·
+          {:else}
+            <strong>{provenanceKCoreComparison.stableNodeIds.length}</strong> nodi presenti in tutti gli scenari ·
+            <strong>{provenanceKCoreBraveOnlyCount}</strong> presenti ma non universali ·
+            <strong>{provenanceKCoreNotBraveCount}</strong> candidati mai selezionati ·
+          {/if}
           {provenanceKCoreComparison.scenarioCount} scenari · k={provenanceKCoreComparison.k}
           {#if provenanceKCoreComparison.degreeMode !== "undirected"}
             · grado {provenanceKCoreComparison.degreeMode === "in" ? "entrante" : provenanceKCoreComparison.degreeMode === "out" ? "uscente" : "mutuo"}
@@ -1190,7 +1817,7 @@
           {#each provenanceKCoreComparison.scenarios as scenario (scenario.scenarioId)}
             <div class="scenario-row">
               <strong>{scenario.scenarioLabel}</strong>
-              <span>{scenario.nodesCount} nodi candidati · {scenario.linksCount} archi · core {scenario.coreSize}</span>
+              <span>{scenario.nodesCount} nodi proiettati · {scenario.candidateNodeCount} candidati · {scenario.linksCount} archi · core {scenario.coreSize}</span>
               <small>{scenario.timeMs.toFixed(1)} ms</small>
             </div>
           {/each}
@@ -1202,7 +1829,7 @@
           · gruppi vista: {provenanceKCoreViewFilters.groups.length ? provenanceKCoreViewFilters.groups.join(", ") : "tutti"}
         </small>
         <div class="scenario-membership-heading">
-          <strong>Membership nei k-core</strong>
+          <strong>{provenanceKCoreComparison.worldAssumption === "finite-exhaustive-worlds" ? "Membership brave nei k-core" : "Membership nei k-core"}</strong>
           <button type="button" on:click={exportScenarioKCoreComparison}>Esporta CSV</button>
         </div>
         {#if provenanceKCoreComparison.memberships.length === 0}
@@ -1215,13 +1842,27 @@
                   <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Nel dominio: {membership.candidateScenarioSupportCount}/{provenanceKCoreComparison.scenarioCount} · nel core: {membership.scenarioSupportCount}/{provenanceKCoreComparison.scenarioCount}</span>
-                  <strong>{membership.stableAcrossEveryScenario ? "Presente in tutti" : "Non universale"}</strong>
+                  <strong>{provenanceKCoreComparison.worldAssumption === "finite-exhaustive-worlds"
+                    ? membership.stableAcrossEveryScenario
+                      ? "Cautious: presente in ogni mondo"
+                      : membership.scenarioSupportCount === 0
+                        ? "Not brave: candidato ma fuori da ogni k-core"
+                        : "Brave-only: presente in almeno un mondo"
+                    : membership.stableAcrossEveryScenario
+                      ? "Presente in tutti gli scenari"
+                      : membership.scenarioSupportCount === 0
+                        ? "Mai selezionato nel k-core"
+                        : membership.stableAcrossEveryEligibleScenario
+                          ? "Presente ogni volta che è eleggibile"
+                          : "Presente solo in alcuni scenari"}</strong>
                 </button>
               </li>
             {/each}
           </ul>
         {/if}
-        <small class="scenario-semantics">Il k-core è unico per ogni proiezione. “Presente in tutti” indica l’intersezione dei k-core degli scenari configurati; “non universale” indica presenza solo in alcuni. “Nel dominio” separa i nodi eleggibili dalla loro appartenenza al core. I nodi assenti da tutti i core sono omessi. È un confronto deterministico, non una probabilità né una conclusione epistemica.</small>
+        <small class="scenario-semantics">{provenanceKCoreComparison.worldAssumption === "finite-exhaustive-worlds"
+          ? "Il k-core è unico in ogni mondo: brave indica la membership in almeno un k-core; cautious la membership in tutti. I candidati mai appartenenti a un k-core restano visibili come not-brave; i nodi fuori da tutti i domini candidati non fanno parte della query. La membership in tutti i mondi richiede eleggibilità e presenza nel core in ciascuno. Il risultato è condizionato all'assunzione di esaustività della lista e non attribuisce probabilità o affidabilità alle fonti."
+          : "Il k-core è unico per ogni proiezione. “Presente in tutti” indica l’intersezione dei k-core degli scenari configurati; “mai selezionato” identifica i candidati assenti da tutti i core. “Nel dominio” separa eleggibilità e membership; “presente ogni volta che è eleggibile” distingue una membership condizionale dall’assenza in altri scenari. È un confronto deterministico, non una probabilità né una conclusione epistemica."}</small>
       </section>
     {/if}
     {#if provenanceKPlexComparisonRunning}
@@ -1233,8 +1874,14 @@
     {#if provenanceKPlexComparison}
       <section class="scenario-comparison" aria-label="Stabilità dei k-plex massimi tra scenari di provenienza">
         <div class="scenario-summary" role="status">
-          <strong>{provenanceKPlexComparison.stableNodeIds.length}</strong> candidati presenti in tutti gli ottimi ·
-          <strong>{provenanceKPlexComparison.nonUniversalNodeIds.length}</strong> non universali ·
+          {#if provenanceKPlexComparison.worldAssumption === "finite-exhaustive-worlds"}
+            <strong>{provenanceKPlexComparison.stableNodeIds.length}</strong> cautious ·
+            <strong>{provenanceKPlexBraveOnlyCount}</strong> brave-only ·
+            <strong>{provenanceKPlexNotBraveCount}</strong> mai brave ·
+          {:else}
+            <strong>{provenanceKPlexComparison.stableNodeIds.length}</strong> candidati presenti in tutti gli ottimi ·
+            <strong>{provenanceKPlexComparison.nonUniversalNodeIds.length}</strong> non universali ·
+          {/if}
           {provenanceKPlexComparison.scenarioCount} scenari · s={provenanceKPlexComparison.s} ·
           {provenanceKPlexComparison.totalOptimalAnswerSetCount} witness ottimi
         </div>
@@ -1254,7 +1901,7 @@
           · gruppi vista: {provenanceKPlexViewFilters.groups.length ? provenanceKPlexViewFilters.groups.join(", ") : "tutti"}
         </small>
         <div class="scenario-membership-heading">
-          <strong>Membership nei k-plex massimi</strong>
+          <strong>{provenanceKPlexComparison.worldAssumption === "finite-exhaustive-worlds" ? "Membership brave nei k-plex massimi" : "Membership nei k-plex massimi"}</strong>
           <button type="button" on:click={exportScenarioKPlexComparison}>Esporta CSV</button>
         </div>
         {#if provenanceKPlexComparison.memberships.length === 0}
@@ -1271,13 +1918,207 @@
                   <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Nel dominio: {membership.candidateScenarioSupportCount}/{provenanceKPlexComparison.scenarioCount} · in scenari ottimi: {membership.scenarioSupportCount}/{provenanceKPlexComparison.scenarioCount} · answer set: {membership.optimalAnswerSetCount}/{membership.totalOptimalAnswerSetCount}</span>
-                  <strong>{membership.stableAcrossEveryOptimalAnswerSet ? "Presente in tutti gli ottimi" : membership.optimalAnswerSetCount === 0 ? "Mai selezionato" : "Non in tutti gli ottimi"}</strong>
+                  <strong>{provenanceKPlexComparison.worldAssumption === "finite-exhaustive-worlds"
+                    ? membership.stableAcrossEveryOptimalAnswerSet
+                      ? "Cautious: presente in ogni ottimo di ogni mondo"
+                      : membership.optimalAnswerSetCount === 0
+                        ? "Non brave: assente da ogni k-plex massimo"
+                        : "Brave-only: presente in almeno un ottimo"
+                    : membership.stableAcrossEveryOptimalAnswerSet
+                      ? "Presente in tutti gli ottimi"
+                      : membership.optimalAnswerSetCount === 0 ? "Mai selezionato" : "Non in tutti gli ottimi"}</strong>
                 </button>
               </li>
             {/each}
           </ul>
         {/if}
-        <small class="scenario-semantics">Per ogni scenario sono enumerate tutte le soluzioni di cardinalità massima. “Presente in tutti gli ottimi” significa membership in ogni witness massimo di ogni scenario dichiarato; “Mai selezionato” identifica candidati che non appartengono a nessun ottimo. Il conteggio dei witness non è una probabilità. Se un’enumerazione non termina o non è completa, il confronto non mostra risultati parziali.</small>
+        <small class="scenario-semantics">{provenanceKPlexComparison.worldAssumption === "finite-exhaustive-worlds"
+          ? "Per ogni mondo sono enumerate tutte le soluzioni di cardinalità massima. Brave indica la membership in almeno un k-plex massimo; cautious la membership in tutti gli ottimi di tutti i mondi, inclusi i pareggi. “Mai brave” identifica candidati che non appartengono a nessun massimo. L'interpretazione dipende dall'assunzione dell'analista che i mondi dichiarati siano esaustivi; non assegna probabilità o affidabilità alle fonti. Un'enumerazione incompleta sopprime l'intero risultato."
+          : "Per ogni scenario sono enumerate tutte le soluzioni di cardinalità massima. “Presente in tutti gli ottimi” significa membership in ogni witness massimo di ogni scenario dichiarato; “Mai selezionato” identifica candidati che non appartengono a nessun ottimo. Il conteggio dei witness non è una probabilità. Se un’enumerazione non termina o non è completa, il confronto non mostra risultati parziali."}</small>
+      </section>
+    {/if}
+    {#if provenanceComponentComparisonRunning}
+      <div class="scenario-status" role="status">{provenanceComponentComparisonProgress || "Calcolo delle componenti ASP negli scenari dichiarati…"}</div>
+    {/if}
+    {#if provenanceComponentComparisonError}
+      <div class="error" role="alert">{provenanceComponentComparisonError}</div>
+    {/if}
+    {#if provenanceComponentComparison}
+      <section class="scenario-comparison" aria-label="Stabilità della componente tra scenari di provenienza">
+        <div class="scenario-summary" role="status">
+          Nodo di riferimento: <strong>{nodeLabelById[provenanceComponentComparison.targetNodeId] ?? provenanceComponentComparison.targetNodeId}</strong> ·
+          eleggibile in <strong>{provenanceComponentComparison.targetEligibleScenarioCount}/{provenanceComponentComparison.scenarioCount}</strong> scenari ·
+          {#if provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds"}
+            membership cautious: <strong>{provenanceComponentComparison.universallySameComponentNodeIds.length}</strong> · brave-only: <strong>{provenanceComponentBraveOnlyCount}</strong> · non brave: <strong>{provenanceComponentNotBraveCount}</strong> · non definita: <strong>{provenanceComponentUndefinedCount}</strong>
+          {:else}
+            stessa componente in tutti gli scenari: <strong>{provenanceComponentComparison.universallySameComponentNodeIds.length}</strong> nodi ·
+            stabile nei soli scenari comparabili: <strong>{provenanceComponentComparison.conditionallySameComponentNodeIds.length}</strong>
+          {/if}
+        </div>
+        <div class="scenario-list">
+          {#each provenanceComponentComparison.scenarios as scenario (scenario.scenarioId)}
+            <div class="scenario-row">
+              <strong>{scenario.scenarioLabel}</strong>
+              <span>{scenario.projectedNodeCount} nodi proiettati · {scenario.candidateNodeCount} candidati · {scenario.linksCount} archi · {scenario.componentCount} componenti</span>
+              <span>{scenario.targetEligible ? `Nodo di riferimento nella componente di taglia ${scenario.targetComponentSize}` : "Nodo di riferimento non eleggibile nella proiezione/gruppo"}</span>
+              <small>{scenario.timeMs.toFixed(1)} ms</small>
+            </div>
+          {/each}
+        </div>
+        <small class="scenario-semantics">
+          Task ASP: {provenanceComponentComparison.task === "components" ? "componenti connesse non orientate" : provenanceComponentComparison.task === "weakComponents" ? "componenti debolmente connesse" : "componenti fortemente connesse"} ·
+          gruppo: {provenanceComponentSelectedGroup || "tutti"} · confidenza minima: {provenanceComponentConfidenceThreshold ?? "non attiva"}
+          {#if provenanceComponentTimelineWindow} · finestra: {provenanceComponentTimelineWindow}{/if}
+          · tipi vista: {provenanceComponentViewFilters.types.length ? provenanceComponentViewFilters.types.join(", ") : "tutti"}
+          · gruppi vista: {provenanceComponentViewFilters.groups.length ? provenanceComponentViewFilters.groups.join(", ") : "tutti"}
+        </small>
+        <div class="scenario-membership-heading">
+          <strong>{provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds" ? "Membership brave nella componente di riferimento" : "Nodi rispetto alla componente di riferimento"}</strong>
+          <button type="button" on:click={exportScenarioComponentComparison}>Esporta CSV</button>
+        </div>
+        {#if provenanceComponentComparison.memberships.length === 0}
+          <p class="empty">Non ci sono altri nodi candidati negli scenari confrontati.</p>
+        {:else}
+          <ul class="scenario-memberships">
+            {#each provenanceComponentComparison.memberships as membership (membership.nodeId)}
+              <li>
+                <button
+                  type="button"
+                  class:stable={membership.sameComponentInEveryDeclaredScenario}
+                  on:click={() => dispatch("highlight", [membership.nodeId])}
+                >
+                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                  <small>ID: {membership.nodeId}</small>
+                  <span>Nel dominio: {membership.candidateScenarioCount}/{provenanceComponentComparison.scenarioCount} · confrontabile: {membership.comparableScenarioCount}/{provenanceComponentComparison.scenarioCount} · stessa componente: {membership.sameComponentScenarioCount}/{membership.comparableScenarioCount}</span>
+                  <strong>{provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds"
+                    ? membership.sameComponentInEveryDeclaredScenario
+                      ? "Cautious: stessa componente in ogni mondo"
+                      : membership.sameComponentScenarioCount > 0
+                        ? "Brave-only: stessa componente in almeno un mondo"
+                        : membership.comparableScenarioCount === 0
+                          ? "Non definita: nessun mondo comparabile"
+                          : "Non brave: nessuna membership positiva"
+                    : membership.sameComponentInEveryDeclaredScenario
+                      ? "Stessa componente in ogni scenario"
+                      : membership.sameComponentInEveryComparableScenario
+                        ? "Stessa componente quando entrambi eleggibili"
+                        : membership.comparableScenarioCount === 0
+                          ? "Nessuno scenario confrontabile"
+                          : membership.sameComponentScenarioCount === 0
+                            ? "Mai nella stessa componente"
+                            : "Componente variabile"}</strong>
+                  {#if membership.separateComponentScenarioIds.length > 0}
+                    <small>In componenti diverse: {membership.separateComponentScenarioIds.join(", ")}</small>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <small class="scenario-semantics">{provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds"
+          ? "Brave significa che esiste almeno un mondo comparabile in cui il riferimento e il nodo sono candidati e condividono la componente; cautious richiede questa membership in ogni mondo. Se il riferimento non è eleggibile in un mondo, la relazione è indefinita lì e non viene descritta come disconnessione; i mondi senza alcuna eleggibilità congiunta sono contati a parte. Il risultato è condizionato all'assunzione di esaustività della lista e non assegna probabilità alle fonti."
+          : "Il confronto usa solo scenari di fonte esplicitamente dichiarati e una partizione ASP completata per ciascuno. “Confrontabile” richiede che entrambi i nodi siano candidati in quello scenario; un nodo assente, escluso dai filtri o fuori dal gruppo non viene contato come separato. “In ogni scenario” richiede eleggibilità congiunta in tutti gli scenari. I conteggi sono deterministici, non probabilità, affidabilità o semantica brave/skeptical."}</small>
+      </section>
+    {/if}
+    {#if provenanceDominatingSetComparisonRunning}
+      <div class="scenario-status" role="status">{provenanceDominatingSetComparisonProgress || "Calcolo ASP delle coperture minime negli scenari dichiarati…"}</div>
+    {/if}
+    {#if provenanceDominatingSetComparisonError}
+      <div class="error" role="alert">{provenanceDominatingSetComparisonError}</div>
+    {/if}
+    {#if provenanceDominatingSetScenarioWhyNot}
+      <section class="dominating-explanation" aria-label="Certificato why-not dello scenario">
+        <strong>Target non copribili nello scenario: {provenanceDominatingSetScenarioWhyNot.scenarioLabel}</strong>
+        <p>ASP ha verificato che nessun nodo del gruppo candidato copre questi target nello scenario di provenienza selezionato.</p>
+        <ul>
+          {#each provenanceDominatingSetScenarioWhyNot.uncoverableTargetNodeIds as nodeId (nodeId)}
+            <li>
+              <button type="button" on:click={() => dispatch("highlight", [nodeId])}>
+                {nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <small>
+          Scenario ID: {provenanceDominatingSetScenarioWhyNot.scenarioId} · fonti: {provenanceDominatingSetScenarioWhyNot.scenarioSources.join(", ") || "nessuna dichiarata"} · candidati: {provenanceDominatingSetScenarioWhyNot.candidateGroup || "tutti"} · target: {provenanceDominatingSetScenarioWhyNot.targetGroup || "tutti"}
+          {#if provenanceDominatingSetScenarioWhyNot.confidenceThreshold !== null} · confidenza minima: {provenanceDominatingSetScenarioWhyNot.confidenceThreshold}{/if}
+          {#if provenanceDominatingSetScenarioWhyNot.timelineWindow} · finestra: {provenanceDominatingSetScenarioWhyNot.timelineWindow}{/if}
+        </small>
+        <button type="button" on:click={exportScenarioDominatingSetWhyNot}>Esporta why-not dello scenario CSV</button>
+        <small>La comparazione complessiva resta scartata; questo certificato descrive soltanto il motivo verificato dello scenario che ha bloccato il confronto.</small>
+      </section>
+    {/if}
+    {#if provenanceDominatingSetComparison}
+      <section class="scenario-comparison" aria-label="Confronto delle coperture minime tra scenari di provenienza">
+        <div class="scenario-summary" role="status">
+          Scenari: <strong>{provenanceDominatingSetComparison.scenarioCount}</strong> ·
+          dimensione minima per scenario: <strong>{provenanceDominatingSetComparison.scenarios.map((scenario) => scenario.minimumSetSize).join(", ")}</strong> ·
+          {#if provenanceDominatingSetComparison.worldAssumption === "finite-exhaustive-worlds"}
+            membership cautious: <strong>{provenanceDominatingSetComparison.universallySelectedNodeIds.length}</strong> ·
+            brave-only: <strong>{provenanceDominatingSetBraveOnlyCount}</strong> · non brave: <strong>{provenanceDominatingSetNotBraveCount}</strong> ·
+          {:else}
+            nodi selezionati in ogni ottimo di ogni scenario: <strong>{provenanceDominatingSetComparison.universallySelectedNodeIds.length}</strong> ·
+          {/if}
+          ottimi enumerati: <strong>{provenanceDominatingSetComparison.totalMinimumSetCount}</strong>
+        </div>
+        <div class="scenario-list">
+          {#each provenanceDominatingSetComparison.scenarios as scenario (scenario.scenarioId)}
+            <div class="scenario-row">
+              <strong>{scenario.scenarioLabel}</strong>
+              <span>{scenario.projectedNodeCount} nodi proiettati · {scenario.candidateNodeCount} candidati · {scenario.targetNodeCount} target · {scenario.linksCount} archi</span>
+              <span>{scenario.targetNodeCount === 0 ? "Nessun target: copertura vacua" : `Coperture minime: ${scenario.minimumSetCount} di taglia ${scenario.minimumSetSize}`}</span>
+              <small>{scenario.timeMs.toFixed(1)} ms</small>
+            </div>
+          {/each}
+        </div>
+        <small class="scenario-semantics">
+          Gruppo candidati: {provenanceDominatingSetCandidateGroup || "tutti"} · gruppo target: {provenanceDominatingSetTargetGroup || "tutti"} · confidenza minima: {provenanceDominatingSetConfidenceThreshold ?? "non attiva"}
+          {#if provenanceDominatingSetTimelineWindow} · finestra: {provenanceDominatingSetTimelineWindow}{/if}
+          · tipi vista: {provenanceDominatingSetViewFilters.types.length ? provenanceDominatingSetViewFilters.types.join(", ") : "tutti"}
+          · gruppi vista: {provenanceDominatingSetViewFilters.groups.length ? provenanceDominatingSetViewFilters.groups.join(", ") : "tutti"}
+        </small>
+        <div class="scenario-membership-heading">
+          <strong>{provenanceDominatingSetComparison.worldAssumption === "finite-exhaustive-worlds" ? "Membership brave nelle coperture minime" : "Membership nelle coperture ottime"}</strong>
+          <button type="button" on:click={exportScenarioDominatingSetComparison}>Esporta CSV</button>
+        </div>
+        {#if provenanceDominatingSetComparison.memberships.length === 0}
+          <p class="empty">Non ci sono nodi eleggibili come candidati in almeno uno scenario.</p>
+        {:else}
+          <ul class="scenario-memberships">
+            {#each provenanceDominatingSetComparison.memberships as membership (membership.nodeId)}
+              <li>
+                <button
+                  type="button"
+                  class:stable={membership.selectedInEveryScenarioMinimumSet}
+                  on:click={() => dispatch("highlight", [membership.nodeId])}
+                >
+                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                  <small>ID: {membership.nodeId}</small>
+                  <span>Candidato: {membership.candidateScenarioCount}/{provenanceDominatingSetComparison.scenarioCount} scenari · selezionato: {membership.selectedMinimumSetCount}/{membership.totalComparableMinimumSetCount} ottimi confrontabili</span>
+                  <strong>{provenanceDominatingSetComparison.worldAssumption === "finite-exhaustive-worlds"
+                    ? membership.selectedInEveryScenarioMinimumSet
+                      ? "Cautious: presente in ogni copertura minima di ogni mondo"
+                      : membership.selectedMinimumSetCount === 0
+                        ? "Non brave: non selezionato in alcuna copertura minima"
+                        : "Brave-only: presente in almeno una copertura minima"
+                    : membership.selectedInEveryScenarioMinimumSet
+                      ? "In ogni copertura minima di ogni scenario"
+                      : membership.selectedInEveryComparableMinimumSet
+                        ? "In ogni copertura minima quando candidato"
+                        : membership.selectedMinimumSetCount === 0
+                          ? "Mai selezionato in una copertura minima"
+                          : "Selezione variabile tra coperture minime"}</strong>
+                  {#if membership.optimalScenarioIds.length > 0}
+                    <small>Presente in almeno un ottimo: {membership.optimalScenarioIds.join(", ")}</small>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <small class="scenario-semantics">{provenanceDominatingSetComparison.worldAssumption === "finite-exhaustive-worlds"
+          ? "Il confronto richiede tutte le coperture minime complete per ogni mondo: brave indica la selezione in almeno un ottimo di almeno un mondo; cautious richiede la selezione in tutte le coperture minime di tutti i mondi. Un nodo non candidato in un mondo non vi appartiene; “non brave” indica zero supporti. Se un mondo non ha una copertura fattibile o l'enumerazione è incompleta, non viene presentato alcun risultato. Questa lettura è condizionata all'assunzione di esaustività dell'analista e non assegna probabilità alle fonti."
+          : "“In ogni scenario” richiede che il nodo sia candidato in tutti gli scenari e appartenga a ogni insieme dominante minimo enumerato. “Quando candidato” esclude gli scenari in cui il gruppo o la proiezione non lo rendono selezionabile. I conteggi sono membership strutturali deterministiche, non probabilità, importanza o raccomandazioni. Ogni witness è verificato contro candidati, target e archi dello scenario; se un task è incompleto o non ottimo, il confronto complessivo viene scartato."}</small>
       </section>
     {/if}
     {#if task === "path" && pathNoRouteCertificate}
@@ -1298,30 +2139,91 @@
     {/if}
     {#if task === "typedPath" && typedPathNoRouteCertificate}
       <div class="path-minimality-explanation" aria-live="polite">
-        <strong>Perché non esiste il cammino tipizzato semplice</strong>
-        {#if typedPathNoRouteCertificate.goalReachableAsWalk}
-          <p>La sequenza raggiunge il terminale finale se si ammettono ripetizioni. Poiché la query del cammino semplice è risultata insoddisfacibile, ogni typed walk che collega questi terminali deve rivisitare almeno un nodo.</p>
-        {:else if typedPathNoRouteCertificate.firstEmptyStep !== undefined}
-          <p>Nessun nodo è raggiungibile dopo il passo {typedPathNoRouteCertificate.firstEmptyStep} ({typedPathNoRouteCertificate.edgeTypeSequence[typedPathNoRouteCertificate.firstEmptyStep - 1]}). I livelli precedenti mostrano i prefissi percorribili.</p>
-        {:else}
-          <p>La sequenza non raggiunge il terminale finale; l’ultimo livello mostra dove termina la raggiungibilità per prefissi.</p>
-        {/if}
-        <details>
-          <summary>Nodi raggiungibili dopo ogni prefisso</summary>
+        {#if "temporalSemantics" in typedPathNoRouteCertificate}
+          <strong>Perché non esiste il cammino temporale tipizzato semplice</strong>
+          {#if typedPathNoRouteCertificate.goalReachableAsWalk}
+            <p>Una walk temporale completa raggiunge la meta rivisitando i nodi {typedPathNoRouteCertificate.repeatedNodeIds.map((id) => sourceIdByNodeId[id] ?? id).join(", ")}. La query ASP ha provato che non esiste un cammino semplice con la stessa semantica.</p>
+          {:else if typedPathNoRouteCertificate.firstBlockedStep !== undefined}
+            <p>La walk temporale di massima lunghezza copre {typedPathNoRouteCertificate.maximumPrefixLength} passi; il passo {typedPathNoRouteCertificate.firstBlockedStep} ({typedPathNoRouteCertificate.edgeTypeSequence[typedPathNoRouteCertificate.firstBlockedStep - 1]}) non si estende sotto i vincoli temporali selezionati.</p>
+          {:else}
+            <p>La sequenza completa è percorribile come walk temporale, ma non raggiunge il terminale finale {sourceIdByNodeId[goalNodeId] ?? goalNodeId}.</p>
+          {/if}
+          {#if typedPathNoRouteCertificate.temporalSemantics === "coValid" && typedPathNoRouteCertificate.commonTimeValue !== undefined}
+            <p>Istante comune del witness: {displayMappedTime(typedPathNoRouteCertificate.commonTimeValue)}.</p>
+          {:else if typedPathNoRouteCertificate.temporalSemantics === "orderedByStart"}
+            <p>Inizi di validità nel witness: {(typedPathNoRouteCertificate.startTimeValuesByStep ?? []).map(displayMappedTime).join(" → ") || "nessun passo"}.</p>
+          {/if}
           <ol>
-            {#each typedPathNoRouteCertificate.reachableByStep as layer}
-              <li>
-                {layer.step === 0 ? "Inizio" : `Dopo il passo ${layer.step} (${typedPathNoRouteCertificate.edgeTypeSequence[layer.step - 1]})`}: {layer.nodeIds.map((id) => sourceIdByNodeId[id] ?? id).join(", ") || "nessun nodo"}
-              </li>
+            {#each typedPathNoRouteCertificate.walk.edgeIdsByStep as edgeIds, step}
+              <li>{nodeLabelById[typedPathNoRouteCertificate.walk.nodeIds[step]] ?? sourceIdByNodeId[typedPathNoRouteCertificate.walk.nodeIds[step]] ?? typedPathNoRouteCertificate.walk.nodeIds[step]} → {nodeLabelById[typedPathNoRouteCertificate.walk.nodeIds[step + 1]] ?? sourceIdByNodeId[typedPathNoRouteCertificate.walk.nodeIds[step + 1]] ?? typedPathNoRouteCertificate.walk.nodeIds[step + 1]} · {typedPathNoRouteCertificate.edgeTypeSequence[step]} · {edgeIds.map((id) => sourceIdByEdgeId[id] ?? id).join(", ")}</li>
             {/each}
           </ol>
-        </details>
-        <small>La query ricorsiva ASP segue i tipi nell’ordine dichiarato, il verso del grafo e il gruppo candidato; permette ripetizioni solo per diagnosticare se la semplicità è l’unico ostacolo.</small>
+          <small>È una spiegazione del massimo temporal walk nella proiezione, nella direzione, nel gruppo e nella semantica dichiarati. Gli intervalli non rappresentano necessariamente date di eventi.</small>
+          <button type="button" on:click={highlightTypedPathNoRouteWitness}>Evidenzia il witness temporale nel grafo</button>
+        {:else}
+          <strong>Perché non esiste il cammino tipizzato semplice</strong>
+          {#if typedPathNoRouteCertificate.goalReachableAsWalk}
+            <p>La sequenza raggiunge il terminale finale se si ammettono ripetizioni. Poiché la query del cammino semplice è risultata insoddisfacibile, ogni typed walk che collega questi terminali deve rivisitare almeno un nodo.</p>
+          {:else if typedPathNoRouteCertificate.firstEmptyStep !== undefined}
+            <p>Nessun nodo è raggiungibile dopo il passo {typedPathNoRouteCertificate.firstEmptyStep} ({typedPathNoRouteCertificate.edgeTypeSequence[typedPathNoRouteCertificate.firstEmptyStep - 1]}). I livelli precedenti mostrano i prefissi percorribili.</p>
+          {:else}
+            <p>La sequenza non raggiunge il terminale finale; l’ultimo livello mostra dove termina la raggiungibilità per prefissi.</p>
+          {/if}
+          <details>
+            <summary>Nodi raggiungibili dopo ogni prefisso</summary>
+            <ol>
+              {#each typedPathNoRouteCertificate.reachableByStep as layer}
+                <li>
+                  {layer.step === 0 ? "Inizio" : `Dopo il passo ${layer.step} (${typedPathNoRouteCertificate.edgeTypeSequence[layer.step - 1]})`}: {layer.nodeIds.map((id) => sourceIdByNodeId[id] ?? id).join(", ") || "nessun nodo"}
+                </li>
+              {/each}
+            </ol>
+          </details>
+          <small>La query ricorsiva ASP segue i tipi nell’ordine dichiarato, il verso del grafo e il gruppo candidato; permette ripetizioni solo per diagnosticare se la semplicità è l’unico ostacolo.</small>
+        {/if}
         <button type="button" on:click={exportTypedPathNoRouteCSV}>Esporta certificato why-not CSV</button>
       </div>
     {/if}
     {#if task === "communities" && communityConfigurationError}
       <div class="error" role="alert">{communityConfigurationError}</div>
+    {/if}
+    {#if task === "communities" && (communityConstraintDiagnoses.length > 0 || communityConstraintDiagnosisError)}
+      <section class="community-constraint-diagnosis" aria-labelledby="community-diagnosis-title">
+        <h3 id="community-diagnosis-title">Diagnosi ASP dei vincoli di comunità</h3>
+        <p>La query ha mantenuto invariati grafo, proiezione e attributi. Ogni elemento elencato è una regola di configurazione che si dovrebbe ipoteticamente sospendere; nessuna modifica è applicata. ASP minimizza il costo totale dichiarato per categoria di regola (1 se non configurato). È un rilassamento a costo minimo, non un unsat core e non un giudizio su quale regola sia errata.</p>
+        {#if communityConstraintDiagnosisError}
+          <div class="error" role="alert">Diagnosi non disponibile: {communityConstraintDiagnosisError}</div>
+        {/if}
+        {#if communityConstraintDiagnoses.length > 0}
+          <small>{communityConstraintDiagnosesAllEnumerated ? "Sono enumerate tutte le diagnosi minime a parità di costo totale configurato." : "È mostrata una diagnosi a costo minimo; possono esistere alternative equivalenti. Attiva Tutti gli ottimi per enumerarle."}</small>
+          {#each communityConstraintDiagnoses as diagnosis, diagnosisIndex}
+            <div class="community-constraint-diagnosis-item">
+              <strong>Alternativa {diagnosisIndex + 1} · costo totale {diagnosis.relaxationCost} · sospendere {diagnosis.relaxedConstraintCount} {countForm(diagnosis.relaxedConstraintCount, "regola", "regole")}</strong>
+              <ul>
+                {#each diagnosis.relaxedConstraints as constraint (constraint.id)}
+                  <li>
+                    {#if (constraint.nodeIds ?? []).length > 0}
+                      <button type="button" on:click={() => dispatch("highlight", constraint.nodeIds ?? [])}>{communityConstraintLabel(constraint)} (costo {constraint.relaxationCost})</button>
+                    {:else}
+                      {communityConstraintLabel(constraint)} (costo {constraint.relaxationCost})
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+              <details>
+                <summary>Partizione fattibile di esempio dopo la sospensione</summary>
+                <ol>
+                  {#each diagnosis.partition.communities as community, communityIndex}
+                    <li><button type="button" on:click={() => dispatch("highlight", community)}>Comunità {communityIndex + 1}: {community.map(communityConstraintNodeLabel).join(", ")}</button></li>
+                  {/each}
+                </ol>
+              </details>
+            </div>
+          {/each}
+          <button type="button" on:click={exportCommunityConstraintDiagnoses}>Esporta diagnosi CSV</button>
+          <small>La diagnosi riguarda esclusivamente i vincoli dichiarati e l’esistenza di una partizione. Non valuta la correttezza dei vincoli nel dominio e non è una raccomandazione di modifica.</small>
+        {/if}
+      </section>
     {/if}
 
     {#if resultSets.length > 0 || (task === "communities" && communityPartitions.length > 0)}
@@ -1336,7 +2238,13 @@
         {:else if task === "typedPath"}
           <strong>Cammino di {pathEdgeTypeSequence.length} {countForm(pathEdgeTypeSequence.length, "arco", "archi")}</strong>
           {#if timeMs !== undefined}<span> · {timeMs.toFixed(1)} ms</span>{/if}
-          <small>Sequenza esatta: {pathEdgeTypeSequence.join(" → ")}. La lista indica i record d'arco che possono testimoniare ogni passo tra i nodi restituiti.</small>
+          {#if pathTemporalSemantics === "static"}
+            <small>Sequenza esatta: {pathEdgeTypeSequence.join(" → ")}. La lista indica i record d'arco che possono testimoniare ogni passo tra i nodi restituiti.</small>
+          {:else if pathTemporalSemantics === "coValid"}
+            <small>Sequenza esatta: {pathEdgeTypeSequence.join(" → ")}. Tutti gli archi sono validi insieme dal primo istante comune: {pathCommonTimeValue !== undefined ? displayMappedTime(pathCommonTimeValue) : "non disponibile"}.</small>
+          {:else}
+            <small>Sequenza esatta: {pathEdgeTypeSequence.join(" → ")}. Gli inizi di validità dei record scelti sono {pathStrictTemporalOrder ? "strettamente crescenti" : "non decrescenti"}.</small>
+          {/if}
         {:else if task === "components"}
           <strong>{resultSets.length}</strong> {countForm(resultSets.length, "componente connessa", "componenti connesse")}
           {#if timeMs !== undefined}<span> · {timeMs.toFixed(1)} ms</span>{/if}
@@ -1419,12 +2327,320 @@
         <WorkerMemoryReadout stats={workerWasmMemoryStats} {clingoTiming} showClingoTiming={showClingoTiming} {clingoStats} showClingoStats={showClingoStats} />
       </div>
 
+      {#if task === "kPlex"}
+        <section class="kplex-membership-diagnosis" aria-labelledby="kplex-membership-diagnosis-title">
+          <h3 id="kplex-membership-diagnosis-title">Membership nei k-plex massimi</h3>
+          <p>Per il nodo scelto, ASP prova la taglia massima di un k-plex che lo contiene e la confronta con l'ottimo globale corrente, mantenendo fissi s, proiezione e gruppo. Un gap zero prova che il nodo appartiene ad almeno un ottimo; un gap positivo prova che non compare in nessun k-plex ottimo. La query vincolata non enumera tutti gli ottimi globali; quando l'opzione “Tutti gli ottimi” è attiva, il riepilogo quantifica inoltre la membership sull'intera enumerazione completata.</p>
+          {#if kPlexMembershipNodes.length > 0}
+            <label>
+              Nodo da spiegare
+              <select bind:value={kPlexMembershipTargetNodeId} on:change={() => dispatch("clearKPlexMembershipDiagnosis")}>
+                {#each kPlexMembershipNodes as node (node.id)}
+                  <option value={node.id}>{node.label} ({sourceIdByNodeId[node.id] ?? node.id})</option>
+                {/each}
+              </select>
+            </label>
+            <button
+              type="button"
+              class="run"
+              on:click={() => dispatch("diagnoseKPlexMaximumMembership", kPlexMembershipTargetNodeId)}
+              disabled={running || kPlexMembershipDiagnosisRunning || resultSets.length === 0 || !kPlexMembershipTargetNodeId}
+            >
+              {kPlexMembershipDiagnosisRunning ? "Verifica ASP della membership…" : "Spiega la membership"}
+            </button>
+          {:else}
+            <small>Nessun nodo appartiene al dominio candidato del gruppo corrente.</small>
+          {/if}
+          {#if kPlexMembershipDiagnosisError}
+            <div class="error" role="alert">Diagnosi non disponibile: {kPlexMembershipDiagnosisError}</div>
+          {/if}
+          {#if kPlexMembershipDiagnosis && kPlexMembershipDiagnosis.targetNodeId === kPlexMembershipTargetNodeId}
+            <div class="membership-diagnosis-result" role="status" aria-live="polite">
+              {#if kPlexMembershipAcrossOptimaError}
+                <div class="error" role="alert">Membership non classificata: {kPlexMembershipAcrossOptimaError}</div>
+              {:else if kPlexMembershipEnumerationConflict}
+                <div class="error" role="alert">L'enumerazione degli ottimi e la query ASP vincolata non concordano; non mostro una conclusione di membership.</div>
+              {:else}
+                <strong>{#if enumerateAllOptima && kPlexMembershipAcrossOptima}
+                  {#if kPlexMembershipAcrossOptima.status === "all"}
+                    Il nodo compare in tutti i k-plex massimi.
+                  {:else if kPlexMembershipAcrossOptima.status === "some"}
+                    Il nodo compare solo in una parte dei k-plex massimi.
+                  {:else}
+                    Il nodo non compare in alcun k-plex massimo.
+                  {/if}
+                {:else if kPlexMembershipDiagnosis.outcome === "included-in-maximum"}
+                  Il nodo compare in almeno un k-plex di cardinalità massima.
+                {:else}
+                  Il nodo non compare in alcun k-plex di cardinalità massima.
+                {/if}</strong>
+                {#if enumerateAllOptima && kPlexMembershipAcrossOptima}
+                  <span>Membership: {kPlexMembershipAcrossOptima.targetOptimalKplexes}/{kPlexMembershipAcrossOptima.totalOptimalKplexes} ottimi enumerati; il conteggio è strutturale, non probabilistico.</span>
+                {/if}
+                <span>Ottimo globale: {kPlexMembershipDiagnosis.globalMaximumSize} nodi · massimo con il target: {kPlexMembershipDiagnosis.maximumContainingSize} · gap: {kPlexMembershipDiagnosis.sizeGap}{#if kPlexMembershipDiagnosisTimeMs !== undefined} · {kPlexMembershipDiagnosisTimeMs.toFixed(1)} ms{/if}</span>
+                <button type="button" on:click={() => dispatch("highlight", kPlexMembershipDiagnosis?.witnessNodeIds ?? [])}>
+                  Evidenzia witness ({kPlexMembershipDiagnosis.witnessNodeIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ")})
+                </button>
+                {#if kPlexMembershipDiagnosis.missingPairs.length > 0}
+                  <small>Coppie non adiacenti ammesse nel witness, con al massimo {Math.max(0, parameter - 1)} mancanti per membro:</small>
+                  <ul>
+                    {#each kPlexMembershipDiagnosis.missingPairs as [left, right]}
+                      <li>{sourceIdByNodeId[left] ?? left} — {sourceIdByNodeId[right] ?? right}</li>
+                    {/each}
+                  </ul>
+                {:else}
+                  <small>Il witness non contiene coppie mancanti: è una clique.</small>
+                {/if}
+                <button type="button" on:click={exportKPlexMaximumMembershipDiagnosis}>Esporta diagnosi CSV</button>
+              {/if}
+            </div>
+          {/if}
+          <section class="kplex-membership-counterfactual" aria-labelledby="kplex-membership-counterfactual-title">
+            <h4 id="kplex-membership-counterfactual-title">Quali aggiunte renderebbero il nodo parte di un k-plex massimo?</h4>
+            <p>La ricerca valuta solo gli archi aggiuntivi dichiarati in <code>graphAnalysis.counterfactuals.edgeAdditions</code>. Per ogni insieme prova sia l'ottimo globale sia l'ottimo con il nodo forzato sullo stesso grafo modificato; accetta il primo caso in cui le cardinalità coincidono. Le modifiche sono ipotetiche: non vengono applicate ai dati.</p>
+            {#if kPlexMembershipCounterfactualEnabled}
+              <small>{kPlexMembershipCounterfactualConfiguredCount} archi dichiarati; al massimo {MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES} candidati eleggibili per ricerca, dopo filtri e gruppo.</small>
+              {#if kPlexMembershipCounterfactualTimeMs !== undefined}
+                <small>Ultima proiezione valutata: {kPlexMembershipCounterfactualCandidateCount} candidati eleggibili.</small>
+              {/if}
+              <button
+                type="button"
+                class="run"
+                on:click={() => dispatch("searchKPlexMaximumMembershipCounterfactual", kPlexMembershipTargetNodeId)}
+                disabled={running || kPlexMembershipCounterfactualRunning || resultSets.length === 0 || !kPlexMembershipTargetNodeId}
+              >
+                {kPlexMembershipCounterfactualRunning ? "Valutazione dei grafi ipotetici…" : "Cerca aggiunte minime"}
+              </button>
+            {:else}
+              <small>Funzione opzionale: dichiara candidati e costi in <code>graphAnalysis.counterfactuals.edgeAdditions</code> per abilitarla.</small>
+            {/if}
+            {#if kPlexMembershipCounterfactualError}
+              <div class="error" role="alert">Ricerca non disponibile: {kPlexMembershipCounterfactualError}</div>
+            {/if}
+            {#if kPlexMembershipCounterfactual?.status === "found"}
+              {@const counterfactual = kPlexMembershipCounterfactual.result}
+              <div class="membership-diagnosis-result" role="status" aria-live="polite">
+                {#if counterfactual.selectedEdges.length === 0}
+                  <strong>Non serve alcuna aggiunta: il nodo appartiene già a un k-plex massimo.</strong>
+                {:else}
+                  <strong>Il costo minimo trovato è {counterfactual.totalCost}; il nodo entra in un k-plex massimo di {counterfactual.globalMaximumSize} nodi.</strong>
+                {/if}
+                <span>Ottimo globale e massimo con target: {counterfactual.globalMaximumSize} e {counterfactual.maximumContainingSize}. Sottoinsiemi candidati valutati: {counterfactual.testedCandidateSets}/{counterfactual.candidateCount === 0 ? 1 : 2 ** counterfactual.candidateCount}{#if kPlexMembershipCounterfactualTimeMs !== undefined} · {kPlexMembershipCounterfactualTimeMs.toFixed(1)} ms{/if}</span>
+                {#if counterfactual.selectedEdges.length > 0}
+                  <h5>Aggiunte candidate selezionate</h5>
+                  <ul>
+                    {#each counterfactual.selectedEdges as edge (edge.id)}
+                      <li>{sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId} — {sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId} · {edge.edgeType} · costo {edge.cost}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                <button type="button" on:click={() => dispatch("highlight", [...new Set([
+                  ...counterfactual.witnessNodeIds,
+                  ...counterfactual.selectedEdges.flatMap((edge) => [edge.sourceNodeId, edge.targetNodeId])
+                ])])}>
+                  Evidenzia witness e nodi coinvolti
+                </button>
+                <button type="button" on:click={exportKPlexMaximumMembershipCounterfactual}>Esporta controfattuale CSV</button>
+                <small>La vista 3D evidenzia i nodi, ma conserva la topologia osservata; gli archi aggiunti sono mostrati qui come ipotesi. Il risultato vale solo per questo insieme finito di candidati, questa proiezione, s e gruppo.</small>
+              </div>
+            {:else if kPlexMembershipCounterfactual?.status === "not-found"}
+              <div class="membership-diagnosis-result" role="status" aria-live="polite">
+                <strong>Nessun insieme tra i candidati dichiarati rende il nodo parte di un k-plex massimo.</strong>
+                <span>Combinazioni provate: {kPlexMembershipCounterfactual.testedCandidateSets}; archi eleggibili: {kPlexMembershipCounterfactual.candidateCount}{#if kPlexMembershipCounterfactualTimeMs !== undefined} · {kPlexMembershipCounterfactualTimeMs.toFixed(1)} ms{/if}</span>
+              </div>
+            {/if}
+          </section>
+          <small>Il confronto riguarda la proiezione filtrata dai controlli attivi e il dominio candidato selezionato; il focus temporaneo del nodo modifica solo la vista. È una spiegazione strutturale, non una causa sociale o storica.</small>
+        </section>
+      {/if}
+
       {#if task === "communities"}
         <div class="results">
           <div class="results-heading">
             <strong>Partizioni ottime e comunità</strong>
             <button type="button" on:click={exportResults}>Esporta CSV</button>
           </div>
+          {#if enumerateAllOptima && communityPartitions.length > 0}
+            <section class="community-optimum-stability" aria-labelledby="community-stability-title">
+              <h3 id="community-stability-title">Stabilità di co-appartenenza</h3>
+              <p>Confronto esatto fra le {communityPartitions.length} partizioni ottime enumerate per la proiezione, la risoluzione e i vincoli correnti. I conteggi non sono probabilità e non descrivono incertezza sui dati o causalità.</p>
+              {#if communityStabilityError}
+                <div class="error" role="alert">Il riepilogo non è disponibile: {communityStabilityError}</div>
+              {:else if communityCoassignmentSummary}
+                <label class="community-stability-node">
+                  Nodo di riferimento
+                  <select bind:value={selectedCommunityStabilityNodeId}>
+                    {#each communityStabilityNodeIds as nodeId}
+                      <option value={nodeId}>{nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId} ({sourceIdByNodeId[nodeId] ?? nodeId})</option>
+                    {/each}
+                  </select>
+                </label>
+                {#if communityCoassignmentSummary.entries.length === 0}
+                  <small>Il dominio contiene un solo nodo, quindi non ci sono altri nodi da confrontare.</small>
+                {:else}
+                  <details>
+                    <summary>Sempre nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "always").length})</summary>
+                    <ul>
+                      {#each communityCoassignmentSummary.entries.filter((entry) => entry.relation === "always") as entry}
+                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                      {:else}
+                        <li>Nessun nodo.</li>
+                      {/each}
+                    </ul>
+                  </details>
+                  <details>
+                    <summary>Talvolta nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "sometimes").length})</summary>
+                    <ul>
+                      {#each communityCoassignmentSummary.entries.filter((entry) => entry.relation === "sometimes") as entry}
+                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                      {:else}
+                        <li>Nessun nodo.</li>
+                      {/each}
+                    </ul>
+                  </details>
+                  <details>
+                    <summary>Mai nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "never").length})</summary>
+                    <ul>
+                      {#each communityCoassignmentSummary.entries.filter((entry) => entry.relation === "never") as entry}
+                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                      {:else}
+                        <li>Nessun nodo.</li>
+                      {/each}
+                    </ul>
+                  </details>
+                {/if}
+                <button type="button" on:click={exportCommunityCoassignment}>Esporta co-appartenenza CSV</button>
+              {/if}
+            </section>
+
+          {/if}
+          {#if communityPartitions.length > 0}
+            <section class="community-optimum-stability" aria-labelledby="community-pair-membership-title">
+              <h3 id="community-pair-membership-title">Co-appartenenza di una coppia negli ottimi</h3>
+              <p>Due query ASP verificano se la coppia compare insieme e separata in una partizione globalmente ottima. Non serve enumerare tutti gli ottimi; si usano la stessa proiezione, risoluzione e vincoli della modularità appena calcolata.</p>
+              <div class="community-pair-controls">
+                <label>
+                  Primo nodo
+                  <select bind:value={selectedCommunityPairLeftNodeId} on:change={clearCommunityPairMembershipResult} disabled={communityTopologyCounterfactualRunning}>
+                    {#each communityStabilityNodeIds as nodeId (nodeId)}
+                      <option value={nodeId}>{nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId} ({sourceIdByNodeId[nodeId] ?? nodeId})</option>
+                    {/each}
+                  </select>
+                </label>
+                <label>
+                  Secondo nodo
+                  <select bind:value={selectedCommunityPairRightNodeId} on:change={clearCommunityPairMembershipResult} disabled={communityTopologyCounterfactualRunning}>
+                    {#each communityStabilityNodeIds as nodeId (nodeId)}
+                      <option value={nodeId} disabled={nodeId === selectedCommunityPairLeftNodeId}>{nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId} ({sourceIdByNodeId[nodeId] ?? nodeId})</option>
+                    {/each}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  on:click={requestCommunityPairMembership}
+                  disabled={running || communityPairMembershipRunning || !communityPairMembershipEnabled ||
+                    !selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
+                    selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId}
+                >
+                  Verifica la coppia con ASP
+                </button>
+              </div>
+              {#if !communityPairMembershipEnabled}
+                <small class="field-note">Ricalcola la modularità sulla proiezione corrente per abilitare la verifica.</small>
+              {/if}
+              {#if communityPairMembershipRunning}
+                <div class="scenario-status" role="status">Clingo confronta gli ottimi con vincolo must-link e cannot-link usando il budget del task.</div>
+              {/if}
+              {#if communityPairMembershipError}
+                <div class="error" role="alert">{communityPairMembershipError}</div>
+              {/if}
+              {#if communityPairMembershipResult}
+                <div class="scenario-summary" role="status">
+                  {#if communityPairMembershipResult.relation === "always"}
+                    {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} sono nella stessa comunità in ogni ottimo.
+                  {:else if communityPairMembershipResult.relation === "sometimes"}
+                    La coppia {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} è insieme in alcuni ottimi e separata in altri.
+                  {:else}
+                    La coppia {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} è separata in ogni ottimo.
+                  {/if}
+                  <p class="field-note">
+                    Obiettivo ottimo globale (scala intera ASP): {communityPairMembershipResult.globalScaledScore}.
+                    Must-link: {#if communityPairMembershipResult.togetherScaledScore === null}infeasible{:else}{communityPairMembershipResult.togetherScaledScore} (scarto {communityPairObjectiveLosses?.togetherScaledLoss ?? "n/d"}){/if}.
+                    Cannot-link: {#if communityPairMembershipResult.separateScaledScore === null}infeasible{:else}{communityPairMembershipResult.separateScaledScore} (scarto {communityPairObjectiveLosses?.separateScaledLoss ?? "n/d"}){/if}.
+                  </p>
+                  {#if communityPairMembershipTimeMs !== undefined}<span> · {communityPairMembershipTimeMs.toFixed(1)} ms</span>{/if}
+                </div>
+                <small class="field-note">Gli scarti sono differenze esatte dell'obiettivo intero per la stessa proiezione, risoluzione e vincoli. Descrivono la sensibilità all'imposizione del vincolo sulla coppia; non sono costi d'intervento, probabilità o causalità.</small>
+                <button type="button" on:click={exportCommunityPairMembership}>Esporta verifica della coppia CSV</button>
+              {/if}
+            </section>
+            {#if communityTopologyEdgeEdits.length > 0}
+              <section class="community-topology-counterfactual" aria-labelledby="community-topology-counterfactual-title">
+                <h3 id="community-topology-counterfactual-title">Edit topologici ipotetici per la coppia</h3>
+                <p>
+                  Cerca fra i candidati edge edit configurati nel JSON e prova la relazione richiesta negli ottimi esatti del grafo modificato.
+                  Il costo degli edit è separato dal punteggio di modularità; la ricerca non modifica il grafo.
+                </p>
+                <div class="community-pair-controls">
+                  <label>
+                    Relazione obiettivo
+                    <select bind:value={selectedCommunityTopologyTarget} on:change={clearCommunityPairMembershipResult} disabled={communityTopologyCounterfactualRunning}>
+                      <option value="always">Sempre insieme in ogni ottimo</option>
+                      <option value="sometimes">Insieme in alcuni ottimi</option>
+                      <option value="never">Separati in ogni ottimo</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    on:click={requestCommunityTopologyCounterfactual}
+                    disabled={running || communityTopologyCounterfactualRunning || !communityTopologyCounterfactualEnabled ||
+                      !selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
+                      selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId}
+                  >
+                    Cerca il costo minimo con ASP
+                  </button>
+                </div>
+                {#if communityTopologyCounterfactualRunning}
+                  <div class="scenario-status" role="status">Clingo cerca gli edit per costo crescente e prova due ottimi modulari per ciascun grafo, entro il budget condiviso.</div>
+                {/if}
+                {#if communityTopologyCounterfactualError}
+                  <div class="error" role="alert">{communityTopologyCounterfactualError}</div>
+                {/if}
+                {#if communityTopologyCounterfactualResult}
+                  {@const result = communityTopologyCounterfactualResult}
+                  <div class="community-topology-result" role="status">
+                    {#if result.selectedEdits.length === 0}
+                      La relazione richiesta vale già nel grafo corrente: non serve alcun edit (costo 0).
+                    {:else}
+                      Relazione verificata: <strong>{result.relation === "always" ? "sempre insieme" : result.relation === "sometimes" ? "insieme in alcuni ottimi" : "sempre separati"}</strong> con costo totale {result.totalEditCost}.
+                    {/if}
+                    <small class="field-note">
+                      Minimo fra {result.candidateCount} candidati configurati applicabili, dopo {result.testedEditSets} grafi provati.
+                      Il punteggio di modularità è {result.globalScaledScore} / {result.modularityDenominator} come frazione esatta Qγ; i punteggi insieme/separati sono
+                      {result.togetherScaledScore ?? "infeasible"} / {result.separateScaledScore ?? "infeasible"}.
+                      {#if communityTopologyCounterfactualTimeMs !== undefined} · {communityTopologyCounterfactualTimeMs.toFixed(1)} ms{/if}
+                    </small>
+                    {#if result.selectedEdits.length > 0}
+                      <ul>
+                        {#each result.selectedEdits as edit (edit.id)}
+                          <li>
+                            <strong>{edit.id}</strong> · costo {edit.cost} ·
+                            {#if edit.action === "add"}
+                              aggiunge {edit.sourceNodeId} — {edit.targetNodeId}{communityUsesEdgeWeights ? ` (peso ${edit.weight})` : ""}
+                            {:else}
+                              rimuove il record arco {edit.edgeId}
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    <small class="field-note">Il risultato restituisce una soluzione fra eventuali minimi a pari costo. I candidati sono ipotesi configurate; l’esito non è una raccomandazione relazionale o causale.</small>
+                  </div>
+                  <button type="button" on:click={exportCommunityTopologyCounterfactual}>Esporta il controfattuale CSV</button>
+                {/if}
+              </section>
+            {/if}
+          {/if}
           {#each communityPartitions as partition, partitionIndex}
             <div class="community-partition">
               <strong>Partizione {partitionIndex + 1} · {partition.communities.length} comunità</strong>
@@ -1541,7 +2757,14 @@
             {/if}
           </div>
           {#each resultSets as nodeSet, index}
-            <button type="button" class="result" aria-pressed={separatorTask && nodeSetSignature(nodeSet) === activeSeparatorSignature} on:click={() => task === "typedPath" || task === "path"
+            {@const resultSignature = nodeSetSignature(nodeSet)}
+            {@const resultPressed = getStructuralResultPressedState(task, resultSignature, {
+              activeSeparatorSignature,
+              selectedDominatingSignature,
+              selectedKcoreSignature,
+              selectedKplexSignature
+            })}
+            <button type="button" class="result" aria-pressed={resultPressed} on:click={() => task === "typedPath" || task === "path"
               ? dispatch("highlightTypedPath", { nodeIds: nodeSet, edgeIds: pathEdgeIdsByStep.flat() })
               : task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? highlightEdgeSeparatorSet(nodeSet) : highlightNodeSet(nodeSet)}>
               <span>{index + 1}. {task === "typedPath"
@@ -1559,6 +2782,9 @@
                 {#each pathEdgeTypeSequence as edgeType, step}
                   <li>
                     {edgeType}: {(pathEdgeIdsByStep[step] ?? []).map((edgeId) => sourceIdByEdgeId[edgeId] ?? edgeId).join(", ")}
+                    {#if pathTemporalSemantics === "orderedByStart" && pathStartTimeValuesByStep[step] !== undefined}
+                      <small> · inizio validità: {displayMappedTime(pathStartTimeValuesByStep[step])}</small>
+                    {/if}
                     {#if edgeProvenanceSummary(pathEdgeIdsByStep[step] ?? [])}<small> · fonte dichiarata: {edgeProvenanceSummary(pathEdgeIdsByStep[step] ?? [])}</small>{/if}
                   </li>
                 {/each}
@@ -1659,6 +2885,8 @@
                 candidateEnabled={kPlexCounterfactualEnabled && !directedGraph}
                 candidateCount={kPlexCounterfactualCandidateCount}
                 proposals={kPlexCounterfactualProposals}
+                whyNot={kPlexCounterfactualWhyNot}
+                whyNotMessage={kPlexCounterfactualWhyNotMessage}
                 hasRun={kPlexCounterfactualHasRun}
                 error={kPlexCounterfactualError}
                 timeMs={kPlexCounterfactualTimeMs}
@@ -1761,6 +2989,8 @@
                 candidateEnabled={kCoreCounterfactualEnabled && !directedGraph}
                 candidateCount={kCoreCounterfactualCandidateCount}
                 proposals={kCoreCounterfactualProposals}
+                kCoreWhyNot={kCoreCounterfactualWhyNot}
+                kCoreWhyNotMessage={kCoreCounterfactualWhyNotMessage}
                 hasRun={kCoreCounterfactualHasRun}
                 error={kCoreCounterfactualError}
                 timeMs={kCoreCounterfactualTimeMs}
@@ -1866,6 +3096,31 @@
     margin: 0;
     padding: 0;
     border: 0;
+  }
+
+  .task-contract {
+    padding: 7px 9px;
+    border: 1px solid #dbe3ee;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 0.82rem;
+    line-height: 1.35;
+  }
+
+  .task-contract summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .task-contract p {
+    margin: 6px 0 0;
+  }
+
+  .task-contract small {
+    display: block;
+    margin-top: 6px;
+    overflow-wrap: anywhere;
   }
 
   label {
@@ -2014,6 +3269,131 @@
     padding: 8px;
     border-radius: 6px;
     background: #f1f5f9;
+  }
+
+  .community-optimum-stability {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+
+  .community-topology-counterfactual,
+  .community-topology-result {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid #7c8ca3;
+    border-radius: 6px;
+    background: #f8fafc;
+    overflow-wrap: anywhere;
+  }
+
+  .community-topology-counterfactual h3,
+  .community-topology-counterfactual p {
+    margin: 0;
+  }
+
+  .community-topology-counterfactual ul {
+    max-height: 160px;
+    margin: 4px 0 0;
+    overflow: auto;
+    padding-left: 22px;
+  }
+
+  .community-constraint-diagnosis {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid #c0841a;
+    border-radius: 6px;
+    background: #fffbeb;
+  }
+
+  .community-constraint-diagnosis h3,
+  .community-constraint-diagnosis p {
+    margin: 0;
+  }
+
+  .community-constraint-diagnosis p,
+  .community-constraint-diagnosis li {
+    overflow-wrap: anywhere;
+  }
+
+  .community-constraint-diagnosis ul,
+  .community-constraint-diagnosis ol {
+    max-height: 180px;
+    margin: 4px 0;
+    overflow: auto;
+    padding-left: 22px;
+  }
+
+  .community-constraint-diagnosis-item {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    padding: 8px;
+    border-radius: 5px;
+    background: #ffffff;
+  }
+
+  .community-constraint-diagnosis-item button {
+    justify-self: start;
+    max-width: 100%;
+    padding: 4px 6px;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .community-constraint-diagnosis-item details {
+    overflow-wrap: anywhere;
+  }
+
+  .community-optimum-stability h3,
+  .community-optimum-stability p {
+    margin: 0;
+  }
+
+  .community-optimum-stability p,
+  .community-optimum-stability li {
+    overflow-wrap: anywhere;
+  }
+
+  .community-optimum-stability ul {
+    max-height: 160px;
+    margin: 4px 0 0;
+    overflow: auto;
+    padding-left: 22px;
+  }
+
+  .community-stability-node {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .community-pair-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+    align-items: end;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .community-pair-controls label {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .community-pair-controls button {
+    justify-self: start;
+    max-width: 100%;
   }
 
   .community-explanation ul {
@@ -2166,6 +3546,34 @@
     padding: 6px 8px;
   }
 
+  .kplex-membership-diagnosis {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0;
+    padding: 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .kplex-membership-diagnosis h3,
+  .kplex-membership-diagnosis p {
+    margin: 0;
+  }
+
+  .membership-diagnosis-result {
+    display: grid;
+    gap: 6px;
+  }
+
+  .membership-diagnosis-result ul {
+    max-height: 140px;
+    overflow: auto;
+    margin: 0;
+    padding-left: 22px;
+    overflow-wrap: anywhere;
+  }
+
   .result {
     display: flex;
     justify-content: space-between;
@@ -2200,7 +3608,13 @@
       right: 12px;
       width: min(var(--solver-width), calc(100vw - 24px));
       top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
-      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px);
+      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px - var(--mobile-status-reserve, 48px));
+    }
+  }
+
+  @media (max-width: 360px) {
+    .analysis-task-label {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>

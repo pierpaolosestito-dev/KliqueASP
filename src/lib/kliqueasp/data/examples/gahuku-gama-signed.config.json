@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "colors": {
+    "edgeTypes": {
+      "rova": "#22c55e",
+      "hina": "#ef4444"
+    }
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type"
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "multigraph",
+      "attributes": {
+        "polarity": "$.sign"
+      }
+    }
+  },
+  "graphAnalysis": {
+    "signedTriads": {
+      "attribute": "polarity",
+      "positiveValues": [1],
+      "negativeValues": [-1],
+      "edgeTypes": ["rova", "hina"]
+    }
+  }
+}

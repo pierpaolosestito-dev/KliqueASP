@@ -8,6 +8,7 @@ import {
   checkGraphTaskRequirements,
   getGraphEndpointId,
   getGraphTaskRequirements,
+  createAspTemporalEncoding,
   normalizeGraphData,
   normalizeGraphId
 } from "../src/lib/kliqueasp/graph/graphModel.ts";
@@ -16,8 +17,13 @@ import {
   buildWeaklyConnectedComponentsProgram,
   buildStronglyConnectedComponentsProgram,
   buildModularityFacts,
+  MAX_FACTORED_MODULARITY_OPTIMA,
+  factorModularityFactsByPositiveWeightComponents,
+  combineModularityComponentPartitions,
+  solveModularityByPositiveWeightComponents,
   buildEdgeProvenanceByIdentity,
   buildEdgeProvenanceBySourceId,
+  buildEdgeProvenanceReferencesBySourceId,
   buildEdgeSourceIdentityByIdentity,
   summarizeEdgeProvenance,
   buildMaximumModularityProgram,
@@ -38,7 +44,13 @@ import {
   buildBoundedPathNoRouteProgram,
   buildTypedPathProgram,
   buildTypedPathNoRouteProgram,
+  buildTypedPathTemporalNoRouteProgram,
+  buildTypedPathTemporalCompletionWhyNotProgram,
+  buildTypedPathCompletionCounterfactualProgram,
+  buildTypedPathCompletionWhyNotProgram,
   buildMinimumDominatingSetProgram,
+  buildDominatingSetFeasibilityProgram,
+  verifyDominatingSetFeasibilityCertificate,
   buildMinimumNodeSeparatorProgram,
   buildMinimumCostNodeSeparatorProgram,
   buildMaximumKPlexProgram,
@@ -47,6 +59,9 @@ import {
   buildGreedyMaximalKPlexWitness,
   getMaximumKPlexCardinalityUpperBound,
   getStructuralSolverOptions,
+  hasCompleteModelEnumeration,
+  hasCompleteOptimalModelEnumeration,
+  hasCompleteKCoreScenarioResult,
   formatPathLengthBound,
   searchMaximumKPlexWithAsp,
   normalizeKPlexTimeoutResult,
@@ -54,6 +69,7 @@ import {
   parseWitnessWeakComponents,
   parseWitnessStrongComponents,
   parseWitnessDominatingSetExplanations,
+  parseDominatingSetFeasibilityCertificate,
   parseWitnessKCoreExplanations,
   parseWitnessKCorePeelingRound,
   parseWitnessKPlexExplanations,
@@ -66,7 +82,14 @@ import {
   parseWitnessMinimumHopPathWitness,
   parseBoundedPathNoRouteCertificate,
   parseWitnessTypedPath,
+  parseWitnessTemporalTypedPath,
   parseTypedPathNoRouteCertificate,
+  parseTypedPathTemporalNoRouteCertificate,
+  parseTypedPathTemporalCompletionWhyNotCertificate,
+  parseTypedPathCompletionCounterfactuals,
+  parseTypedPathCompletionWhyNotCertificate,
+  getStructuralCounterfactualSolverOptions,
+  mergeTypedPathEdgeTypes,
   parseWitnessRemovedNodeSetExplanations,
   parseWitnessRemovedEdgeSetExplanations,
   parseWitnessRemovedNodeSets,
@@ -85,6 +108,32 @@ import { formatScaledDecimal } from "../src/lib/kliqueasp/graph/exactDecimal.ts"
 import { createClingoWasmRunner } from "./helpers/clingoWasm.mjs";
 
 const optimizationOptions = ["--opt-mode=optN"];
+
+test("la completezza dell'enumerazione degli ottimi richiede prova dell'ottimo e More=no", () => {
+  assert.equal(hasCompleteOptimalModelEnumeration({ Result: "OPTIMUM FOUND", Models: { More: "no" } }), true);
+  assert.equal(hasCompleteOptimalModelEnumeration({ Result: "OPTIMUM FOUND", Models: { More: "yes" } }), false);
+  assert.equal(hasCompleteOptimalModelEnumeration({ Result: "OPTIMUM FOUND", Models: {} }), false);
+  assert.equal(hasCompleteOptimalModelEnumeration({ Result: "OPTIMUM FOUND" }), false);
+  assert.equal(hasCompleteOptimalModelEnumeration({ Result: "SATISFIABLE", Models: { More: "no" } }), false);
+  assert.equal(hasCompleteOptimalModelEnumeration(null), false);
+});
+
+test("un'enumerazione ordinaria completa richiede uno stato conclusivo e More=no", () => {
+  assert.equal(hasCompleteModelEnumeration({ Result: "SATISFIABLE", Models: { More: "no" } }), true);
+  assert.equal(hasCompleteModelEnumeration({ Result: "OPTIMUM FOUND", Models: { More: "no" } }), true);
+  assert.equal(hasCompleteModelEnumeration({ Result: "SATISFIABLE", Models: { More: "yes" } }), false);
+  assert.equal(hasCompleteModelEnumeration({ Result: "UNKNOWN", Models: { More: "no" } }), false);
+  assert.equal(hasCompleteModelEnumeration({ Result: "UNSATISFIABLE", Models: { More: "no" } }), false);
+});
+
+test("il confronto k-core accetta il modello vuoto solo per il dominio candidato vuoto", () => {
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "OPTIMUM FOUND", Models: { More: "no" } }, 3), true);
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "SATISFIABLE", Models: { More: "no" } }, 3), false);
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "SATISFIABLE", Models: { More: "no" } }, 0), true);
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "SATISFIABLE", Models: { More: "yes" } }, 0), false);
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "OPTIMUM FOUND", Models: { More: "no" } }, 0), true);
+  assert.equal(hasCompleteKCoreScenarioResult({ Result: "SATISFIABLE", Models: { More: "no" } }, -1), false);
+});
 let runnerPromise;
 
 function getRunner() {
@@ -196,6 +245,31 @@ test("la provenienza opzionale segue l'identit\u00e0 stabile degli archi testimo
   ]);
   assert.deepEqual(multiSource, { "ab-multi": '["archive-a","archive-z"]' });
   assert.equal(summarizeEdgeProvenance(["ab-multi"], multiSource), 'ab-multi: ["archive-a","archive-z"]');
+});
+
+test("gli ID sorgente riservati sono lookup propri nelle mappe di provenienza", () => {
+  const withProvenance = [{
+    source: "a",
+    target: "b",
+    sourceId: "__proto__",
+    analysis: { provenance: "archivio" }
+  }];
+  const bySourceId = buildEdgeProvenanceBySourceId(withProvenance);
+  const referencesBySourceId = buildEdgeProvenanceReferencesBySourceId([{
+    ...withProvenance[0],
+    analysis: { provenance: ["archive-a", "archive-z"] }
+  }]);
+
+  assert.equal(Object.prototype.hasOwnProperty.call(bySourceId, "__proto__"), true);
+  assert.equal(bySourceId["__proto__"], "archivio");
+  assert.deepEqual(referencesBySourceId, JSON.parse('{"__proto__":["archive-a","archive-z"]}'));
+  assert.equal(summarizeEdgeProvenance(["__proto__"], bySourceId), "__proto__: archivio");
+  assert.equal(summarizeEdgeProvenance(["__proto__"], buildEdgeProvenanceBySourceId([{
+    source: "a",
+    target: "b",
+    sourceId: "__proto__"
+  }])), "");
+  assert.equal(Object.prototype.archivio, undefined);
 });
 
 function computeReachableSide(nodeIds, edgeRecords, start, removedNodeIds = [], removedEdgeIds = [], direction = "undirected") {
@@ -1108,7 +1182,7 @@ test("il massimo k-plex psicologico s=3 coincide con ASP e riferimento branch-an
   assert.ok([...missingByNode.values()].every((count) => count <= 2));
 });
 
-test("i massimi k-plex psicologici s=4–9 coincidono col riferimento branch-and-bound indipendente", async () => {
+test("i massimi k-plex psicologici s=4\u201312 coincidono col riferimento branch-and-bound indipendente", async () => {
   const graph = normalizeGraphData(dataset);
   const { facts, reverseIndex } = buildAspFactsFromGraph(graph);
   const nodeIds = graph.nodes.map((node) => node.id);
@@ -1125,7 +1199,10 @@ test("i massimi k-plex psicologici s=4–9 coincidono col riferimento branch-and
     { s: 6, expectedSize: 10 },
     { s: 7, expectedSize: 11 },
     { s: 8, expectedSize: 12 },
-    { s: 9, expectedSize: 13 }
+    { s: 9, expectedSize: 13 },
+    { s: 10, expectedSize: 14 },
+    { s: 11, expectedSize: 15 },
+    { s: 12, expectedSize: 16 }
   ]) {
     const search = await searchMaximumKPlexWithAsp(s, nodeIds, graph.links, "", false, (program, modelLimit) =>
       runner.run(`${facts.trim()}\n\n${program}\n`, [], modelLimit)
@@ -1197,6 +1274,27 @@ test("enumerazione k-plex ASP restituisce tutti e soli gli ottimi alla cardinali
   assert.deepEqual(normalizeSets(actual.map((item) => item.nodeIds)), normalizeSets(expected));
   for (const explanation of actual) {
     assert.equal(explanation.missingTiePairs.length, 1);
+  }
+});
+
+test("la ricerca k-plex non dichiara completa un'enumerazione degli ottimi interrotta o senza conferma", async () => {
+  const nodeIds = ["a", "b", "c", "d"];
+  for (const enumerationResult of [
+    { Result: "SATISFIABLE", Models: { More: "yes" } },
+    { Result: "SATISFIABLE" }
+  ]) {
+    let enumerationCalls = 0;
+    const search = await searchMaximumKPlexWithAsp(2, nodeIds, [], "", true, async (_program, modelLimit) => {
+      if (modelLimit === 0) {
+        enumerationCalls += 1;
+        return enumerationResult;
+      }
+      return { Result: "SATISFIABLE" };
+    });
+    assert.equal(enumerationCalls, 1);
+    assert.equal(search.complete, false);
+    assert.equal(search.result, undefined);
+    assert.equal(search.solverStatus, "INCOMPLETE_ENUMERATION");
   }
 });
 
@@ -1731,6 +1829,99 @@ test("l'insieme dominante distingue i candidati dai nodi obiettivo e segnala i c
     `${impossibleFacts.trim()}\n\n${buildMinimumDominatingSetProgram("candidates", "targets")}\n`
   );
   assert.equal(impossible.Result, "UNSATISFIABLE");
+});
+
+test("il certificato ASP why-not individua esattamente i target senza candidati che li coprano", async () => {
+  const nodeIds = ["0", "1", "2", "3"];
+  const possiblePairs = [];
+  for (let source = 0; source < nodeIds.length; source += 1) {
+    for (let target = source + 1; target < nodeIds.length; target += 1) {
+      possiblePairs.push([nodeIds[source], nodeIds[target]]);
+    }
+  }
+  const topologyCount = 2 ** possiblePairs.length;
+  const groupAssignmentCount = 2 ** nodeIds.length;
+  let queryCount = 0;
+  const runner = await getRunner();
+  for (let graphMask = 0; graphMask < topologyCount; graphMask += 1) {
+    const pairs = possiblePairs.filter((_, index) => (graphMask & (1 << index)) !== 0);
+    for (let candidateMask = 0; candidateMask < groupAssignmentCount; candidateMask += 1) {
+      for (let targetMask = 0; targetMask < groupAssignmentCount; targetMask += 1) {
+        const candidateIds = nodeIds.filter((_, index) => (candidateMask & (1 << index)) !== 0);
+        const targetIds = nodeIds.filter((_, index) => (targetMask & (1 << index)) !== 0);
+        const graph = {
+          schemaVersion: 2,
+          direction: "undirected",
+          nodes: nodeIds.map((id) => ({
+            id,
+            analysis: {
+              groups: [
+                ...(candidateIds.includes(id) ? ["candidates"] : []),
+                ...(targetIds.includes(id) ? ["targets"] : [])
+              ]
+            }
+          })),
+          links: pairs.map(([source, target]) => ({ source, target }))
+        };
+        const { facts, reverseIndex } = buildAspFactsFromGraph(graph);
+        const result = await runner.run(
+          `${facts.trim()}\n\n${buildDominatingSetFeasibilityProgram("candidates", "targets")}\n`
+        );
+        queryCount += 1;
+        assert.equal(result.Result, "SATISFIABLE", `grafo=${graphMask}, candidati=${candidateMask}, target=${targetMask}`);
+        const certificate = parseDominatingSetFeasibilityCertificate(result.Call?.[0]?.Witnesses, reverseIndex);
+        assert.ok(certificate, `certificato ASP non interpretabile: grafo=${graphMask}, candidati=${candidateMask}, target=${targetMask}`);
+        const candidateSet = new Set(candidateIds);
+        const expectedUncoverableTargets = targetIds.filter((targetId) =>
+          !candidateSet.has(targetId) && !pairs.some(([source, target]) =>
+            (source === targetId && candidateSet.has(target)) ||
+            (target === targetId && candidateSet.has(source))
+          )
+        ).sort();
+        assert.deepEqual(certificate.targetNodeIds, targetIds.sort());
+        assert.deepEqual(certificate.uncoverableTargetNodeIds, expectedUncoverableTargets);
+        const validatedTargets = verifyDominatingSetFeasibilityCertificate(
+          certificate,
+          candidateIds,
+          targetIds,
+          pairs
+        );
+        assert.deepEqual(validatedTargets, expectedUncoverableTargets.length > 0 ? expectedUncoverableTargets : null);
+      }
+    }
+  }
+  assert.equal(queryCount, topologyCount * groupAssignmentCount ** 2);
+});
+
+test("la validazione indipendente rifiuta why-not incompleti o incompatibili con la proiezione", () => {
+  const valid = {
+    targetNodeIds: ["target", "isolated"],
+    uncoverableTargetNodeIds: ["isolated"]
+  };
+  assert.deepEqual(verifyDominatingSetFeasibilityCertificate(
+    valid,
+    ["candidate"],
+    ["target", "isolated"],
+    [["candidate", "target"]]
+  ), ["isolated"]);
+  assert.equal(verifyDominatingSetFeasibilityCertificate(
+    { ...valid, targetNodeIds: ["isolated"] },
+    ["candidate"],
+    ["target", "isolated"],
+    [["candidate", "target"]]
+  ), null);
+  assert.equal(verifyDominatingSetFeasibilityCertificate(
+    { ...valid, uncoverableTargetNodeIds: ["target", "isolated"] },
+    ["candidate"],
+    ["target", "isolated"],
+    [["candidate", "target"]]
+  ), null);
+  assert.equal(verifyDominatingSetFeasibilityCertificate(
+    { targetNodeIds: [], uncoverableTargetNodeIds: [] },
+    ["candidate"],
+    [],
+    []
+  ), null);
 });
 
 test("il parser dell'insieme dominante ignora gli eventi Lower di clingo senza answer set", () => {
@@ -3169,6 +3360,7 @@ test("community configuration rejects malformed counts and node pairs", () => {
     maxCount: 4,
     mustLink: [["a", "b"]],
     cannotLink: [[3, 4]],
+    diagnosisCosts: { mustLink: 3, cannotLink: 2, attributeBound: 4 },
     resolution: 1.5
   }), "");
   assert.match(validateCommunityConfiguration(null), /oggetto JSON/);
@@ -3177,6 +3369,10 @@ test("community configuration rejects malformed counts and node pairs", () => {
   assert.match(validateCommunityConfiguration({ resolution: 0 }), /numero finito positivo/);
   assert.match(validateCommunityConfiguration({ resolution: "1.5" }), /numero finito positivo/);
   assert.match(validateCommunityConfiguration({ resolution: 1e-17 }), /dominio numerico esatto/);
+  assert.match(validateCommunityConfiguration({ diagnosisCosts: null }), /oggetto di costi/);
+  assert.match(validateCommunityConfiguration({ diagnosisCosts: { cannotLink: 0 } }), /intero positivo sicuro/);
+  assert.match(validateCommunityConfiguration({ diagnosisCosts: { mustLink: 1.5 } }), /intero positivo sicuro/);
+  assert.match(validateCommunityConfiguration({ diagnosisCosts: { attributeBound: Number.MAX_SAFE_INTEGER + 1 } }), /intero positivo sicuro/);
   assert.match(validateCommunityConfiguration({ mustLink: [["a", {}]] }), /mustLink\[0\]/);
   assert.equal(validateCommunityConfiguration({ attributeBounds: [{
     attribute: "role",
@@ -3227,6 +3423,11 @@ test("community attribute bounds preserve JSON value types and candidate scope",
     { nodeIndexes: [2], minPerCommunity: 1, maxPerCommunity: 1 },
     { nodeIndexes: [4], minPerCommunity: 1, maxPerCommunity: 1 },
     { nodeIndexes: [6], minPerCommunity: 1, maxPerCommunity: 1 }
+  ]);
+  assert.deepEqual(resolveCommunityAttributeBounds([
+    { attribute: "role", value: "missing", minPerCommunity: 1 }
+  ], candidateNodes, indexes, true, true), [
+    { nodeIndexes: [], attributeName: "role", attributeValue: "missing", minPerCommunity: 1 }
   ]);
   assert.throws(() => resolveCommunityAttributeBounds([
     { attribute: "role", value: "missing", minPerCommunity: 1 }
@@ -3429,6 +3630,365 @@ test("la separazione ASP delle componenti conserva punteggio e tutti gli ottimi,
       `${item.name}: la separazione non deve perdere ottimi rispetto alla baseline`
     );
   }
+});
+
+test("la modularità globale non si fattorizza usando lo stesso gamma locale", async () => {
+  const nodeIds = ["a", "b", "c", "d", "e", "f", "g"];
+  const componentAEdges = [["a", "b"], ["b", "c"], ["c", "d"]];
+  const componentBEdges = [["e", "f"], ["f", "g"]];
+  const edges = [...componentAEdges, ...componentBEdges];
+  const globalOptima = enumerateMaximumModularityPartitions(nodeIds, edges);
+  const componentAAtSameResolution = enumerateMaximumModularityPartitions(
+    ["a", "b", "c", "d"], componentAEdges
+  );
+  const componentBAtSameResolution = enumerateMaximumModularityPartitions(
+    ["e", "f", "g"], componentBEdges
+  );
+  const componentAAtGlobalScale = enumerateMaximumModularityPartitions(
+    ["a", "b", "c", "d"], componentAEdges, 3, 5
+  );
+  const componentBAtGlobalScale = enumerateMaximumModularityPartitions(
+    ["e", "f", "g"], componentBEdges, 2, 5
+  );
+  const combineComponentOptima = (left, right) =>
+    left.flatMap((leftPartition) => right.map((rightPartition) => [
+      ...leftPartition.map((community) => [...community]),
+      ...rightPartition.map((community) => [...community])
+    ]));
+
+  assert.equal(globalOptima.maximumScore, 48);
+  assert.deepEqual(
+    normalizePartitions(combineComponentOptima(
+      componentAAtGlobalScale.partitions,
+      componentBAtGlobalScale.partitions
+    )),
+    normalizePartitions(globalOptima.partitions),
+    "gamma locali scalate con m_i/M ricompongono gli ottimi globali su questo grafo"
+  );
+  assert.notDeepEqual(
+    normalizePartitions(combineComponentOptima(
+      componentAAtSameResolution.partitions,
+      componentBAtSameResolution.partitions
+    )),
+    normalizePartitions(globalOptima.partitions),
+    "riusare gamma=1 nei sottografi cambia l'insieme degli ottimi"
+  );
+
+  const indexByNodeId = new Map(nodeIds.map((nodeId, index) => [nodeId, index + 1]));
+  const reverseIndex = Object.fromEntries(nodeIds.map((nodeId, index) => [index + 1, nodeId]));
+  const facts = buildModularityFacts(
+    nodeIds.map((nodeId) => indexByNodeId.get(nodeId)),
+    edges.map(([source, target]) => ({
+      source: indexByNodeId.get(source),
+      target: indexByNodeId.get(target)
+    })),
+    { includePairwiseObjective: true }
+  );
+  assert.equal(facts.connectedComponentCount, 2);
+  const factoredComponents = factorModularityFactsByPositiveWeightComponents(facts, true);
+  assert.equal(factoredComponents?.length, 2);
+  const runner = await getRunner();
+  const factoredPartitionsByComponent = [];
+  for (const component of factoredComponents ?? []) {
+    const componentProgram = [
+      component.facts.facts.trim(),
+      component.facts.pairwiseObjectiveFacts?.trim(),
+      buildMaximumModularityProgram({
+        ...(component.facts.pairwiseObjectiveOffset === undefined
+          ? {}
+          : { pairwiseObjectiveOffset: component.facts.pairwiseObjectiveOffset })
+      })
+    ].filter(Boolean).join("\n\n");
+    const componentResult = await runner.run(
+      componentProgram,
+      getStructuralSolverOptions("communities", true)
+    );
+    assert.equal(componentResult.Result, "OPTIMUM FOUND");
+    assert.equal(hasCompleteOptimalModelEnumeration(componentResult), true);
+    factoredPartitionsByComponent.push(selectMaximumModularityPartitions(
+      parseWitnessModularityPartitions(componentResult.Call?.[0]?.Witnesses, reverseIndex)
+    ));
+  }
+  const factoredOptima = combineModularityComponentPartitions(
+    factoredComponents ?? [],
+    factoredPartitionsByComponent
+  );
+  assert.equal(factoredOptima[0]?.scaledScore, globalOptima.maximumScore);
+  assert.deepEqual(
+    normalizePartitions(factoredOptima.map((partition) => partition.communities)),
+    normalizePartitions(globalOptima.partitions),
+    "i sottoproblemi con lo stesso M globale ricompongono punteggio e tutti gli ottimi"
+  );
+
+  const program = [
+    facts.facts.trim(),
+    facts.connectedComponentFacts.trim(),
+    facts.pairwiseObjectiveFacts.trim(),
+    buildMaximumModularityProgram({
+      pairwiseObjectiveOffset: facts.pairwiseObjectiveOffset,
+      separateDisconnectedComponents: true
+    })
+  ].join("\n\n");
+  const result = await runner.run(program, getStructuralSolverOptions("communities", true));
+  assert.equal(result.Result, "OPTIMUM FOUND");
+  const actual = selectMaximumModularityPartitions(
+    parseWitnessModularityPartitions(result.Call?.[0]?.Witnesses, reverseIndex)
+  );
+  assert.equal(actual[0]?.scaledScore, globalOptima.maximumScore);
+  assert.deepEqual(
+    normalizePartitions(actual.map((partition) => partition.communities)),
+    normalizePartitions(globalOptima.partitions)
+  );
+});
+
+test("la fattorizzazione ASP conserva scala pesata e tratta i volumi nulli senza perdere semantica", async () => {
+  const nodeIds = ["a", "b", "c", "d", "e", "f"];
+  const edges = [
+    { source: "a", target: "b", weight: 1.2 },
+    { source: "b", target: "c", weight: 0.8 },
+    { source: "d", target: "e", weight: 0.4 },
+    { source: "e", target: "f", weight: 1.6 },
+    { source: "c", target: "d", weight: 0 }
+  ];
+  const indexByNodeId = new Map(nodeIds.map((nodeId, index) => [nodeId, index + 1]));
+  const reverseIndex = Object.fromEntries(nodeIds.map((nodeId, index) => [index + 1, nodeId]));
+  const edgeRecords = edges.map((edge) => ({
+    source: indexByNodeId.get(edge.source),
+    target: indexByNodeId.get(edge.target),
+    weight: edge.weight
+  }));
+  const facts = buildModularityFacts(
+    nodeIds.map((nodeId) => indexByNodeId.get(nodeId)),
+    edgeRecords,
+    { weighted: true, resolution: 1.5, includePairwiseObjective: true }
+  );
+  const components = factorModularityFactsByPositiveWeightComponents(facts, true);
+  assert.equal(facts.totalWeight, 20);
+  assert.equal(facts.weightScaleFactor, 5);
+  assert.equal(components?.length, 2);
+  assert.deepEqual(components?.map(({ globalEdgeIndexByLocalEdgeIndex }) => globalEdgeIndexByLocalEdgeIndex), [
+    [1, 2],
+    [3, 4]
+  ], "l'arco cross-component a peso zero non entra nei sottoproblemi");
+
+  const runner = await getRunner();
+  const solve = async (program) => {
+    const result = await runner.run(program, getStructuralSolverOptions("communities", true));
+    assert.equal(result.Result, "OPTIMUM FOUND");
+    assert.equal(hasCompleteOptimalModelEnumeration(result), true);
+    return selectMaximumModularityPartitions(
+      parseWitnessModularityPartitions(result.Call?.[0]?.Witnesses, reverseIndex)
+    );
+  };
+  const globalPartitions = await solve([
+    facts.facts.trim(),
+    facts.pairwiseObjectiveFacts.trim(),
+    buildMaximumModularityProgram({
+      weighted: true,
+      pairwiseObjectiveOffset: facts.pairwiseObjectiveOffset,
+      includeContributions: true
+    })
+  ].join("\n\n"));
+  const factored = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: true,
+    includeContributions: true,
+    solve: (program, options) => runner.run(program, options)
+  });
+  assert.ok(factored);
+  assert.equal(hasCompleteOptimalModelEnumeration(factored.result), true);
+  const factoredPartitions = factored.partitions;
+  assert.equal(factoredPartitions[0]?.scaledScore, globalPartitions[0]?.scaledScore);
+  assert.deepEqual(
+    normalizePartitions(factoredPartitions.map((partition) => partition.communities)),
+    normalizePartitions(globalPartitions.map((partition) => partition.communities))
+  );
+  const simplifyContributions = (partition) => partition.communityContributions
+    .map(({ communityId, internalEdgeCount, internalEdgeWeight, volume, scaledContribution, edgeIndexes }) => ({
+      communityId,
+      internalEdgeCount,
+      internalEdgeWeight,
+      volume,
+      scaledContribution,
+      edgeIndexes
+    }))
+    .sort((left, right) => left.communityId.localeCompare(right.communityId));
+  assert.deepEqual(
+    simplifyContributions(factoredPartitions[0]),
+    simplifyContributions(globalPartitions[0]),
+    "i certificati locali mantengono volumi, score e indici degli archi globali"
+  );
+
+  const scaledReferenceEdges = edges.map((edge) => ({
+    source: edge.source,
+    target: edge.target,
+    weight: Math.round(edge.weight * 5)
+  }));
+  const independent = enumerateMaximumWeightedModularityPartitions(nodeIds, scaledReferenceEdges, 3, 2);
+  assert.equal(factoredPartitions[0]?.scaledScore, independent.maximumScore);
+
+  const isolateFacts = buildModularityFacts([1, 2, 3], [{ source: 1, target: 2 }]);
+  assert.equal(factorModularityFactsByPositiveWeightComponents(isolateFacts, true), null);
+  const isolateReverseIndex = { 1: "a", 2: "b", 3: "c" };
+  const isolateAggregateResult = await runner.run([
+    isolateFacts.facts.trim(),
+    isolateFacts.connectedComponentFacts.trim(),
+    buildMaximumModularityProgram({ separateDisconnectedComponents: true })
+  ].join("\n\n"), getStructuralSolverOptions("communities"));
+  assert.equal(isolateAggregateResult.Result, "OPTIMUM FOUND");
+  const isolateAggregatePartitions = selectMaximumModularityPartitions(
+    parseWitnessModularityPartitions(isolateAggregateResult.Call?.[0]?.Witnesses, isolateReverseIndex)
+  );
+  const isolateSingleOptimum = await solveModularityByPositiveWeightComponents(
+    isolateFacts,
+    isolateReverseIndex,
+    { solve: (program, options) => runner.run(program, options) }
+  );
+  assert.ok(isolateSingleOptimum, "one exact optimum can be recomposed with a neutral zero-volume subproblem");
+  assert.equal(isolateSingleOptimum.result.Result, "OPTIMUM FOUND");
+  assert.equal(isolateSingleOptimum.result.Models.More, "yes", "the single result must not claim all optima");
+  assert.equal(isolateSingleOptimum.partitions[0]?.scaledScore, isolateAggregatePartitions[0]?.scaledScore);
+  assert.deepEqual(
+    isolateSingleOptimum.partitions[0]?.communities.flat().sort(),
+    ["a", "b", "c"]
+  );
+  assert.equal(await solveModularityByPositiveWeightComponents(isolateFacts, isolateReverseIndex, {
+    enumerateAllOptima: true,
+    solve: async () => { throw new Error("l'enumerazione completa deve tornare al programma aggregato"); }
+  }), null, "all-optima mode must retain neutral assignments of isolates");
+
+  const weightedZeroVolumeFacts = buildModularityFacts([1, 2, 3, 4, 5, 6], [
+    { source: 1, target: 2, weight: 1 },
+    { source: 3, target: 4, weight: 2 },
+    { source: 2, target: 5, weight: 0 },
+    { source: 5, target: 6, weight: 0 }
+  ], { weighted: true, includePairwiseObjective: true, resolution: 1.5 });
+  const weightedZeroComponents = factorModularityFactsByPositiveWeightComponents(
+    weightedZeroVolumeFacts,
+    true,
+    true
+  );
+  assert.deepEqual(weightedZeroComponents?.map(({ facts }) => facts.candidateNodeIndexes), [
+    [1, 2], [3, 4], [5, 6]
+  ], "zero-weight links do not merge positive-volume components; neutral nodes stay together");
+  assert.deepEqual(weightedZeroComponents?.[2]?.globalEdgeIndexByLocalEdgeIndex, [4]);
+  assert.equal(factorModularityFactsByPositiveWeightComponents(weightedZeroVolumeFacts, true), null,
+    "complete-optimum callers keep the aggregate fallback for neutral cross-component assignments");
+  const oneComponentFacts = buildModularityFacts([1, 2, 3], [
+    { source: 1, target: 2 }, { source: 2, target: 3 }
+  ]);
+  assert.equal(factorModularityFactsByPositiveWeightComponents(oneComponentFacts, true), null);
+  const disconnectedFacts = buildModularityFacts([1, 2, 3, 4], [
+    { source: 1, target: 2 }, { source: 3, target: 4 }
+  ]);
+  assert.equal(factorModularityFactsByPositiveWeightComponents({
+    ...disconnectedFacts,
+    resolutionNumerator: 0
+  }, true), null, "la fattorizzazione richiede gamma strettamente positiva");
+});
+
+test("la modularitÃ  fattorizzata fallisce in modo chiuso se un sottoproblema non prova l'ottimo", async () => {
+  const facts = buildModularityFacts([1, 2, 3, 4], [
+    { source: 1, target: 2 }, { source: 3, target: 4 }
+  ], { includePairwiseObjective: true });
+  const reverseIndex = { 1: "a", 2: "b", 3: "c", 4: "d" };
+  const timedOut = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: true,
+    solve: async () => ({ Result: "TIMEOUT" })
+  }).then(() => null, (error) => error);
+  assert.match(timedOut?.message ?? "", /stato provato/);
+
+  const incomplete = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: true,
+    solve: async () => ({ Result: "OPTIMUM FOUND", Models: { More: "yes" }, Call: [{ Witnesses: [] }] })
+  }).then(() => null, (error) => error);
+  assert.match(incomplete?.message ?? "", /enumerazione.*incompleta/);
+
+  const runner = await getRunner();
+  const oneOptimum = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: false,
+    solve: (program, options) => runner.run(program, options)
+  });
+  assert.ok(oneOptimum);
+  assert.equal(oneOptimum.result.Result, "OPTIMUM FOUND");
+  assert.equal(oneOptimum.result.Models.More, "yes", "non dichiarare l'enumerazione completa se è stato richiesto un solo ottimo");
+  assert.equal(oneOptimum.partitions.length, 1);
+});
+
+test("factored modularity stops before an oversized Cartesian expansion", async () => {
+  const componentCount = 9;
+  const nodeIds = Array.from({ length: componentCount * 4 }, (_, index) => `n${index + 1}`);
+  const indexByNodeId = new Map(nodeIds.map((nodeId, index) => [nodeId, index + 1]));
+  const reverseIndex = Object.fromEntries(nodeIds.map((nodeId, index) => [index + 1, nodeId]));
+  const edges = [];
+  for (let component = 0; component < componentCount; component += 1) {
+    const first = component * 4;
+    edges.push(
+      [nodeIds[first], nodeIds[first + 1]],
+      [nodeIds[first + 1], nodeIds[first + 2]],
+      [nodeIds[first + 2], nodeIds[first + 3]],
+      [nodeIds[first + 3], nodeIds[first]]
+    );
+  }
+  const facts = buildModularityFacts(
+    nodeIds.map((nodeId) => indexByNodeId.get(nodeId)),
+    edges.map(([source, target]) => ({
+      source: indexByNodeId.get(source),
+      target: indexByNodeId.get(target)
+    })),
+    { resolution: componentCount }
+  );
+  const runner = await getRunner();
+  let solveCount = 0;
+  const error = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: true,
+    solve: async (program, options) => {
+      solveCount += 1;
+      return runner.run(program, options);
+    }
+  }).then(() => null, (value) => value);
+
+  assert.equal(MAX_FACTORED_MODULARITY_OPTIMA, 10_000);
+  assert.match(error?.message ?? "", /19683 partizioni globali.*limite di visualizzazione 10000/);
+  assert.equal(solveCount, 9, "the guard must run before Cartesian materialization");
+});
+
+test("il solver fattorizzato conserva gli ottimi oltre la soglia pairwise del runner", async () => {
+  const nodeIds = Array.from({ length: 20 }, (_, index) => `n${index + 1}`);
+  const indexByNodeId = new Map(nodeIds.map((nodeId, index) => [nodeId, index + 1]));
+  const reverseIndex = Object.fromEntries(nodeIds.map((nodeId, index) => [index + 1, nodeId]));
+  const edges = Array.from({ length: 10 }, (_, index) => ({
+    source: indexByNodeId.get(nodeIds[index * 2]),
+    target: indexByNodeId.get(nodeIds[index * 2 + 1])
+  }));
+  const facts = buildModularityFacts(nodeIds.map((nodeId) => indexByNodeId.get(nodeId)), edges);
+  assert.ok(facts.candidateCount > 18);
+  const components = factorModularityFactsByPositiveWeightComponents(facts, true);
+  assert.equal(components?.length, 10);
+
+  const runner = await getRunner();
+  const globalResult = await runner.run([
+    facts.facts.trim(),
+    facts.connectedComponentFacts.trim(),
+    buildMaximumModularityProgram({ separateDisconnectedComponents: true, includeContributions: true })
+  ].join("\n\n"), getStructuralSolverOptions("communities", true));
+  assert.equal(globalResult.Result, "OPTIMUM FOUND");
+  assert.equal(hasCompleteOptimalModelEnumeration(globalResult), true);
+  const globalPartitions = selectMaximumModularityPartitions(
+    parseWitnessModularityPartitions(globalResult.Call?.[0]?.Witnesses, reverseIndex)
+  );
+
+  const factored = await solveModularityByPositiveWeightComponents(facts, reverseIndex, {
+    enumerateAllOptima: true,
+    includeContributions: true,
+    solve: (program, options) => runner.run(program, options)
+  });
+  assert.ok(factored);
+  assert.equal(hasCompleteOptimalModelEnumeration(factored.result), true);
+  assert.equal(factored.partitions[0]?.scaledScore, globalPartitions[0]?.scaledScore);
+  assert.deepEqual(
+    normalizePartitions(factored.partitions.map((partition) => partition.communities)),
+    normalizePartitions(globalPartitions.map((partition) => partition.communities))
+  );
 });
 
 test("la separazione delle componenti rifiuta i vincoli globali che possono imporre fusioni", () => {
@@ -4061,6 +4621,477 @@ test("il cammino tipizzato segue una sequenza ordinata e restituisce gli archi t
   }), /100 passi/);
 });
 
+test("i cammini tipizzati temporali verificano co-validità, ordine e record paralleli", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id" },
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph",
+        validity: { fromField: "$.from", toField: "$.to" }
+      }
+    }
+  };
+  const toTemporalRecords = (graph, bundle) => graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source))),
+    targetNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target))),
+    edgeType: link.analysis.type,
+    validityFrom: bundle.temporalEncoding.encode(link.analysis.validity.from),
+    validityTo: bundle.temporalEncoding.encode(link.analysis.validity.to)
+  }));
+  const runner = await getRunner();
+  const dateGraph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [
+      { id: "affiliation-early", source: "start", target: "middle", type: "affiliation", from: "2024-01-01", to: "2024-01-05" },
+      { id: "affiliation-late", source: "start", target: "middle", type: "affiliation", from: "2024-01-03", to: "2024-01-06" },
+      { id: "publication", source: "middle", target: "goal", type: "publication", from: "2024-01-04", to: "2024-01-09" }
+    ]
+  }, config);
+  const dateBundle = buildAspFactsFromGraph(dateGraph);
+  const dateEdgeFacts = buildMinimumEdgeSeparatorFacts(dateGraph.links, dateBundle.indexByNodeId);
+  const dateOptions = {
+    startNode: dateBundle.indexByNodeId.get("start"),
+    goalNode: dateBundle.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed"
+  };
+  assert.equal(dateGraph.capabilities.edgeIntervals.available, true);
+  assert.equal(buildTypedPathProgram(dateOptions), buildTypedPathProgram({ ...dateOptions, temporalSemantics: "static" }),
+    "la modalità statica esplicita deve produrre lo stesso programma della modalità predefinita");
+  const coValid = await runner.run(
+    `${dateBundle.facts.trim()}\n\n${buildTypedPathProgram({ ...dateOptions, temporalSemantics: "coValid" })}\n`,
+    getStructuralSolverOptions("typedPath"),
+    1
+  );
+  assert.equal(coValid.Result, "SATISFIABLE", coValid.Error ?? JSON.stringify(coValid));
+  const coValidWitness = coValid.Call?.[0]?.Witnesses;
+  const temporalPath = parseWitnessTemporalTypedPath(
+    coValidWitness,
+    dateBundle.reverseIndex,
+    dateEdgeFacts.reverseEdgeIndex,
+    toTemporalRecords(dateGraph, dateBundle),
+    { ...dateOptions, temporalSemantics: "coValid" },
+    dateBundle.temporalEncoding.decode
+  );
+  assert.deepEqual(temporalPath, {
+    nodeIds: ["start", "middle", "goal"],
+    edgeIdsByStep: [["source:affiliation-early", "source:affiliation-late"], ["source:publication"]],
+    temporalSemantics: "coValid",
+    commonTimeValue: Date.parse("2024-01-04T00:00:00.000Z")
+  }, "co-validità sceglie l'istante comune più antico e include ogni record parallelo attivo allora");
+  const alteredWitness = structuredClone(coValidWitness?.[0]);
+  alteredWitness.Value = alteredWitness.Value.filter((atom) => atom !== "typed_path_edge_support(1,2)");
+  assert.equal(parseWitnessTemporalTypedPath(
+    [alteredWitness], dateBundle.reverseIndex, dateEdgeFacts.reverseEdgeIndex,
+    toTemporalRecords(dateGraph, dateBundle), { ...dateOptions, temporalSemantics: "coValid" },
+    dateBundle.temporalEncoding.decode
+  ), null, "il parser rifiuta una prova che omette un arco parallelo valido nell'istante comune");
+
+  const disjointGraph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [
+      { id: "first", source: "start", target: "middle", type: "affiliation", from: 1, to: 2 },
+      { id: "second", source: "middle", target: "goal", type: "publication", from: 3, to: 4 }
+    ]
+  }, config);
+  const disjointBundle = buildAspFactsFromGraph(disjointGraph);
+  const disjointOptions = {
+    startNode: disjointBundle.indexByNodeId.get("start"),
+    goalNode: disjointBundle.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed"
+  };
+  const staticResult = await runner.run(
+    `${disjointBundle.facts.trim()}\n\n${buildTypedPathProgram(disjointOptions)}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  const impossibleCoValid = await runner.run(
+    `${disjointBundle.facts.trim()}\n\n${buildTypedPathProgram({ ...disjointOptions, temporalSemantics: "coValid" })}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  const ordered = await runner.run(
+    `${disjointBundle.facts.trim()}\n\n${buildTypedPathProgram({ ...disjointOptions, temporalSemantics: "orderedByStart", strictTemporalOrder: true })}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  assert.equal(staticResult.Result, "SATISFIABLE", "il cammino statico conserva la semantica precedente");
+  assert.equal(impossibleCoValid.Result, "UNSATISFIABLE", "intervalli disgiunti non condividono un istante");
+  assert.equal(ordered.Result, "SATISFIABLE", "l'ordine degli inizi non richiede sovrapposizione degli intervalli");
+  const disjointEdgeFacts = buildMinimumEdgeSeparatorFacts(disjointGraph.links, disjointBundle.indexByNodeId);
+  const orderedPath = parseWitnessTemporalTypedPath(
+    ordered.Call?.[0]?.Witnesses,
+    disjointBundle.reverseIndex,
+    disjointEdgeFacts.reverseEdgeIndex,
+    toTemporalRecords(disjointGraph, disjointBundle),
+    { ...disjointOptions, temporalSemantics: "orderedByStart", strictTemporalOrder: true },
+    disjointBundle.temporalEncoding.decode
+  );
+  assert.deepEqual(orderedPath?.startTimeValuesByStep, [1, 3]);
+
+  const equalStartGraph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [
+      { id: "first", source: "start", target: "middle", type: "affiliation", from: 1, to: 2 },
+      { id: "second", source: "middle", target: "goal", type: "publication", from: 1, to: 3 }
+    ]
+  }, config);
+  const equalStartBundle = buildAspFactsFromGraph(equalStartGraph);
+  const equalStartOptions = {
+    startNode: equalStartBundle.indexByNodeId.get("start"),
+    goalNode: equalStartBundle.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed"
+  };
+  const nonStrict = await runner.run(
+    `${equalStartBundle.facts.trim()}\n\n${buildTypedPathProgram({ ...equalStartOptions, temporalSemantics: "orderedByStart" })}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  const strict = await runner.run(
+    `${equalStartBundle.facts.trim()}\n\n${buildTypedPathProgram({ ...equalStartOptions, temporalSemantics: "orderedByStart", strictTemporalOrder: true })}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  assert.equal(nonStrict.Result, "SATISFIABLE", "l'ordine non stretto ammette inizi di validità uguali");
+  assert.equal(strict.Result, "UNSATISFIABLE", "l'ordine stretto rifiuta inizi di validità uguali");
+  assert.throws(() => buildTypedPathProgram({
+    ...dateOptions, temporalSemantics: "coValid", strictTemporalOrder: true
+  }), /soltanto alla semantica orderedByStart/);
+});
+
+test("il why-not temporale ASP verifica il massimo prefisso e distingue walk complete con revisite", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id" },
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph",
+        validity: { fromField: "$.from", toField: "$.to" }
+      }
+    }
+  };
+  const runner = await getRunner();
+  const runWhyNot = async ({
+    nodes, edges, edgeTypeSequence = edges.map((edge) => edge.type), temporalSemantics,
+    strictTemporalOrder = false, direction = "directed", group = "", groupMembers = nodes
+  }) => {
+    const graph = normalizeGraphData({ nodes: nodes.map((id) => ({ id, groups: groupMembers.includes(id) ? ["G1"] : ["G2"] })), edges }, {
+      ...config,
+      graphMapping: {
+        ...config.graphMapping,
+        node: { ...config.graphMapping.node, groupFields: ["$.groups[*]"] },
+        edge: { ...config.graphMapping.edge, direction }
+      }
+    });
+    const bundle = buildAspFactsFromGraph(graph);
+    const edgeFacts = buildMinimumEdgeSeparatorFacts(graph.links, bundle.indexByNodeId);
+    const options = {
+      startNode: bundle.indexByNodeId.get("s"),
+      goalNode: bundle.indexByNodeId.get("g"),
+      edgeTypeSequence,
+      direction,
+      ...(group ? { group } : {}),
+      temporalSemantics,
+      ...(temporalSemantics === "orderedByStart" ? { strictTemporalOrder } : {})
+    };
+    const records = graph.links.map((link, index) => ({
+      recordIndex: index + 1,
+      sourceNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source))),
+      targetNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target))),
+      edgeType: link.analysis.type,
+      validityFrom: bundle.temporalEncoding.encode(link.analysis.validity.from),
+      validityTo: bundle.temporalEncoding.encode(link.analysis.validity.to)
+    }));
+    const primary = await runner.run(
+      `${bundle.facts.trim()}\n\n${buildTypedPathProgram(options)}\n`,
+      getStructuralSolverOptions("typedPath"), 1
+    );
+    assert.equal(primary.Result, "UNSATISFIABLE", primary.Error ?? JSON.stringify(primary));
+    const diagnostic = await runner.run(
+      `${bundle.facts.trim()}\n\n${buildTypedPathTemporalNoRouteProgram(options)}\n`,
+      getStructuralCounterfactualSolverOptions(), 0
+    );
+    assert.equal(diagnostic.Result, "OPTIMUM FOUND", diagnostic.Error ?? JSON.stringify(diagnostic));
+    const certificate = parseTypedPathTemporalNoRouteCertificate(
+      diagnostic.Call?.[0]?.Witnesses,
+      options,
+      records,
+      group ? nodes.filter((id) => groupMembers.includes(id)) : nodes,
+      bundle.reverseIndex,
+      edgeFacts.reverseEdgeIndex,
+      bundle.temporalEncoding.decode
+    );
+    assert.ok(certificate, `il witness ottimo deve superare la verifica indipendente: ${JSON.stringify(diagnostic)}`);
+    return { certificate, diagnostic, options, records, nodes, bundle, edgeFacts };
+  };
+
+  const coValidRun = await runWhyNot({
+    nodes: ["s", "a", "g"],
+    edges: [
+      { id: "x", source: "s", target: "a", type: "x", from: "2000-01-01", to: "2000-01-05" },
+      { id: "y", source: "a", target: "s", type: "y", from: "2000-01-03", to: "2000-01-07" },
+      { id: "z", source: "s", target: "g", type: "z", from: "2000-01-04", to: "2000-01-09" }
+    ],
+    temporalSemantics: "coValid"
+  });
+  const coValidWalk = coValidRun.certificate;
+  assert.equal(coValidWalk.maximumPrefixLength, 3);
+  assert.equal(coValidWalk.goalReachableAsWalk, true);
+  assert.deepEqual(coValidWalk.walk.nodeIds, ["s", "a", "s", "g"]);
+  assert.deepEqual(coValidWalk.repeatedNodeIds, ["s"]);
+  assert.equal(coValidWalk.commonTimeValue, Date.parse("2000-01-04T00:00:00.000Z"));
+  const finalWitness = coValidRun.diagnostic.Call[0].Witnesses.at(-1);
+  assert.equal(parseTypedPathTemporalNoRouteCertificate(
+    [{ ...finalWitness, Value: finalWitness.Value.filter((atom) => atom !== "temporal_typed_path_edge(3,3)") }],
+    coValidRun.options,
+    coValidRun.records,
+    coValidRun.nodes,
+    coValidRun.bundle.reverseIndex,
+    coValidRun.edgeFacts.reverseEdgeIndex,
+    coValidRun.bundle.temporalEncoding.decode
+  ), null, "il parser rifiuta un witness che omette il record dell'ultimo passo");
+
+  const blockedCoValidRun = await runWhyNot({
+    nodes: ["s", "a", "b", "g"],
+    edges: [
+      { id: "x", source: "s", target: "a", type: "x", from: "2000-01-01", to: "2000-01-02" },
+      { id: "y", source: "a", target: "b", type: "y", from: "2000-01-03", to: "2000-01-04" },
+      { id: "z", source: "b", target: "g", type: "z", from: "2000-01-03", to: "2000-01-04" }
+    ],
+    temporalSemantics: "coValid"
+  });
+  const blockedCoValidWalk = blockedCoValidRun.certificate;
+  assert.equal(blockedCoValidWalk.maximumPrefixLength, 1);
+  assert.equal(blockedCoValidWalk.firstBlockedStep, 2);
+  assert.equal(blockedCoValidWalk.goalReachableAsWalk, false);
+  assert.deepEqual(blockedCoValidWalk.walk.nodeIds, ["s", "a"]);
+
+  const orderedRun = await runWhyNot({
+    nodes: ["s", "a", "g"],
+    edges: [
+      { id: "x", source: "s", target: "a", type: "x", from: 1, to: 2 },
+      { id: "y", source: "a", target: "s", type: "y", from: 2, to: 3 },
+      { id: "z", source: "s", target: "g", type: "z", from: 3, to: 4 }
+    ],
+    temporalSemantics: "orderedByStart",
+    strictTemporalOrder: true
+  });
+  const orderedWalk = orderedRun.certificate;
+  assert.equal(orderedWalk.maximumPrefixLength, 3);
+  assert.equal(orderedWalk.goalReachableAsWalk, true);
+  assert.deepEqual(orderedWalk.walk.nodeIds, ["s", "a", "s", "g"]);
+  assert.deepEqual(orderedWalk.startTimeValuesByStep, [1, 2, 3]);
+
+  const strictTieBlockedRun = await runWhyNot({
+    nodes: ["s", "a", "g"],
+    edges: [
+      { id: "x", source: "s", target: "a", type: "x", from: 1, to: 2 },
+      { id: "y", source: "a", target: "g", type: "y", from: 1, to: 3 }
+    ],
+    temporalSemantics: "orderedByStart",
+    strictTemporalOrder: true
+  });
+  const strictTieBlocked = strictTieBlockedRun.certificate;
+  assert.equal(strictTieBlocked.maximumPrefixLength, 1);
+  assert.equal(strictTieBlocked.firstBlockedStep, 2);
+  assert.equal(strictTieBlocked.goalReachableAsWalk, false);
+
+  const groupBlocked = await runWhyNot({
+    nodes: ["s", "a", "g"],
+    edges: [
+      { id: "x", source: "s", target: "a", type: "x", from: 1, to: 4 },
+      { id: "y", source: "a", target: "g", type: "y", from: 1, to: 4 }
+    ],
+    edgeTypeSequence: ["x", "y"],
+    temporalSemantics: "coValid",
+    group: "G1",
+    groupMembers: ["s", "a"]
+  });
+  assert.equal(groupBlocked.certificate.maximumPrefixLength, 1);
+  assert.equal(groupBlocked.certificate.firstBlockedStep, 2);
+  assert.deepEqual(groupBlocked.certificate.walk.nodeIds, ["s", "a"]);
+
+  const undirectedParallel = await runWhyNot({
+    nodes: ["s", "a", "g"],
+    edges: [
+      { id: "reverse-x", source: "a", target: "s", type: "x", from: 1, to: 1 },
+      { id: "parallel-x", source: "s", target: "a", type: "x", from: 2, to: 2 },
+      { id: "y", source: "a", target: "g", type: "y", from: 3, to: 3 }
+    ],
+    edgeTypeSequence: ["x", "y"],
+    temporalSemantics: "coValid",
+    direction: "undirected"
+  });
+  assert.equal(undirectedParallel.certificate.maximumPrefixLength, 1);
+  assert.equal(undirectedParallel.certificate.commonTimeValue, 1);
+  assert.equal(undirectedParallel.certificate.walk.edgeIdsByStep[0][0], "source:reverse-x");
+
+  const bruteForceMaximum = (edges, temporalSemantics, strictTemporalOrder) => {
+    const allWalks = [];
+    const visit = (step, node, nodesOnWalk, recordsOnWalk, commonFrom, commonTo, previousStart) => {
+      allWalks.push({
+        length: step,
+        nodes: [...nodesOnWalk],
+        records: [...recordsOnWalk],
+        commonFrom: step > 0 ? commonFrom : undefined,
+        goal: step === 3 && node === "g"
+      });
+      if (step >= 3) return;
+      for (const edge of edges.filter((candidate) => candidate.source === node && candidate.type === ["x", "y", "z"][step])) {
+        const from = temporalSemantics === "coValid" ? Math.max(commonFrom, edge.from) : edge.from;
+        const to = temporalSemantics === "coValid" ? Math.min(commonTo, edge.to) : edge.to;
+        if (temporalSemantics === "coValid" && from > to) continue;
+        if (temporalSemantics === "orderedByStart" && step > 0 &&
+          (strictTemporalOrder ? previousStart >= edge.from : previousStart > edge.from)) continue;
+        visit(step + 1, edge.target, [...nodesOnWalk, edge.target], [...recordsOnWalk, edge.id],
+          from, to, edge.from);
+      }
+    };
+    visit(0, "s", ["s"], [], Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, undefined);
+    const maximumPrefixLength = Math.max(...allWalks.map((walk) => walk.length));
+    const longestWalks = allWalks.filter((walk) => walk.length === maximumPrefixLength);
+    const goalReachableAsWalk = longestWalks.some((walk) => walk.goal);
+    const optimalWalks = goalReachableAsWalk ? longestWalks.filter((walk) => walk.goal) : longestWalks;
+    const commonTimeValue = temporalSemantics === "coValid" && maximumPrefixLength > 0
+      ? Math.min(...optimalWalks.map((walk) => walk.commonFrom))
+      : undefined;
+    return { maximumPrefixLength, goalReachableAsWalk, commonTimeValue };
+  };
+
+  const edgeUniverse = [
+    { id: "x", source: "s", target: "a", type: "x", from: 1, to: 4 },
+    { id: "y", source: "a", target: "s", type: "y", from: 1, to: 5 },
+    { id: "z", source: "s", target: "g", type: "z", from: 2, to: 6 }
+  ];
+  for (let mask = 0; mask < 8; mask += 1) {
+    const edges = edgeUniverse.filter((_, index) => (mask & (1 << index)) !== 0);
+    for (const { temporalSemantics, strictTemporalOrder } of [
+      { temporalSemantics: "coValid", strictTemporalOrder: false },
+      { temporalSemantics: "orderedByStart", strictTemporalOrder: false },
+      { temporalSemantics: "orderedByStart", strictTemporalOrder: true }
+    ]) {
+      const result = await runWhyNot({
+        nodes: ["s", "a", "g"], edges, edgeTypeSequence: ["x", "y", "z"],
+        temporalSemantics, strictTemporalOrder
+      });
+      const expected = bruteForceMaximum(edges, temporalSemantics, strictTemporalOrder);
+      assert.equal(result.certificate.maximumPrefixLength, expected.maximumPrefixLength,
+        `massimo prefisso ASP deve coincidere col brute force, mask=${mask}, ${temporalSemantics}`);
+      assert.equal(result.certificate.goalReachableAsWalk, expected.goalReachableAsWalk,
+        `raggiungibilità della meta deve coincidere col brute force, mask=${mask}, ${temporalSemantics}`);
+      if (temporalSemantics === "coValid" && expected.commonTimeValue !== undefined) {
+        assert.equal(result.certificate.commonTimeValue, expected.commonTimeValue,
+          `l'istante comune ottimo deve coincidere col brute force, mask=${mask}`);
+      }
+    }
+  }
+});
+
+test("il why-not temporale di completion verifica il supergrafo con tutti i candidati", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id" },
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph",
+        validity: { fromField: "$.from", toField: "$.to" }
+      }
+    }
+  };
+  const graph = normalizeGraphData({
+    nodes: [{ id: "s" }, { id: "a" }, { id: "g" }],
+    edges: [
+      { id: "observed-x", source: "s", target: "a", type: "x", from: "2000-01-01", to: "2000-01-05" },
+      { id: "observed-z", source: "s", target: "g", type: "z", from: "2000-01-04", to: "2000-01-09" }
+    ]
+  }, config);
+  const bundle = buildAspFactsFromGraph(graph, undefined, {
+    additionalTemporalValues: ["2000-01-03", "2000-01-07"]
+  });
+  const edgeFacts = buildMinimumEdgeSeparatorFacts(graph.links, bundle.indexByNodeId);
+  const options = {
+    startNode: bundle.indexByNodeId.get("s"),
+    goalNode: bundle.indexByNodeId.get("g"),
+    edgeTypeSequence: ["x", "y", "z"],
+    direction: "directed",
+    temporalSemantics: "coValid"
+  };
+  const candidates = [{
+    id: "candidate-y", sourceNodeId: "a", targetNodeId: "s",
+    sourceNode: bundle.indexByNodeId.get("a"), targetNode: bundle.indexByNodeId.get("s"),
+    edgeType: "y", cost: 1, recordIndex: graph.links.length + 1,
+    validity: { from: "2000-01-03", to: "2000-01-07" }
+  }];
+  const completion = buildTypedPathCompletionCounterfactualProgram(options, candidates, bundle.temporalEncoding);
+  const runner = await getRunner();
+  const completionResult = await runner.run(
+    `${bundle.facts.trim()}\n\n${completion.program}\n`,
+    getStructuralCounterfactualSolverOptions(),
+    1
+  );
+  assert.equal(completionResult.Result, "UNSATISFIABLE",
+    "il candidato completa la walk solo tornando a s, quindi non crea un cammino semplice" );
+
+  const whyNot = buildTypedPathTemporalCompletionWhyNotProgram(options, candidates, bundle.temporalEncoding);
+  const whyNotResult = await runner.run(
+    `${bundle.facts.trim()}\n\n${whyNot.program}\n`,
+    getStructuralCounterfactualSolverOptions(),
+    0
+  );
+  assert.equal(whyNotResult.Result, "OPTIMUM FOUND", whyNotResult.Error ?? JSON.stringify(whyNotResult));
+  const observedEdges = graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source))),
+    targetNode: bundle.indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.target))),
+    edgeType: link.analysis.type,
+    validityFrom: bundle.temporalEncoding.encode(link.analysis.validity.from),
+    validityTo: bundle.temporalEncoding.encode(link.analysis.validity.to)
+  }));
+  const certificate = parseTypedPathTemporalCompletionWhyNotCertificate(
+    whyNotResult.Call?.[0]?.Witnesses,
+    options,
+    whyNot.candidates,
+    observedEdges,
+    graph.nodes.map((node) => node.id),
+    bundle.reverseIndex,
+    edgeFacts.reverseEdgeIndex,
+    bundle.temporalEncoding.decode
+  );
+  assert.ok(certificate, "il certificato ASP supera la verifica indipendente sul supergrafo completo");
+  assert.equal(certificate.maximumPrefixLength, 3);
+  assert.equal(certificate.goalReachableAsWalk, true);
+  assert.deepEqual(certificate.walk.nodeIds, ["s", "a", "s", "g"]);
+  assert.deepEqual(certificate.repeatedNodeIds, ["s"]);
+  assert.equal(certificate.commonTimeValue, Date.parse("2000-01-04T00:00:00.000Z"));
+  assert.deepEqual(certificate.candidateEdgeIds, ["candidate-y"]);
+  assert.ok(certificate.walk.edgeIdsByStep.flat().includes("candidate:candidate-y"));
+
+  const finalWitness = whyNotResult.Call[0].Witnesses.at(-1);
+  const withoutCandidateMarker = [{
+    ...finalWitness,
+    Value: finalWitness.Value.filter((atom) => !atom.startsWith("cf_typed_path_temporal_why_not_candidate("))
+  }];
+  assert.equal(parseTypedPathTemporalCompletionWhyNotCertificate(
+    withoutCandidateMarker,
+    options,
+    whyNot.candidates,
+    observedEdges,
+    graph.nodes.map((node) => node.id),
+    bundle.reverseIndex,
+    edgeFacts.reverseEdgeIndex,
+    bundle.temporalEncoding.decode
+  ), null, "il parser rifiuta un witness che non attesta il dominio completo dei candidati");
+});
+
+test("le opzioni del cammino tipizzato includono i tipi dichiarati solo dagli archi candidati", () => {
+  assert.deepEqual(
+    mergeTypedPathEdgeTypes(["affiliation", " affiliation ", null], ["publication", "", 4, "affiliation"]),
+    ["affiliation", "publication"]
+  );
+});
+
 test("il cammino tipizzato resta indisponibile quando mancano i tipi d'arco mappati", () => {
   const graph = normalizeGraphData({
     nodes: [{ id: "a" }, { id: "b" }],
@@ -4070,6 +5101,488 @@ test("il cammino tipizzato resta indisponibile quando mancano i tipi d'arco mapp
     graph.capabilities,
     getGraphTaskRequirements("typedPath")
   ).available, false);
+});
+
+test("il controfattuale ASP del cammino tipizzato minimizza archi candidati e verifica la direzione", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph"
+      }
+    }
+  };
+  const graph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "left" }, { id: "right" }, { id: "goal" }],
+    edges: [
+      { id: "observed-left", source: "start", target: "left", type: "affiliation" },
+      { id: "observed-right", source: "start", target: "right", type: "affiliation" }
+    ]
+  }, config);
+  const base = buildAspFactsFromGraph(graph);
+  const edgeFacts = buildMinimumEdgeSeparatorFacts(graph.links, base.indexByNodeId);
+  const options = {
+    startNode: base.indexByNodeId.get("start"),
+    goalNode: base.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed"
+  };
+  const candidates = [
+    { id: "left-publication", sourceNodeId: "left", targetNodeId: "goal", sourceNode: base.indexByNodeId.get("left"), targetNode: base.indexByNodeId.get("goal"), edgeType: "publication", cost: 2, recordIndex: 3 },
+    { id: "right-publication", sourceNodeId: "right", targetNodeId: "goal", sourceNode: base.indexByNodeId.get("right"), targetNode: base.indexByNodeId.get("goal"), edgeType: "publication", cost: 2, recordIndex: 4 },
+    { id: "wrong-direction", sourceNodeId: "goal", targetNodeId: "left", sourceNode: base.indexByNodeId.get("goal"), targetNode: base.indexByNodeId.get("left"), edgeType: "publication", cost: 1, recordIndex: 5 },
+    { id: "wrong-type", sourceNodeId: "left", targetNodeId: "goal", sourceNode: base.indexByNodeId.get("left"), targetNode: base.indexByNodeId.get("goal"), edgeType: "affiliation", cost: 1, recordIndex: 6 }
+  ];
+  const compiled = buildTypedPathCompletionCounterfactualProgram(options, candidates);
+  assert.equal(
+    compiled.program,
+    buildTypedPathCompletionCounterfactualProgram({ ...options, temporalSemantics: "static" }, candidates).program,
+    "la semantica statica predefinita deve mantenere invariato l'encoding storico"
+  );
+  const observedEdges = graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: base.indexByNodeId.get(String(link.source)),
+    targetNode: base.indexByNodeId.get(String(link.target)),
+    edgeType: String(link.analysis.type)
+  }));
+  const runner = await getRunner();
+  const result = await runner.run(
+    `${base.facts.trim()}\n\n${compiled.program}\n`,
+    getStructuralCounterfactualSolverOptions(true),
+    0
+  );
+  assert.equal(result.Result, "OPTIMUM FOUND");
+  const proposals = parseTypedPathCompletionCounterfactuals(
+    result.Call?.[0]?.Witnesses,
+    options,
+    compiled.candidates,
+    observedEdges,
+    base.reverseIndex,
+    edgeFacts.reverseEdgeIndex
+  );
+  assert.equal(proposals.length, 2, "devono restare entrambe le aggiunte di costo minimo");
+  assert.deepEqual(proposals.map(({ addedEdges }) => addedEdges[0].id), ["left-publication", "right-publication"]);
+  assert.ok(proposals.every((proposal) => proposal.totalCost === 2));
+  assert.deepEqual(proposals[0].path.nodeIds, ["start", "left", "goal"]);
+  assert.deepEqual(proposals[0].path.edgeIdsByStep, [
+    ["source:observed-left"], ["candidate:left-publication"]
+  ]);
+  const routeExists = (selectedCandidates) => {
+    const edges = [
+      ...graph.links.map((link) => ({
+        source: normalizeGraphId(getGraphEndpointId(link.source)),
+        target: normalizeGraphId(getGraphEndpointId(link.target)),
+        type: String(link.analysis.type)
+      })),
+      ...selectedCandidates.map((candidate) => ({
+        source: candidate.sourceNodeId,
+        target: candidate.targetNodeId,
+        type: candidate.edgeType
+      }))
+    ];
+    const visit = (nodeId, step, visited) => {
+      if (step === options.edgeTypeSequence.length) return nodeId === "goal";
+      return edges.some((edge) => edge.source === nodeId && edge.type === options.edgeTypeSequence[step] &&
+        !visited.has(edge.target) && visit(edge.target, step + 1, new Set([...visited, edge.target])));
+    };
+    return visit("start", 0, new Set(["start"]));
+  };
+  let minimumCost = Infinity;
+  const minimumSubsets = [];
+  for (let mask = 0; mask < (1 << candidates.length); mask += 1) {
+    const selected = candidates.filter((_, index) => (mask & (1 << index)) !== 0);
+    if (!routeExists(selected)) continue;
+    const cost = selected.reduce((sum, candidate) => sum + candidate.cost, 0);
+    if (cost < minimumCost) {
+      minimumCost = cost;
+      minimumSubsets.length = 0;
+    }
+    if (cost === minimumCost) minimumSubsets.push(selected.map((candidate) => candidate.id).sort().join(","));
+  }
+  assert.deepEqual(
+    proposals.map((proposal) => proposal.addedEdges.map((edge) => edge.id).sort().join(",")),
+    minimumSubsets.sort(),
+    "l'ottimo ASP deve coincidere con l'enumerazione indipendente di tutti i sottoinsiemi"
+  );
+
+  const altered = { ...result.Call[0].Witnesses[0], Value: result.Call[0].Witnesses[0].Value.filter((atom) =>
+    !atom.startsWith("cf_typed_path_add_edge(")
+  ), Costs: [0] };
+  assert.deepEqual(parseTypedPathCompletionCounterfactuals(
+    [altered], options, compiled.candidates, observedEdges, base.reverseIndex, edgeFacts.reverseEdgeIndex
+  ), [], "il parser non deve accettare un cammino che usa un candidato non dichiarato come selezionato");
+  assert.throws(() => buildTypedPathCompletionCounterfactualProgram(options, [
+    { ...candidates[0], validity: { from: 1, to: 2 } }
+  ]), /non usa intervalli temporali/);
+  assert.throws(() => buildTypedPathNoRouteProgram({
+    ...options, temporalSemantics: "orderedByStart"
+  }), /soltanto cammini tipizzati statici/);
+
+  const undirected = normalizeGraphData({
+    nodes: [{ id: "from" }, { id: "to" }], edges: []
+  }, {
+    schemaVersion: 2,
+    graphMapping: { edge: { idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type", direction: "undirected" } }
+  });
+  const undirectedBase = buildAspFactsFromGraph(undirected);
+  const undirectedOptions = {
+    startNode: undirectedBase.indexByNodeId.get("from"),
+    goalNode: undirectedBase.indexByNodeId.get("to"),
+    edgeTypeSequence: ["association"],
+    direction: "undirected"
+  };
+  const reverseCandidate = [{
+    id: "reverse-association", sourceNodeId: "to", targetNodeId: "from",
+    sourceNode: undirectedBase.indexByNodeId.get("to"), targetNode: undirectedBase.indexByNodeId.get("from"),
+    edgeType: "association", cost: 3, recordIndex: 1
+  }];
+  const undirectedCompiled = buildTypedPathCompletionCounterfactualProgram(undirectedOptions, reverseCandidate);
+  const undirectedResult = await runner.run(
+    `${undirectedBase.facts.trim()}\n\n${undirectedCompiled.program}\n`,
+    getStructuralCounterfactualSolverOptions(),
+    1
+  );
+  assert.equal(undirectedResult.Result, "OPTIMUM FOUND");
+  const undirectedProposals = parseTypedPathCompletionCounterfactuals(
+    undirectedResult.Call?.[0]?.Witnesses,
+    undirectedOptions,
+    undirectedCompiled.candidates,
+    [],
+    undirectedBase.reverseIndex,
+    {}
+  );
+  assert.equal(undirectedProposals.length, 1);
+  assert.equal(undirectedProposals[0].addedEdges[0].id, "reverse-association");
+  assert.deepEqual(undirectedProposals[0].path.nodeIds, ["from", "to"]);
+
+  const observedPathGraph = normalizeGraphData({
+    nodes: [{ id: "a" }, { id: "b" }],
+    edges: [{ id: "observed-route", source: "a", target: "b", type: "association" }]
+  }, config);
+  const observedPathBase = buildAspFactsFromGraph(observedPathGraph);
+  const observedPathEdgeFacts = buildMinimumEdgeSeparatorFacts(observedPathGraph.links, observedPathBase.indexByNodeId);
+  const observedPathOptions = {
+    startNode: observedPathBase.indexByNodeId.get("a"),
+    goalNode: observedPathBase.indexByNodeId.get("b"),
+    edgeTypeSequence: ["association"],
+    direction: "directed"
+  };
+  const unchangedCompiled = buildTypedPathCompletionCounterfactualProgram(observedPathOptions, []);
+  const unchangedResult = await runner.run(
+    `${observedPathBase.facts.trim()}\n\n${unchangedCompiled.program}\n`,
+    getStructuralCounterfactualSolverOptions(),
+    1
+  );
+  assert.equal(unchangedResult.Result, "SATISFIABLE", "senza candidati il solver prova solo la fattibilità del cammino osservato");
+  assert.deepEqual(parseTypedPathCompletionCounterfactuals(
+    unchangedResult.Call?.[0]?.Witnesses,
+    observedPathOptions,
+    [],
+    [{ recordIndex: 1, sourceNode: 1, targetNode: 2, edgeType: "association" }],
+    observedPathBase.reverseIndex,
+    observedPathEdgeFacts.reverseEdgeIndex
+  ), [{
+    totalCost: 0,
+    path: { nodeIds: ["a", "b"], edgeIdsByStep: [["source:observed-route"]] },
+    addedEdges: []
+  }], "un cammino già osservato deve restare una proposta valida a costo zero anche senza aggiunte eleggibili");
+});
+
+test("il controfattuale di cammino rispetta co-validità e ordine temporale dei candidati", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph",
+        validity: { fromField: "$.from", toField: "$.to" }
+      }
+    }
+  };
+  const graph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [{
+      id: "observed-affiliation", source: "start", target: "middle", type: "affiliation",
+      from: "2024-01-01", to: "2024-01-02"
+    }]
+  }, config);
+  const candidatesInput = [
+    {
+      id: "touching-publication", sourceNodeId: "middle", targetNodeId: "goal", edgeType: "publication", cost: 4,
+      validity: { from: "2024-01-02", to: "2024-01-03" }
+    },
+    {
+      id: "later-publication", sourceNodeId: "middle", targetNodeId: "goal", edgeType: "publication", cost: 2,
+      validity: { from: "2024-01-04", to: "2024-01-05" }
+    }
+  ];
+  const extraTimes = candidatesInput.flatMap(({ validity }) => [validity.from, validity.to]);
+  const base = buildAspFactsFromGraph(graph, undefined, { additionalTemporalValues: extraTimes });
+  const edgeFacts = buildMinimumEdgeSeparatorFacts(graph.links, base.indexByNodeId);
+  const observedTemporalRecords = graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: base.indexByNodeId.get(String(link.source)),
+    targetNode: base.indexByNodeId.get(String(link.target)),
+    edgeType: String(link.analysis.type),
+    validityFrom: base.temporalEncoding.encode(link.analysis.validity.from),
+    validityTo: base.temporalEncoding.encode(link.analysis.validity.to)
+  }));
+  const options = {
+    startNode: base.indexByNodeId.get("start"),
+    goalNode: base.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed"
+  };
+  const candidates = candidatesInput.map((candidate, index) => ({
+    ...candidate,
+    sourceNode: base.indexByNodeId.get(candidate.sourceNodeId),
+    targetNode: base.indexByNodeId.get(candidate.targetNodeId),
+    recordIndex: graph.links.length + index + 1
+  }));
+  const runner = await getRunner();
+  assert.equal(graph.capabilities.edgeIntervals.available, true);
+
+  for (const temporalSemantics of ["coValid", "orderedByStart"]) {
+    const temporalOptions = { ...options, temporalSemantics, ...(temporalSemantics === "orderedByStart" ? { strictTemporalOrder: true } : {}) };
+    const compiled = buildTypedPathCompletionCounterfactualProgram(temporalOptions, candidates, base.temporalEncoding);
+    const result = await runner.run(
+      `${base.facts.trim()}\n\n${compiled.program}\n`,
+      getStructuralCounterfactualSolverOptions(true),
+      1
+    );
+    assert.equal(result.Result, "OPTIMUM FOUND", result.Error ?? JSON.stringify(result));
+    const proposals = parseTypedPathCompletionCounterfactuals(
+      result.Call?.[0]?.Witnesses,
+      temporalOptions,
+      compiled.candidates,
+      graph.links.map((link, index) => ({
+        recordIndex: index + 1,
+        sourceNode: base.indexByNodeId.get(String(link.source)),
+        targetNode: base.indexByNodeId.get(String(link.target)),
+        edgeType: String(link.analysis.type)
+      })),
+      base.reverseIndex,
+      edgeFacts.reverseEdgeIndex,
+      { edgeRecords: observedTemporalRecords, decodeTemporalValue: base.temporalEncoding.decode }
+    );
+    assert.equal(proposals.length, 1);
+    const feasibleSubsets = [];
+    for (let mask = 0; mask < 1 << candidatesInput.length; mask += 1) {
+      const selected = candidatesInput.filter((_, index) => (mask & (1 << index)) !== 0);
+      if (selected.length === 0) continue;
+      const starts = selected.map(({ validity }) => Date.parse(validity.from));
+      const ends = selected.map(({ validity }) => Date.parse(validity.to));
+      const feasible = temporalSemantics === "coValid"
+        ? Math.max(Date.parse("2024-01-01"), ...starts) <= Math.min(Date.parse("2024-01-02"), ...ends)
+        : selected.length === 1 && (temporalOptions.strictTemporalOrder
+          ? Date.parse("2024-01-01") < starts[0]
+          : Date.parse("2024-01-01") <= starts[0]);
+      if (!feasible) continue;
+      feasibleSubsets.push({
+        ids: selected.map((candidate) => candidate.id).sort(),
+        cost: selected.reduce((sum, candidate) => sum + candidate.cost, 0)
+      });
+    }
+    const expectedCost = Math.min(...feasibleSubsets.map((subset) => subset.cost));
+    assert.deepEqual(
+      proposals.map((proposal) => ({ ids: proposal.addedEdges.map((edge) => edge.id).sort(), cost: proposal.totalCost })),
+      feasibleSubsets.filter((subset) => subset.cost === expectedCost),
+      "l'ottimo ASP deve coincidere con l'enumerazione indipendente dei sottoinsiemi e dei loro intervalli"
+    );
+    if (temporalSemantics === "coValid") {
+      assert.equal(proposals[0].totalCost, 4, "intervalli chiusi che si toccano condividono l'estremo 2");
+      assert.deepEqual(proposals[0].addedEdges.map((edge) => edge.id), ["touching-publication"]);
+      assert.equal(proposals[0].path.temporalSemantics, "coValid");
+      assert.equal(proposals[0].path.commonTimeValue, Date.parse("2024-01-02T00:00:00.000Z"));
+    } else {
+      assert.equal(proposals[0].totalCost, 2, "orderedByStart ammette intervalli disgiunti se gli inizi sono ordinati");
+      assert.deepEqual(proposals[0].addedEdges.map((edge) => edge.id), ["later-publication"]);
+      assert.equal(proposals[0].path.temporalSemantics, "orderedByStart");
+      assert.deepEqual(proposals[0].path.startTimeValuesByStep, [
+        Date.parse("2024-01-01T00:00:00.000Z"), Date.parse("2024-01-04T00:00:00.000Z")
+      ]);
+    }
+    assert.deepEqual(proposals[0].path.nodeIds, ["start", "middle", "goal"]);
+    assert.ok(proposals[0].path.edgeIdsByStep[1].includes(`candidate:${proposals[0].addedEdges[0].id}`));
+
+    const witness = result.Call?.[0]?.Witnesses?.[0];
+    const altered = structuredClone(witness);
+    altered.Value = altered.Value.filter((atom) => !atom.startsWith("typed_path_edge_support(2,"));
+    assert.deepEqual(parseTypedPathCompletionCounterfactuals(
+      [altered], temporalOptions, compiled.candidates,
+      graph.links.map((link, index) => ({
+        recordIndex: index + 1,
+        sourceNode: base.indexByNodeId.get(String(link.source)),
+        targetNode: base.indexByNodeId.get(String(link.target)),
+        edgeType: String(link.analysis.type)
+      })),
+      base.reverseIndex, edgeFacts.reverseEdgeIndex,
+      { edgeRecords: observedTemporalRecords, decodeTemporalValue: base.temporalEncoding.decode }
+    ), [], "il parser rifiuta il supporto temporale incompleto");
+  }
+
+  assert.throws(() => buildTypedPathCompletionCounterfactualProgram(
+    { ...options, temporalSemantics: "coValid" },
+    [{ ...candidates[0], validity: undefined }],
+    base.temporalEncoding
+  ), /validity deve dichiarare from e to/);
+  assert.throws(() => buildTypedPathCompletionCounterfactualProgram(
+    { ...options, temporalSemantics: "orderedByStart" },
+    candidates
+  ), /codifica temporale.*obbligatoria/);
+  assert.throws(() => buildTypedPathCompletionCounterfactualProgram(options, candidates), /non usa intervalli temporali/);
+  const noCandidateTimeEncoding = createAspTemporalEncoding(["2025-01-01", "2025-01-02"]);
+  assert.throws(() => buildTypedPathCompletionCounterfactualProgram(
+    { ...options, temporalSemantics: "coValid" }, candidates, noCandidateTimeEncoding
+  ), /non è inclusa nella codifica temporale/);
+});
+
+test("il why-not del controfattuale tipizzato certifica prefissi nel grafo massimo e rifiuta witness alterati", async () => {
+  const config = {
+    schemaVersion: 2,
+    graphMapping: {
+      edge: {
+        idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type",
+        direction: "directed", identity: "multigraph"
+      }
+    }
+  };
+  const graph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "a" }, { id: "b" }, { id: "c" }, { id: "goal" }],
+    edges: [
+      { id: "s-a", source: "start", target: "a", type: "x" },
+      { id: "a-b", source: "a", target: "b", type: "y" }
+    ]
+  }, config);
+  const facts = buildAspFactsFromGraph(graph);
+  const options = {
+    startNode: facts.indexByNodeId.get("start"),
+    goalNode: facts.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["x", "y", "z"],
+    direction: "directed"
+  };
+  const candidate = {
+    id: "unconnected-z",
+    sourceNodeId: "c",
+    targetNodeId: "goal",
+    sourceNode: facts.indexByNodeId.get("c"),
+    targetNode: facts.indexByNodeId.get("goal"),
+    edgeType: "z",
+    cost: 2,
+    recordIndex: graph.links.length + 1
+  };
+  const observedEdges = graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: facts.indexByNodeId.get(String(link.source)),
+    targetNode: facts.indexByNodeId.get(String(link.target)),
+    edgeType: String(link.analysis.type)
+  }));
+  const primary = buildTypedPathCompletionCounterfactualProgram(options, [candidate]);
+  const whyNot = buildTypedPathCompletionWhyNotProgram(options, primary.candidates);
+  const runner = await getRunner();
+  const primaryResult = await runner.run(`${facts.facts}\n${primary.program}`, [], 1);
+  assert.equal(primaryResult.Result, "UNSATISFIABLE", primaryResult.Error ?? JSON.stringify(primaryResult));
+  const whyNotResult = await runner.run(`${facts.facts}\n${whyNot.program}`, [], 1);
+  assert.equal(whyNotResult.Result, "SATISFIABLE", whyNotResult.Error ?? JSON.stringify(whyNotResult));
+  const certificate = parseTypedPathCompletionWhyNotCertificate(
+    whyNotResult.Call?.[0]?.Witnesses,
+    options,
+    whyNot.candidates,
+    observedEdges,
+    Object.values(facts.reverseIndex),
+    facts.reverseIndex
+  );
+  assert.deepEqual(certificate, {
+    edgeTypeSequence: ["x", "y", "z"],
+    reachableByStep: [
+      { step: 0, nodeIds: ["start"] },
+      { step: 1, nodeIds: ["a"] },
+      { step: 2, nodeIds: ["b"] },
+      { step: 3, nodeIds: [] }
+    ],
+    goalReachableAsWalk: false,
+    firstEmptyStep: 3,
+    candidateEdgeIds: ["unconnected-z"]
+  });
+
+  const independentlyReachable = [new Set(["start"])];
+  const allEdges = [
+    ...observedEdges.map((edge) => ({
+      source: facts.reverseIndex[edge.sourceNode], target: facts.reverseIndex[edge.targetNode], type: edge.edgeType
+    })),
+    { source: candidate.sourceNodeId, target: candidate.targetNodeId, type: candidate.edgeType }
+  ];
+  for (const requiredType of options.edgeTypeSequence) {
+    const next = new Set();
+    for (const source of independentlyReachable.at(-1)) {
+      for (const edge of allEdges) if (edge.source === source && edge.type === requiredType) next.add(edge.target);
+    }
+    independentlyReachable.push(next);
+  }
+  assert.deepEqual(
+    independentlyReachable.map((layer) => [...layer].sort()),
+    certificate.reachableByStep.map((layer) => layer.nodeIds),
+    "il certificato deve coincidere con una ricostruzione indipendente dei prefissi"
+  );
+
+  const witness = whyNotResult.Call[0].Witnesses[0];
+  assert.equal(parseTypedPathCompletionWhyNotCertificate(
+    [{ ...witness, Value: witness.Value.filter((atom) => !atom.startsWith("typed_path_no_route_node(2,")) }],
+    options, whyNot.candidates, observedEdges, Object.values(facts.reverseIndex), facts.reverseIndex
+  ), null, "il parser deve rifiutare un prefisso incompleto rispetto al grafo massimo");
+  assert.equal(parseTypedPathCompletionWhyNotCertificate(
+    [{ ...witness, Value: witness.Value.filter((atom) => !atom.startsWith("cf_typed_path_why_not_candidate(")) }],
+    options, whyNot.candidates, observedEdges, Object.values(facts.reverseIndex), facts.reverseIndex
+  ), null, "il parser deve richiedere la dichiarazione esatta dei candidati inclusi");
+});
+
+test("il why-not del controfattuale tipizzato identifica una walk completa che richiede rivisite", async () => {
+  const graph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [
+      { id: "forward-x", source: "start", target: "middle", type: "x" },
+      { id: "back-y", source: "middle", target: "start", type: "y" },
+      { id: "finish-z", source: "start", target: "goal", type: "z" }
+    ]
+  }, {
+    schemaVersion: 2,
+    graphMapping: { edge: { idField: "$.id", sourceField: "$.source", targetField: "$.target", typeField: "$.type", direction: "directed" } }
+  });
+  const facts = buildAspFactsFromGraph(graph);
+  const options = {
+    startNode: facts.indexByNodeId.get("start"),
+    goalNode: facts.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["x", "y", "z"],
+    direction: "directed"
+  };
+  const observedEdges = graph.links.map((link, index) => ({
+    recordIndex: index + 1,
+    sourceNode: facts.indexByNodeId.get(String(link.source)),
+    targetNode: facts.indexByNodeId.get(String(link.target)),
+    edgeType: String(link.analysis.type)
+  }));
+  const primary = buildTypedPathCompletionCounterfactualProgram(options, []);
+  const whyNot = buildTypedPathCompletionWhyNotProgram(options, []);
+  const runner = await getRunner();
+  const primaryResult = await runner.run(`${facts.facts}\n${primary.program}`, [], 1);
+  assert.equal(primaryResult.Result, "UNSATISFIABLE", primaryResult.Error ?? JSON.stringify(primaryResult));
+  const whyNotResult = await runner.run(`${facts.facts}\n${whyNot.program}`, [], 1);
+  assert.equal(whyNotResult.Result, "SATISFIABLE", whyNotResult.Error ?? JSON.stringify(whyNotResult));
+  const certificate = parseTypedPathCompletionWhyNotCertificate(
+    whyNotResult.Call?.[0]?.Witnesses,
+    options,
+    whyNot.candidates,
+    observedEdges,
+    Object.values(facts.reverseIndex),
+    facts.reverseIndex
+  );
+  assert.ok(certificate);
+  assert.equal(certificate.goalReachableAsWalk, true);
+  assert.equal(certificate.firstEmptyStep, undefined);
+  assert.deepEqual(certificate.reachableByStep.map((layer) => layer.nodeIds), [
+    ["start"], ["middle"], ["start"], ["goal"]
+  ]);
 });
 
 test("il why-not del cammino tipizzato espone i prefissi e distingue un walk con revisite", async () => {

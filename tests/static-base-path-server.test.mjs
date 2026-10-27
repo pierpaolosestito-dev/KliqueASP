@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BASE_PATH, resolveBuildPath } from "../scripts/serve-static-base-path.mjs";
+import { BASE_PATH, createStaticBasePathServer, resolveBuildPath } from "../scripts/serve-static-base-path.mjs";
 import svelteConfig from "../svelte.config.js";
 import * as rootLayoutOptions from "../src/routes/+layout.ts";
 
@@ -60,4 +62,51 @@ test("the static preview rejects malformed and traversal paths", () => {
   assert.deepEqual(resolveBuildPath("/other/site/index.html", buildDirectory), {
     kind: "not-found"
   });
+});
+
+test("the static preview serves opt-in diagnostics with opt-in cross-origin isolation", async () => {
+  const temporaryBuildDirectory = await mkdtemp(path.join(os.tmpdir(), "kliqueasp-static-preview-"));
+  await writeFile(path.join(temporaryBuildDirectory, "index.html"), "<!doctype html><title>probe</title>");
+  const diagnosticFile = path.join(temporaryBuildDirectory, "diagnostic.html");
+  await writeFile(diagnosticFile, "<!doctype html><title>diagnostic</title>");
+
+  async function readRootHeaders(crossOriginIsolated) {
+    const server = createStaticBasePathServer({
+      buildDirectory: temporaryBuildDirectory,
+      crossOriginIsolated,
+      additionalFiles: { [`${BASE_PATH}/diagnostic.html`]: diagnosticFile }
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    try {
+      const rootResponse = await fetch(`http://127.0.0.1:${address.port}${BASE_PATH}/`, {
+        headers: { Connection: "close" }
+      });
+      await rootResponse.text();
+      const diagnosticResponse = await fetch(`http://127.0.0.1:${address.port}${BASE_PATH}/diagnostic.html`, {
+        headers: { Connection: "close" }
+      });
+      assert.equal(diagnosticResponse.status, 200);
+      assert.match(await diagnosticResponse.text(), /<title>diagnostic<\/title>/);
+      return rootResponse.headers;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  }
+
+  try {
+    const defaultHeaders = await readRootHeaders(false);
+    assert.equal(defaultHeaders.get("cross-origin-opener-policy"), null);
+    assert.equal(defaultHeaders.get("cross-origin-embedder-policy"), null);
+
+    const isolatedHeaders = await readRootHeaders(true);
+    assert.equal(isolatedHeaders.get("cross-origin-opener-policy"), "same-origin");
+    assert.equal(isolatedHeaders.get("cross-origin-embedder-policy"), "require-corp");
+  } finally {
+    await rm(temporaryBuildDirectory, { recursive: true, force: true });
+  }
 });

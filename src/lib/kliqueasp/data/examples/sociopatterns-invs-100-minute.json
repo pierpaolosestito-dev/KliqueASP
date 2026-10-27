@@ -1,0 +1,1303 @@
+{
+  "nodes": [
+    {
+      "id": "15",
+      "label": "Participant 15",
+      "type": "person"
+    },
+    {
+      "id": "21",
+      "label": "Participant 21",
+      "type": "person"
+    },
+    {
+      "id": "29",
+      "label": "Participant 29",
+      "type": "person"
+    },
+    {
+      "id": "39",
+      "label": "Participant 39",
+      "type": "person"
+    },
+    {
+      "id": "50",
+      "label": "Participant 50",
+      "type": "person"
+    },
+    {
+      "id": "56",
+      "label": "Participant 56",
+      "type": "person"
+    },
+    {
+      "id": "79",
+      "label": "Participant 79",
+      "type": "person"
+    },
+    {
+      "id": "80",
+      "label": "Participant 80",
+      "type": "person"
+    },
+    {
+      "id": "95",
+      "label": "Participant 95",
+      "type": "person"
+    },
+    {
+      "id": "118",
+      "label": "Participant 118",
+      "type": "person"
+    },
+    {
+      "id": "120",
+      "label": "Participant 120",
+      "type": "person"
+    },
+    {
+      "id": "122",
+      "label": "Participant 122",
+      "type": "person"
+    },
+    {
+      "id": "123",
+      "label": "Participant 123",
+      "type": "person"
+    },
+    {
+      "id": "150",
+      "label": "Participant 150",
+      "type": "person"
+    },
+    {
+      "id": "153",
+      "label": "Participant 153",
+      "type": "person"
+    },
+    {
+      "id": "164",
+      "label": "Participant 164",
+      "type": "person"
+    },
+    {
+      "id": "172",
+      "label": "Participant 172",
+      "type": "person"
+    },
+    {
+      "id": "179",
+      "label": "Participant 179",
+      "type": "person"
+    },
+    {
+      "id": "181",
+      "label": "Participant 181",
+      "type": "person"
+    },
+    {
+      "id": "194",
+      "label": "Participant 194",
+      "type": "person"
+    },
+    {
+      "id": "196",
+      "label": "Participant 196",
+      "type": "person"
+    },
+    {
+      "id": "205",
+      "label": "Participant 205",
+      "type": "person"
+    },
+    {
+      "id": "222",
+      "label": "Participant 222",
+      "type": "person"
+    },
+    {
+      "id": "223",
+      "label": "Participant 223",
+      "type": "person"
+    },
+    {
+      "id": "253",
+      "label": "Participant 253",
+      "type": "person"
+    },
+    {
+      "id": "267",
+      "label": "Participant 267",
+      "type": "person"
+    },
+    {
+      "id": "271",
+      "label": "Participant 271",
+      "type": "person"
+    },
+    {
+      "id": "272",
+      "label": "Participant 272",
+      "type": "person"
+    },
+    {
+      "id": "275",
+      "label": "Participant 275",
+      "type": "person"
+    },
+    {
+      "id": "311",
+      "label": "Participant 311",
+      "type": "person"
+    },
+    {
+      "id": "431",
+      "label": "Participant 431",
+      "type": "person"
+    },
+    {
+      "id": "448",
+      "label": "Participant 448",
+      "type": "person"
+    },
+    {
+      "id": "481",
+      "label": "Participant 481",
+      "type": "person"
+    },
+    {
+      "id": "492",
+      "label": "Participant 492",
+      "type": "person"
+    },
+    {
+      "id": "496",
+      "label": "Participant 496",
+      "type": "person"
+    },
+    {
+      "id": "601",
+      "label": "Participant 601",
+      "type": "person"
+    },
+    {
+      "id": "603",
+      "label": "Participant 603",
+      "type": "person"
+    },
+    {
+      "id": "765",
+      "label": "Participant 765",
+      "type": "person"
+    },
+    {
+      "id": "771",
+      "label": "Participant 771",
+      "type": "person"
+    },
+    {
+      "id": "778",
+      "label": "Participant 778",
+      "type": "person"
+    },
+    {
+      "id": "786",
+      "label": "Participant 786",
+      "type": "person"
+    },
+    {
+      "id": "819",
+      "label": "Participant 819",
+      "type": "person"
+    },
+    {
+      "id": "826",
+      "label": "Participant 826",
+      "type": "person"
+    },
+    {
+      "id": "845",
+      "label": "Participant 845",
+      "type": "person"
+    },
+    {
+      "id": "938",
+      "label": "Participant 938",
+      "type": "person"
+    }
+  ],
+  "edges": [
+    {
+      "id": "invs13-row-1",
+      "source": "492",
+      "target": "938",
+      "type": "face-to-face-contact",
+      "validFrom": 28800,
+      "validTo": 28820
+    },
+    {
+      "id": "invs13-row-2",
+      "source": "267",
+      "target": "272",
+      "type": "face-to-face-contact",
+      "validFrom": 28840,
+      "validTo": 28860
+    },
+    {
+      "id": "invs13-row-3",
+      "source": "181",
+      "target": "826",
+      "type": "face-to-face-contact",
+      "validFrom": 29280,
+      "validTo": 29300
+    },
+    {
+      "id": "invs13-row-4",
+      "source": "79",
+      "target": "181",
+      "type": "face-to-face-contact",
+      "validFrom": 29760,
+      "validTo": 29780
+    },
+    {
+      "id": "invs13-row-5",
+      "source": "150",
+      "target": "196",
+      "type": "face-to-face-contact",
+      "validFrom": 29980,
+      "validTo": 30000
+    },
+    {
+      "id": "invs13-row-6",
+      "source": "21",
+      "target": "150",
+      "type": "face-to-face-contact",
+      "validFrom": 30000,
+      "validTo": 30020
+    },
+    {
+      "id": "invs13-row-7",
+      "source": "21",
+      "target": "205",
+      "type": "face-to-face-contact",
+      "validFrom": 30040,
+      "validTo": 30060
+    },
+    {
+      "id": "invs13-row-8",
+      "source": "21",
+      "target": "150",
+      "type": "face-to-face-contact",
+      "validFrom": 30040,
+      "validTo": 30060
+    },
+    {
+      "id": "invs13-row-9",
+      "source": "448",
+      "target": "826",
+      "type": "face-to-face-contact",
+      "validFrom": 30040,
+      "validTo": 30060
+    },
+    {
+      "id": "invs13-row-10",
+      "source": "765",
+      "target": "826",
+      "type": "face-to-face-contact",
+      "validFrom": 30040,
+      "validTo": 30060
+    },
+    {
+      "id": "invs13-row-11",
+      "source": "39",
+      "target": "253",
+      "type": "face-to-face-contact",
+      "validFrom": 30260,
+      "validTo": 30280
+    },
+    {
+      "id": "invs13-row-12",
+      "source": "80",
+      "target": "253",
+      "type": "face-to-face-contact",
+      "validFrom": 30260,
+      "validTo": 30280
+    },
+    {
+      "id": "invs13-row-13",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30340,
+      "validTo": 30360
+    },
+    {
+      "id": "invs13-row-14",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30360,
+      "validTo": 30380
+    },
+    {
+      "id": "invs13-row-15",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30360,
+      "validTo": 30380
+    },
+    {
+      "id": "invs13-row-16",
+      "source": "80",
+      "target": "95",
+      "type": "face-to-face-contact",
+      "validFrom": 30360,
+      "validTo": 30380
+    },
+    {
+      "id": "invs13-row-17",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30360,
+      "validTo": 30380
+    },
+    {
+      "id": "invs13-row-18",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30360,
+      "validTo": 30380
+    },
+    {
+      "id": "invs13-row-19",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30380,
+      "validTo": 30400
+    },
+    {
+      "id": "invs13-row-20",
+      "source": "80",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30380,
+      "validTo": 30400
+    },
+    {
+      "id": "invs13-row-21",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30380,
+      "validTo": 30400
+    },
+    {
+      "id": "invs13-row-22",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30380,
+      "validTo": 30400
+    },
+    {
+      "id": "invs13-row-23",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30380,
+      "validTo": 30400
+    },
+    {
+      "id": "invs13-row-24",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30400,
+      "validTo": 30420
+    },
+    {
+      "id": "invs13-row-25",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30400,
+      "validTo": 30420
+    },
+    {
+      "id": "invs13-row-26",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30400,
+      "validTo": 30420
+    },
+    {
+      "id": "invs13-row-27",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30400,
+      "validTo": 30420
+    },
+    {
+      "id": "invs13-row-28",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-29",
+      "source": "118",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-30",
+      "source": "95",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-31",
+      "source": "311",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-32",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-33",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-34",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30420,
+      "validTo": 30440
+    },
+    {
+      "id": "invs13-row-35",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-36",
+      "source": "21",
+      "target": "205",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-37",
+      "source": "95",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-38",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-39",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-40",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-41",
+      "source": "118",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30440,
+      "validTo": 30460
+    },
+    {
+      "id": "invs13-row-42",
+      "source": "118",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30460,
+      "validTo": 30480
+    },
+    {
+      "id": "invs13-row-43",
+      "source": "95",
+      "target": "771",
+      "type": "face-to-face-contact",
+      "validFrom": 30460,
+      "validTo": 30480
+    },
+    {
+      "id": "invs13-row-44",
+      "source": "95",
+      "target": "118",
+      "type": "face-to-face-contact",
+      "validFrom": 30460,
+      "validTo": 30480
+    },
+    {
+      "id": "invs13-row-45",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30460,
+      "validTo": 30480
+    },
+    {
+      "id": "invs13-row-46",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30460,
+      "validTo": 30480
+    },
+    {
+      "id": "invs13-row-47",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30480,
+      "validTo": 30500
+    },
+    {
+      "id": "invs13-row-48",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30500,
+      "validTo": 30520
+    },
+    {
+      "id": "invs13-row-49",
+      "source": "153",
+      "target": "205",
+      "type": "face-to-face-contact",
+      "validFrom": 30500,
+      "validTo": 30520
+    },
+    {
+      "id": "invs13-row-50",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30520,
+      "validTo": 30540
+    },
+    {
+      "id": "invs13-row-51",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30540,
+      "validTo": 30560
+    },
+    {
+      "id": "invs13-row-52",
+      "source": "164",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 30540,
+      "validTo": 30560
+    },
+    {
+      "id": "invs13-row-53",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30560,
+      "validTo": 30580
+    },
+    {
+      "id": "invs13-row-54",
+      "source": "21",
+      "target": "179",
+      "type": "face-to-face-contact",
+      "validFrom": 30620,
+      "validTo": 30640
+    },
+    {
+      "id": "invs13-row-55",
+      "source": "123",
+      "target": "845",
+      "type": "face-to-face-contact",
+      "validFrom": 30620,
+      "validTo": 30640
+    },
+    {
+      "id": "invs13-row-56",
+      "source": "311",
+      "target": "481",
+      "type": "face-to-face-contact",
+      "validFrom": 30700,
+      "validTo": 30720
+    },
+    {
+      "id": "invs13-row-57",
+      "source": "79",
+      "target": "122",
+      "type": "face-to-face-contact",
+      "validFrom": 31200,
+      "validTo": 31220
+    },
+    {
+      "id": "invs13-row-58",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31540,
+      "validTo": 31560
+    },
+    {
+      "id": "invs13-row-59",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31560,
+      "validTo": 31580
+    },
+    {
+      "id": "invs13-row-60",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31600,
+      "validTo": 31620
+    },
+    {
+      "id": "invs13-row-61",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31620,
+      "validTo": 31640
+    },
+    {
+      "id": "invs13-row-62",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31660,
+      "validTo": 31680
+    },
+    {
+      "id": "invs13-row-63",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 31680,
+      "validTo": 31700
+    },
+    {
+      "id": "invs13-row-64",
+      "source": "122",
+      "target": "448",
+      "type": "face-to-face-contact",
+      "validFrom": 31820,
+      "validTo": 31840
+    },
+    {
+      "id": "invs13-row-65",
+      "source": "122",
+      "target": "448",
+      "type": "face-to-face-contact",
+      "validFrom": 31840,
+      "validTo": 31860
+    },
+    {
+      "id": "invs13-row-66",
+      "source": "122",
+      "target": "448",
+      "type": "face-to-face-contact",
+      "validFrom": 31860,
+      "validTo": 31880
+    },
+    {
+      "id": "invs13-row-67",
+      "source": "122",
+      "target": "448",
+      "type": "face-to-face-contact",
+      "validFrom": 31880,
+      "validTo": 31900
+    },
+    {
+      "id": "invs13-row-68",
+      "source": "21",
+      "target": "150",
+      "type": "face-to-face-contact",
+      "validFrom": 31880,
+      "validTo": 31900
+    },
+    {
+      "id": "invs13-row-69",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32000,
+      "validTo": 32020
+    },
+    {
+      "id": "invs13-row-70",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32020,
+      "validTo": 32040
+    },
+    {
+      "id": "invs13-row-71",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32040,
+      "validTo": 32060
+    },
+    {
+      "id": "invs13-row-72",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32060,
+      "validTo": 32080
+    },
+    {
+      "id": "invs13-row-73",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32080,
+      "validTo": 32100
+    },
+    {
+      "id": "invs13-row-74",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32180,
+      "validTo": 32200
+    },
+    {
+      "id": "invs13-row-75",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32240,
+      "validTo": 32260
+    },
+    {
+      "id": "invs13-row-76",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32260,
+      "validTo": 32280
+    },
+    {
+      "id": "invs13-row-77",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32280,
+      "validTo": 32300
+    },
+    {
+      "id": "invs13-row-78",
+      "source": "21",
+      "target": "150",
+      "type": "face-to-face-contact",
+      "validFrom": 32280,
+      "validTo": 32300
+    },
+    {
+      "id": "invs13-row-79",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32300,
+      "validTo": 32320
+    },
+    {
+      "id": "invs13-row-80",
+      "source": "39",
+      "target": "120",
+      "type": "face-to-face-contact",
+      "validFrom": 32320,
+      "validTo": 32340
+    },
+    {
+      "id": "invs13-row-81",
+      "source": "120",
+      "target": "819",
+      "type": "face-to-face-contact",
+      "validFrom": 32340,
+      "validTo": 32360
+    },
+    {
+      "id": "invs13-row-82",
+      "source": "431",
+      "target": "778",
+      "type": "face-to-face-contact",
+      "validFrom": 33280,
+      "validTo": 33300
+    },
+    {
+      "id": "invs13-row-83",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 33320,
+      "validTo": 33340
+    },
+    {
+      "id": "invs13-row-84",
+      "source": "431",
+      "target": "778",
+      "type": "face-to-face-contact",
+      "validFrom": 33380,
+      "validTo": 33400
+    },
+    {
+      "id": "invs13-row-85",
+      "source": "431",
+      "target": "778",
+      "type": "face-to-face-contact",
+      "validFrom": 33460,
+      "validTo": 33480
+    },
+    {
+      "id": "invs13-row-86",
+      "source": "431",
+      "target": "778",
+      "type": "face-to-face-contact",
+      "validFrom": 33540,
+      "validTo": 33560
+    },
+    {
+      "id": "invs13-row-87",
+      "source": "15",
+      "target": "95",
+      "type": "face-to-face-contact",
+      "validFrom": 33540,
+      "validTo": 33560
+    },
+    {
+      "id": "invs13-row-88",
+      "source": "56",
+      "target": "194",
+      "type": "face-to-face-contact",
+      "validFrom": 33640,
+      "validTo": 33660
+    },
+    {
+      "id": "invs13-row-89",
+      "source": "56",
+      "target": "194",
+      "type": "face-to-face-contact",
+      "validFrom": 33660,
+      "validTo": 33680
+    },
+    {
+      "id": "invs13-row-90",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33700,
+      "validTo": 33720
+    },
+    {
+      "id": "invs13-row-91",
+      "source": "194",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 33700,
+      "validTo": 33720
+    },
+    {
+      "id": "invs13-row-92",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33720,
+      "validTo": 33740
+    },
+    {
+      "id": "invs13-row-93",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33740,
+      "validTo": 33760
+    },
+    {
+      "id": "invs13-row-94",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33760,
+      "validTo": 33780
+    },
+    {
+      "id": "invs13-row-95",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33780,
+      "validTo": 33800
+    },
+    {
+      "id": "invs13-row-96",
+      "source": "194",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 33780,
+      "validTo": 33800
+    },
+    {
+      "id": "invs13-row-97",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33800,
+      "validTo": 33820
+    },
+    {
+      "id": "invs13-row-98",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33800,
+      "validTo": 33820
+    },
+    {
+      "id": "invs13-row-99",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33820,
+      "validTo": 33840
+    },
+    {
+      "id": "invs13-row-100",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33840,
+      "validTo": 33860
+    },
+    {
+      "id": "invs13-row-101",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33840,
+      "validTo": 33860
+    },
+    {
+      "id": "invs13-row-102",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33860,
+      "validTo": 33880
+    },
+    {
+      "id": "invs13-row-103",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33940,
+      "validTo": 33960
+    },
+    {
+      "id": "invs13-row-104",
+      "source": "311",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33940,
+      "validTo": 33960
+    },
+    {
+      "id": "invs13-row-105",
+      "source": "194",
+      "target": "786",
+      "type": "face-to-face-contact",
+      "validFrom": 33960,
+      "validTo": 33980
+    },
+    {
+      "id": "invs13-row-106",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 34000,
+      "validTo": 34020
+    },
+    {
+      "id": "invs13-row-107",
+      "source": "95",
+      "target": "205",
+      "type": "face-to-face-contact",
+      "validFrom": 34000,
+      "validTo": 34020
+    },
+    {
+      "id": "invs13-row-108",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34020,
+      "validTo": 34040
+    },
+    {
+      "id": "invs13-row-109",
+      "source": "21",
+      "target": "603",
+      "type": "face-to-face-contact",
+      "validFrom": 34020,
+      "validTo": 34040
+    },
+    {
+      "id": "invs13-row-110",
+      "source": "205",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 34020,
+      "validTo": 34040
+    },
+    {
+      "id": "invs13-row-111",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 34040,
+      "validTo": 34060
+    },
+    {
+      "id": "invs13-row-112",
+      "source": "95",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 34060,
+      "validTo": 34080
+    },
+    {
+      "id": "invs13-row-113",
+      "source": "95",
+      "target": "123",
+      "type": "face-to-face-contact",
+      "validFrom": 34160,
+      "validTo": 34180
+    },
+    {
+      "id": "invs13-row-114",
+      "source": "205",
+      "target": "311",
+      "type": "face-to-face-contact",
+      "validFrom": 34240,
+      "validTo": 34260
+    },
+    {
+      "id": "invs13-row-115",
+      "source": "150",
+      "target": "271",
+      "type": "face-to-face-contact",
+      "validFrom": 34300,
+      "validTo": 34320
+    },
+    {
+      "id": "invs13-row-116",
+      "source": "150",
+      "target": "271",
+      "type": "face-to-face-contact",
+      "validFrom": 34320,
+      "validTo": 34340
+    },
+    {
+      "id": "invs13-row-117",
+      "source": "311",
+      "target": "496",
+      "type": "face-to-face-contact",
+      "validFrom": 34400,
+      "validTo": 34420
+    },
+    {
+      "id": "invs13-row-118",
+      "source": "21",
+      "target": "431",
+      "type": "face-to-face-contact",
+      "validFrom": 34480,
+      "validTo": 34500
+    },
+    {
+      "id": "invs13-row-119",
+      "source": "79",
+      "target": "275",
+      "type": "face-to-face-contact",
+      "validFrom": 34560,
+      "validTo": 34580
+    },
+    {
+      "id": "invs13-row-120",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34560,
+      "validTo": 34580
+    },
+    {
+      "id": "invs13-row-121",
+      "source": "222",
+      "target": "267",
+      "type": "face-to-face-contact",
+      "validFrom": 34560,
+      "validTo": 34580
+    },
+    {
+      "id": "invs13-row-122",
+      "source": "50",
+      "target": "179",
+      "type": "face-to-face-contact",
+      "validFrom": 34560,
+      "validTo": 34580
+    },
+    {
+      "id": "invs13-row-123",
+      "source": "222",
+      "target": "267",
+      "type": "face-to-face-contact",
+      "validFrom": 34580,
+      "validTo": 34600
+    },
+    {
+      "id": "invs13-row-124",
+      "source": "222",
+      "target": "267",
+      "type": "face-to-face-contact",
+      "validFrom": 34600,
+      "validTo": 34620
+    },
+    {
+      "id": "invs13-row-125",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34620,
+      "validTo": 34640
+    },
+    {
+      "id": "invs13-row-126",
+      "source": "222",
+      "target": "267",
+      "type": "face-to-face-contact",
+      "validFrom": 34620,
+      "validTo": 34640
+    },
+    {
+      "id": "invs13-row-127",
+      "source": "222",
+      "target": "267",
+      "type": "face-to-face-contact",
+      "validFrom": 34640,
+      "validTo": 34660
+    },
+    {
+      "id": "invs13-row-128",
+      "source": "150",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34660,
+      "validTo": 34680
+    },
+    {
+      "id": "invs13-row-129",
+      "source": "120",
+      "target": "172",
+      "type": "face-to-face-contact",
+      "validFrom": 34720,
+      "validTo": 34740
+    },
+    {
+      "id": "invs13-row-130",
+      "source": "271",
+      "target": "448",
+      "type": "face-to-face-contact",
+      "validFrom": 34720,
+      "validTo": 34740
+    },
+    {
+      "id": "invs13-row-131",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34740,
+      "validTo": 34760
+    },
+    {
+      "id": "invs13-row-132",
+      "source": "29",
+      "target": "271",
+      "type": "face-to-face-contact",
+      "validFrom": 34760,
+      "validTo": 34780
+    },
+    {
+      "id": "invs13-row-133",
+      "source": "120",
+      "target": "223",
+      "type": "face-to-face-contact",
+      "validFrom": 34780,
+      "validTo": 34800
+    },
+    {
+      "id": "invs13-row-134",
+      "source": "271",
+      "target": "601",
+      "type": "face-to-face-contact",
+      "validFrom": 34800,
+      "validTo": 34820
+    }
+  ]
+}

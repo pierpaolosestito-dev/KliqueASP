@@ -1,11 +1,38 @@
 import { scaleNonNegativeDecimalWeights } from "./exactDecimal.ts";
+import {
+  validateCommunityTopologyCounterfactualConfig,
+  type CommunityTopologyCounterfactualConfig
+} from "./communityTopologyCounterfactual.ts";
 import { normalizeProvenanceReferences } from "./provenance.ts";
 import { parseGraphTemporalValue } from "./temporalValue.ts";
+import {
+  getGraphTaskRequirements as resolveGraphTaskRequirements,
+  type GraphCapabilityId
+} from "./graphTaskContracts.ts";
 
 export { isValidGraphCalendarDate, parseGraphTemporalValue, parseGraphTimeValue } from "./temporalValue.ts";
 
 export type GraphDirection = "undirected" | "directed";
 export type EdgeIdentity = "simple" | "multigraph";
+export type GraphTemporalMetricUnit = "milliseconds" | "seconds" | "minutes" | "hours" | "days";
+
+const GRAPH_TEMPORAL_METRIC_UNITS: ReadonlySet<string> = new Set([
+  "milliseconds",
+  "seconds",
+  "minutes",
+  "hours",
+  "days"
+]);
+
+function isGraphTemporalMetricUnit(value: unknown): value is GraphTemporalMetricUnit {
+  return typeof value === "string" && GRAPH_TEMPORAL_METRIC_UNITS.has(value);
+}
+
+export const MIN_GRAPH_MOTIF_COUNT_PARTITION_SIZE = 1;
+export const MAX_GRAPH_MOTIF_COUNT_PARTITION_SIZE = 16;
+export const MIN_GRAPH_MOTIF_COUNT_DURATION_MS = 1_000;
+export const DEFAULT_GRAPH_MOTIF_COUNT_DURATION_MS = 30 * 60 * 1_000;
+export const MAX_GRAPH_MOTIF_COUNT_DURATION_MS = 30 * 60 * 1_000;
 
 export interface GraphNumericRange {
   min: number;
@@ -28,7 +55,7 @@ export interface CapabilityStatus {
   range?: GraphNumericRange;
 }
 
-export type GraphCapabilities = Record<string, CapabilityStatus>;
+export type GraphCapabilities = Partial<Record<GraphCapabilityId, CapabilityStatus>>;
 
 export interface GraphFieldMapping {
   idField?: string;
@@ -44,6 +71,8 @@ export interface GraphFieldMapping {
   validity?: {
     fromField?: string;
     toField?: string;
+    /** Unit used by integer/numeric validity values; ISO dates keep their calendar unit. */
+    numericUnit?: GraphTemporalMetricUnit;
   };
   weightField?: string;
   removalCostField?: string;
@@ -148,8 +177,18 @@ export interface GraphIntegrityConstraints {
 export interface GraphMotifTemplate {
   id: string;
   label?: string;
-  roles: Record<string, { nodeTypes: string[] }>;
-  edges: Array<{ sourceRole: string; targetRole: string; edgeType: string }>;
+  roles: Record<string, {
+    nodeTypes: string[];
+    /** Exact JSON-scalar tests over aliases declared in graphMapping.node.attributes. */
+    attributes?: Record<string, GraphJsonScalar>;
+  }>;
+  edges: Array<{
+    sourceRole: string;
+    targetRole: string;
+    edgeType: string;
+    /** Exact JSON-scalar tests over aliases declared in graphMapping.edge.attributes. */
+    attributes?: Record<string, GraphJsonScalar>;
+  }>;
   /** Typed relationships required to be absent under an explicit closed-world assumption. */
   absentEdges?: Array<{ sourceRole: string; targetRole: string; edgeType: string }>;
   /** Finite relation vocabulary over which the role assignment must be an induced subgraph. */
@@ -158,13 +197,25 @@ export interface GraphMotifTemplate {
   symmetricRoles?: string[][];
   temporal?:
     | { semantics: "coValid" }
-    | { semantics: "orderedByStart"; strict?: boolean };
+    | {
+        semantics: "orderedByStart";
+        strict?: boolean;
+        /** Maximum elapsed time from the first to last edge start, in the declared unit. */
+        maximumSpan?: { value: number; unit: GraphTemporalMetricUnit };
+      };
 }
 
 export interface GraphCommunityConstraints {
   useEdgeWeights?: boolean;
+  /** Positive exact rational resolution parameter used by modularity communities; defaults to 1. */
+  resolution?: number;
   minCount?: number;
   maxCount?: number;
+  /** Positive integer cost used only by the opt-in infeasibility diagnosis; omitted categories cost 1. */
+  diagnosisCosts?: Partial<Record<
+    "minimumCommunityCount" | "maximumCommunityCount" | "mustLink" | "cannotLink" | "attributeBound",
+    number
+  >>;
   mustLink?: Array<[string, string]>;
   cannotLink?: Array<[string, string]>;
   /** Per-community bounds over a value in the mapped node attributes. */
@@ -174,6 +225,8 @@ export interface GraphCommunityConstraints {
     minPerCommunity?: number;
     maxPerCommunity?: number;
   }>;
+  /** Optional finite candidate edge edits for exact pair co-assignment counterfactuals. */
+  topologyCounterfactuals?: CommunityTopologyCounterfactualConfig;
 }
 
 export interface GraphProvenanceScenario {
@@ -186,6 +239,37 @@ export interface GraphProvenanceScenarioConfig {
   scenarios: GraphProvenanceScenario[];
   unattributedEdges: "include" | "exclude";
   referenceMatching?: "any" | "all";
+  /** Explicitly treats the configured finite scenario list as exhaustive possible graph worlds. */
+  worldAssumption?: "finite-exhaustive-worlds";
+}
+
+export type GraphJsonScalar = string | number | boolean;
+
+export interface GraphSignedTriadConfig {
+  /** Alias declared in graphMapping.edge.attributes. */
+  attribute: string;
+  positiveValues: GraphJsonScalar[];
+  negativeValues: GraphJsonScalar[];
+  /** Optional exact edge type subset; omitted means every edge type is in scope. */
+  edgeTypes?: string[];
+}
+
+export interface GraphContextualCliqueConfig {
+  /** Mapped node types allowed in the returned focus group. */
+  focusNodeTypes: string[];
+  /** Mapped node types that may witness pairwise focus-node relations. */
+  contextNodeTypes: string[];
+  /** Exact mapped edge types allowed between focus and context nodes. */
+  edgeTypes: string[];
+  /** Minimum focus-group size; defaults to 3. */
+  minimumSize?: number;
+}
+
+export interface GraphMotifCountConfig {
+  /** Opts the exact motif counter into disjoint batches of this size (1–16). */
+  partitionSize: number;
+  /** Total wall-clock budget for the complete partitioned count; defaults to 30 minutes. */
+  maxDurationMs?: number;
 }
 
 export interface GraphCounterfactualEdgeAddition {
@@ -194,6 +278,8 @@ export interface GraphCounterfactualEdgeAddition {
   targetNodeId: string | number;
   edgeType: string;
   cost: number;
+  /** Optional mapped metadata for candidate edges used by attribute-constrained motifs. */
+  attributes?: Record<string, GraphJsonScalar>;
   validity?: { from: number | string; to: number | string };
 }
 
@@ -203,9 +289,12 @@ export interface GraphCounterfactualConstraints {
 
 export interface GraphAnalysisConfig {
   motifs?: GraphMotifTemplate[];
+  motifCount?: GraphMotifCountConfig;
+  contextualClique?: GraphContextualCliqueConfig;
   communities?: GraphCommunityConstraints;
   counterfactuals?: GraphCounterfactualConstraints;
   provenanceScenarios?: GraphProvenanceScenarioConfig;
+  signedTriads?: GraphSignedTriadConfig;
 }
 
 export interface NormalizedGraphNode extends Record<string, unknown> {
@@ -231,31 +320,14 @@ export interface NormalizedGraph {
   schemaVersion: number;
   direction: GraphDirection;
   identity: EdgeIdentity;
+  /** Explicit source unit for integer/numeric validity values, when the data declares one. */
+  temporalNumericUnit?: GraphTemporalMetricUnit;
   capabilities: GraphCapabilities;
   diagnostics: GraphDiagnostic[];
   valid: boolean;
 }
 
 const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2]);
-const GRAPH_MAPPING_CAPABILITY_REQUIREMENTS: Record<string, string[]> = {
-  clique: ["undirectedAdjacency"],
-  kPlex: ["undirectedAdjacency"],
-  kCore: [],
-  connectedComponents: ["undirectedAdjacency"],
-  weakComponents: ["directedEdges"],
-  strongComponents: ["directedEdges"],
-  dominatingSet: ["undirectedAdjacency"],
-  minimumNodeSeparator: [],
-  minimumCostNodeSeparator: ["nodeRemovalCosts"],
-  minimumEdgeSeparator: [],
-  minimumCostEdgeSeparator: ["edgeRemovalCosts"],
-  communities: ["undirectedAdjacency"],
-  boundedPath: [],
-  typedPath: ["edgeTypes"],
-  typedMotif: ["nodeTypes", "edgeTypes"],
-  temporalMotif: ["nodeTypes", "edgeTypes", "edgeIntervals"]
-};
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -354,6 +426,7 @@ export function graphPathValues(root: unknown, pathExpression: string): unknown[
       const candidates = Array.isArray(item) ? item : [item];
       for (const candidate of candidates) {
         if (candidate === null || typeof candidate !== "object") continue;
+        if (!Object.prototype.hasOwnProperty.call(candidate, token)) continue;
         const value = (candidate as Record<string, unknown>)[token];
         if (Array.isArray(value)) next.push(...value);
         else if (value !== undefined && value !== null) next.push(value);
@@ -670,20 +743,15 @@ function makeCapabilities(
 
 export function checkGraphTaskRequirements(
   capabilities: GraphCapabilities,
-  requiredCapabilities: string[]
-): { available: boolean; missing: string[]; reasons: string[] } {
+  requiredCapabilities: GraphCapabilityId[]
+): { available: boolean; missing: GraphCapabilityId[]; reasons: string[] } {
   const missing = requiredCapabilities.filter((name) => !capabilities[name]?.available);
   const reasons = missing.map((name) => capabilities[name]?.reason ?? `capacità sconosciuta: ${name}`);
   return { available: missing.length === 0, missing, reasons };
 }
 
-export function getGraphTaskRequirements(task: string, direction?: GraphDirection): string[] | null {
-  const requirements = GRAPH_MAPPING_CAPABILITY_REQUIREMENTS[task];
-  if (!requirements) return null;
-  if (task === "kCore" && direction) {
-    return [...requirements, direction === "directed" ? "directedEdges" : "undirectedAdjacency"];
-  }
-  return requirements;
+export function getGraphTaskRequirements(task: string, direction?: GraphDirection): GraphCapabilityId[] | null {
+  return resolveGraphTaskRequirements(task, { direction });
 }
 
 /** Decodes the reversible marker encoding used for control characters inside ASP strings. */
@@ -897,15 +965,29 @@ export function serializeAspRepairValue(value: unknown): string {
  * ISO dates and large integer timelines inside clingo's signed 32-bit range.
  */
 export interface AspTemporalEncoding {
+  /** Common graph-time domain. Null means no usable values or mixed integer/date domains. */
+  domain: "integer" | "date" | null;
   encode(value: unknown): number | null;
   decode(value: number): number | undefined;
+  /** Encodes elapsed time from the earliest mapped value without losing differences. */
+  encodeMetric(value: unknown, unit: GraphTemporalMetricUnit): number | null;
+  /** True only if every mapped time can be represented exactly in the requested unit. */
+  metricAvailable(unit: GraphTemporalMetricUnit): boolean;
+  /** Unit declared for integer/numeric values; undefined means their physical unit is unknown. */
+  numericUnit: GraphTemporalMetricUnit | undefined;
 }
 
 function temporalEncodingKey(value: { value: number; domain: "integer" | "date" }): string {
   return `${value.domain}:${value.value}`;
 }
 
-export function createAspTemporalEncoding(values: readonly unknown[]): AspTemporalEncoding {
+export function createAspTemporalEncoding(
+  values: readonly unknown[],
+  numericUnit?: GraphTemporalMetricUnit
+): AspTemporalEncoding {
+  if (numericUnit !== undefined && !isGraphTemporalMetricUnit(numericUnit)) {
+    throw new TypeError("L'unità numerica temporale deve essere milliseconds, seconds, minutes, hours oppure days");
+  }
   const unique = new Map<string, { value: number; domain: "integer" | "date" }>();
   for (const value of values) {
     const parsed = parseGraphTemporalValue(value);
@@ -923,9 +1005,39 @@ export function createAspTemporalEncoding(values: readonly unknown[]): AspTempor
 
   const encodedByKey = new Map<string, number>();
   const decodedByRank = new Map<number, number>();
+  const domains = new Set([...unique.values()].map((value) => value.domain));
+  const domain = domains.size === 1 ? [...domains][0] : null;
   const identityIntegerEncoding = ordered.length > 0 && ordered.every((value) =>
     value.domain === "integer" && value.value >= -2_147_483_648 && value.value <= 2_147_483_647
   );
+  const metricUnitFactor: Record<GraphTemporalMetricUnit, bigint> = {
+    milliseconds: 1n,
+    seconds: 1_000n,
+    minutes: 60_000n,
+    hours: 3_600_000n,
+    days: 86_400_000n
+  };
+  const encodeParsedMetric = (
+    parsed: { value: number; domain: "integer" | "date" },
+    unit: GraphTemporalMetricUnit
+  ): number | null => {
+    if (!parsed || domain === null || parsed.domain !== domain) return null;
+    const origin = ordered[0]?.value;
+    if (origin === undefined) return null;
+    const difference = parsed.value - origin;
+    if (!Number.isSafeInteger(difference) || difference < 0) return null;
+    if (domain === "integer" && numericUnit === undefined) return null;
+    const sourceFactor = domain === "date" ? 1n : metricUnitFactor[numericUnit!];
+    const scaledDifference = BigInt(difference) * sourceFactor;
+    const targetFactor = metricUnitFactor[unit];
+    if (scaledDifference % targetFactor !== 0n) return null;
+    const metric = scaledDifference / targetFactor;
+    return metric >= 0n && metric <= 2_147_483_647n ? Number(metric) : null;
+  };
+  const encodeMetric = (value: unknown, unit: GraphTemporalMetricUnit): number | null => {
+    const parsed = parseGraphTemporalValue(value);
+    return parsed ? encodeParsedMetric(parsed, unit) : null;
+  };
   ordered.forEach((parsed, index) => {
     const rank = index + 1;
     encodedByKey.set(temporalEncodingKey(parsed), rank);
@@ -933,6 +1045,7 @@ export function createAspTemporalEncoding(values: readonly unknown[]): AspTempor
   });
 
   return {
+    domain,
     encode(value: unknown): number | null {
       const parsed = parseGraphTemporalValue(value);
       if (!parsed) return null;
@@ -942,6 +1055,11 @@ export function createAspTemporalEncoding(values: readonly unknown[]): AspTempor
     decode(value: number): number | undefined {
       if (identityIntegerEncoding) return Number.isInteger(value) ? value : undefined;
       return decodedByRank.get(value);
+    },
+    encodeMetric,
+    numericUnit,
+    metricAvailable(unit: GraphTemporalMetricUnit): boolean {
+      return ordered.length > 0 && ordered.every((value) => encodeParsedMetric(value, unit) !== null);
     }
   };
 }
@@ -965,6 +1083,130 @@ export interface AspFactSerializationOptions {
   additionalTemporalValues?: readonly unknown[];
   /** Reuse one encoding when graph facts and candidate facts are compiled together. */
   temporalEncoding?: AspTemporalEncoding;
+  /** Emits compact metric-time lookup facts only for units used by configured span queries. */
+  temporalMetricUnits?: readonly GraphTemporalMetricUnit[];
+  /** Declares the source unit for integer/numeric validity values. */
+  numericTimeUnit?: GraphTemporalMetricUnit;
+  /** Groups ground atoms and derives redundant edge relations to reduce the WASM input. */
+  compact?: boolean;
+}
+
+const COMPACT_ASP_FACT_BATCH_SIZE = 256;
+
+function splitAspFactArguments(value: string): string[] {
+  const argumentsList: string[] = [];
+  let argumentStart = 0;
+  let quoted = false;
+  let escaped = false;
+  let nestedDepth = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === "(") nestedDepth += 1;
+    else if (character === ")") nestedDepth -= 1;
+    else if (character === "," && nestedDepth === 0) {
+      argumentsList.push(value.slice(argumentStart, index));
+      argumentStart = index + 1;
+    }
+  }
+
+  argumentsList.push(value.slice(argumentStart));
+  return argumentsList;
+}
+
+function compactAspFacts(
+  lines: string[],
+  graphDirection: "directed" | "undirected",
+  includeMappedEdgeRelations: boolean
+): string[] {
+  const groups = new Map<string, { predicate: string; tuples: string[] }>();
+  const renderGroups = () => [...groups.values()].flatMap(({ predicate, tuples }) => {
+    const statements: string[] = [];
+    for (let index = 0; index < tuples.length; index += COMPACT_ASP_FACT_BATCH_SIZE) {
+      statements.push(`${predicate}(${tuples.slice(index, index + COMPACT_ASP_FACT_BATCH_SIZE).join(";")}).`);
+    }
+    return statements;
+  });
+
+  if (!includeMappedEdgeRelations) {
+    for (const line of lines) {
+      const match = /^([a-z][a-z_0-9]*)\((.*)\)\.$/.exec(line);
+      if (!match) throw new TypeError("Il serializzatore ASP ha prodotto un fatto non compatto");
+      const [, predicate, tuple] = match;
+      const key = `${predicate}/${splitAspFactArguments(tuple).length}`;
+      const group = groups.get(key) ?? { predicate, tuples: [] };
+      group.tuples.push(tuple);
+      groups.set(key, group);
+    }
+    return renderGroups();
+  }
+
+  const sources = new Map<string, string>();
+  const targets = new Map<string, string>();
+  const edgeTypes: string[] = [];
+
+  const add = (predicate: string, tuple: string) => {
+    const arity = splitAspFactArguments(tuple).length;
+    const key = `${predicate}/${arity}`;
+    const group = groups.get(key) ?? { predicate, tuples: [] };
+    group.tuples.push(tuple);
+    groups.set(key, group);
+  };
+
+  for (const line of lines) {
+    const match = /^([a-z][a-z_0-9]*)\((.*)\)\.$/.exec(line);
+    if (!match) throw new TypeError("Il serializzatore ASP ha prodotto un fatto non compatto");
+    const [, predicate, tuple] = match;
+    const args = splitAspFactArguments(tuple);
+    if (predicate === "edge_source") {
+      sources.set(args[0], args[1]);
+    } else if (predicate === "edge_target") {
+      targets.set(args[0], args[1]);
+    } else if (["edge", "edge_record", "edge_direction"].includes(predicate)) {
+      continue;
+    } else if (predicate === "edge_type") {
+      edgeTypes.push(args[1]);
+      add(predicate, tuple);
+    } else {
+      add(predicate, tuple);
+    }
+  }
+
+  for (const [record, source] of sources) {
+    const target = targets.get(record);
+    if (target === undefined) {
+      throw new TypeError(`Il fatto edge_source(${record},_) non ha un fatto edge_target corrispondente`);
+    }
+    add("klique_edge_endpoints", `${record},${source},${target}`);
+  }
+  if (sources.size !== targets.size) {
+    throw new TypeError("I fatti edge_source ed edge_target non hanno lo stesso numero di archi");
+  }
+
+  const records = new Set(sources.keys());
+  const distinctEdgeTypes = new Set(edgeTypes);
+  const commonEdgeType = edgeTypes.length === records.size && distinctEdgeTypes.size === 1
+    ? edgeTypes[0]
+    : undefined;
+  if (commonEdgeType !== undefined) groups.delete("edge_type/2");
+
+  return [
+    ...renderGroups(),
+    "edge_record(E) :- klique_edge_endpoints(E,_,_).",
+    "edge_source(E,U) :- klique_edge_endpoints(E,U,_).",
+    "edge_target(E,V) :- klique_edge_endpoints(E,_,V).",
+    "edge(U,V) :- klique_edge_endpoints(_,U,V).",
+    ...(graphDirection === "undirected" ? ["edge(V,U) :- klique_edge_endpoints(_,U,V)."] : []),
+    `edge_direction(E,${graphDirection}) :- edge_record(E).`,
+    ...(commonEdgeType === undefined ? [] : [`edge_type(E,${commonEdgeType}) :- edge_record(E).`])
+  ];
 }
 
 /** Serializes normalized graph data to the legacy facts plus explicitly mapped v2 facts. */
@@ -983,10 +1225,11 @@ export function buildAspFactsFromGraph(
     const validity = asRecord(asRecord(link.analysis).validity);
     return [validity.from, validity.to];
   });
+  const declaredNumericUnit = options.numericTimeUnit ?? graph.temporalNumericUnit;
   const temporalEncoding = options.temporalEncoding ?? createAspTemporalEncoding([
     ...graphTemporalValues,
     ...(options.additionalTemporalValues ?? [])
-  ]);
+  ], declaredNumericUnit as GraphTemporalMetricUnit | undefined);
   const indexByNodeId = new Map<string, number>();
   const reverseIndex: Record<number, string> = {};
   const reverseSourceIndex: Record<number, string> = {};
@@ -1125,8 +1368,26 @@ export function buildAspFactsFromGraph(
     }
   }
 
+  const temporalMetricUnits = [...new Set(options.temporalMetricUnits ?? [])];
+  if (temporalMetricUnits.length > 0) {
+    const metricFacts = new Set<string>();
+    for (const value of [...graphTemporalValues, ...(options.additionalTemporalValues ?? [])]) {
+      const timeIndex = temporalEncoding.encode(value);
+      if (timeIndex === null) continue;
+      for (const unit of temporalMetricUnits) {
+        const metricValue = temporalEncoding.encodeMetric(value, unit);
+        if (metricValue !== null) {
+          metricFacts.add(`asp_time_metric(${escapeAspString(unit)},${timeIndex},${metricValue}).`);
+        }
+      }
+    }
+    lines.push(...metricFacts);
+  }
+
   return {
-    facts: lines.length > 0 ? `${lines.join("\n")}\n` : "",
+    facts: lines.length > 0
+      ? `${(options.compact ? compactAspFacts(lines, graphDirection, isVersion2) : lines).join("\n")}\n`
+      : "",
     reverseIndex,
     reverseSourceIndex,
     reverseEdgeIndex,
@@ -1149,7 +1410,9 @@ export function normalizeGraphData(
   const diagnostics: GraphDiagnostic[] = [];
   const suppliedMapping = asRecord(config.graphMapping);
   const rawVersion = config.schemaVersion;
-  const schemaVersion = rawVersion === undefined ? 1 : Number(rawVersion);
+  const schemaVersion = rawVersion === undefined
+    ? 1
+    : typeof rawVersion === "number" ? rawVersion : Number.NaN;
   let valid = true;
   const rejectUnknownGraphProperties = (
     record: Record<string, unknown>,
@@ -1204,6 +1467,24 @@ export function normalizeGraphData(
       code: "invalid-graph-config-value",
       severity: "error",
       message: "graphAnalysis.provenanceScenarios richiede schemaVersion: 2"
+    });
+  }
+
+  if (schemaVersion !== 2 && asRecord(config.graphAnalysis).signedTriads !== undefined) {
+    valid = false;
+    diagnostics.push({
+      code: "invalid-graph-config-value",
+      severity: "error",
+      message: "graphAnalysis.signedTriads richiede schemaVersion: 2"
+    });
+  }
+
+  if (schemaVersion !== 2 && asRecord(config.graphAnalysis).motifCount !== undefined) {
+    valid = false;
+    diagnostics.push({
+      code: "invalid-graph-config-value",
+      severity: "error",
+      message: "graphAnalysis.motifCount richiede schemaVersion: 2"
     });
   }
 
@@ -1315,7 +1596,295 @@ export function normalizeGraphData(
     inspectConfigRecordArray(repairSuggestions.edgeIntervalReplacements, ["edgeId", "expectedFrom", "expectedTo", "from", "to", "cost"], "graphIntegrity.repairSuggestions.edgeIntervalReplacements");
 
     const graphAnalysis = asRecord(config.graphAnalysis);
-    inspectConfigRecord(graphAnalysis, ["motifs", "communities", "counterfactuals", "provenanceScenarios"], "graphAnalysis");
+    inspectConfigRecord(graphAnalysis, ["motifs", "motifCount", "contextualClique", "communities", "counterfactuals", "provenanceScenarios", "signedTriads"], "graphAnalysis");
+    const mappedNodeAttributeAliases = new Set(Object.keys(asRecord(rawNodeMapping.attributes)));
+    const mappedEdgeAttributeAliases = new Set(Object.keys(asRecord(rawEdgeMapping.attributes)));
+    if (graphAnalysis.contextualClique !== undefined) {
+      const path = "graphAnalysis.contextualClique";
+      const contextualClique = asRecord(graphAnalysis.contextualClique);
+      if (!isRecord(graphAnalysis.contextualClique)) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `${path} deve essere un oggetto`
+        });
+      } else {
+        inspectConfigRecord(contextualClique, ["focusNodeTypes", "contextNodeTypes", "edgeTypes", "minimumSize"], path);
+        if (schemaVersion !== 2) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path} richiede schemaVersion: 2`
+          });
+        }
+        if (typeof rawNodeMapping.typeField !== "string" || rawNodeMapping.typeField.trim() === "") {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path} richiede graphMapping.node.typeField`
+          });
+        }
+        if (typeof rawEdgeMapping.typeField !== "string" || rawEdgeMapping.typeField.trim() === "") {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path} richiede graphMapping.edge.typeField`
+          });
+        }
+        if (rawEdgeMapping.direction !== "undirected") {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path} richiede graphMapping.edge.direction: 'undirected'`
+          });
+        }
+        for (const key of ["focusNodeTypes", "contextNodeTypes", "edgeTypes"] as const) {
+          const values = contextualClique[key];
+          if (!Array.isArray(values) || values.length === 0 ||
+            values.some((value) => typeof value !== "string" || value.trim() === "") ||
+            new Set(values.map((value) => (value as string).trim())).size !== values.length) {
+            valid = false;
+            diagnostics.push({
+              code: "invalid-graph-config-value",
+              severity: "error",
+              message: `${path}.${key} deve contenere stringhe non vuote e senza duplicati`
+            });
+          }
+        }
+        if (contextualClique.minimumSize !== undefined &&
+          (!Number.isSafeInteger(contextualClique.minimumSize) || (contextualClique.minimumSize as number) < 2)) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path}.minimumSize deve essere un intero sicuro maggiore o uguale a 2`
+          });
+        }
+      }
+    }
+    const validateNodeAttributeConstraints = (value: unknown, path: string) => {
+      if (!isRecord(value) || Object.keys(value).length === 0) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `${path} deve essere un oggetto non vuoto di alias e valori scalari`
+        });
+        return;
+      }
+      for (const [alias, attributeValue] of Object.entries(value)) {
+        if (!mappedNodeAttributeAliases.has(alias)) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path}.${alias} richiede un alias dichiarato in graphMapping.node.attributes`
+          });
+        }
+        if (!(typeof attributeValue === "string" || typeof attributeValue === "boolean" ||
+          (typeof attributeValue === "number" && Number.isFinite(attributeValue)))) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path}.${alias} deve essere una stringa, un numero finito o un booleano`
+          });
+        }
+      }
+    };
+    const validateEdgeAttributeConstraints = (value: unknown, path: string) => {
+      if (!isRecord(value) || Object.keys(value).length === 0) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `${path} deve essere un oggetto non vuoto di alias e valori scalari`
+        });
+        return;
+      }
+      for (const [alias, attributeValue] of Object.entries(value)) {
+        if (!mappedEdgeAttributeAliases.has(alias)) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path}.${alias} richiede un alias dichiarato in graphMapping.edge.attributes`
+          });
+        }
+        if (!(typeof attributeValue === "string" || typeof attributeValue === "boolean" ||
+          (typeof attributeValue === "number" && Number.isFinite(attributeValue)))) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `${path}.${alias} deve essere una stringa, un numero finito o un booleano`
+          });
+        }
+      }
+    };
+    if (graphAnalysis.motifCount !== undefined) {
+      const motifCount = asRecord(graphAnalysis.motifCount);
+      if (!isRecord(graphAnalysis.motifCount)) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.motifCount deve essere un oggetto"
+        });
+      }
+      inspectConfigRecord(motifCount, ["partitionSize", "maxDurationMs"], "graphAnalysis.motifCount");
+
+      const partitionSize = motifCount.partitionSize;
+      if (!Number.isInteger(partitionSize) ||
+        Number(partitionSize) < MIN_GRAPH_MOTIF_COUNT_PARTITION_SIZE ||
+        Number(partitionSize) > MAX_GRAPH_MOTIF_COUNT_PARTITION_SIZE) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `graphAnalysis.motifCount.partitionSize deve essere un intero fra ${MIN_GRAPH_MOTIF_COUNT_PARTITION_SIZE} e ${MAX_GRAPH_MOTIF_COUNT_PARTITION_SIZE}`
+        });
+      }
+
+      const maxDurationMs = motifCount.maxDurationMs;
+      if (maxDurationMs !== undefined &&
+        (!Number.isInteger(maxDurationMs) ||
+          Number(maxDurationMs) < MIN_GRAPH_MOTIF_COUNT_DURATION_MS ||
+          Number(maxDurationMs) > MAX_GRAPH_MOTIF_COUNT_DURATION_MS)) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `graphAnalysis.motifCount.maxDurationMs deve essere un intero fra ${MIN_GRAPH_MOTIF_COUNT_DURATION_MS} e ${MAX_GRAPH_MOTIF_COUNT_DURATION_MS}`
+        });
+      }
+    }
+    if (graphAnalysis.signedTriads !== undefined) {
+      const signedTriads = asRecord(graphAnalysis.signedTriads);
+      if (!isRecord(graphAnalysis.signedTriads)) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.signedTriads deve essere un oggetto"
+        });
+      }
+      inspectConfigRecord(signedTriads, ["attribute", "positiveValues", "negativeValues", "edgeTypes"], "graphAnalysis.signedTriads");
+
+      const attribute = typeof signedTriads.attribute === "string" ? signedTriads.attribute : "";
+      if (!attribute.trim()) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.signedTriads.attribute deve indicare un alias non vuoto"
+        });
+      } else if (!isRecord(rawEdgeMapping.attributes) ||
+        typeof rawEdgeMapping.attributes[attribute] !== "string" ||
+        rawEdgeMapping.attributes[attribute].trim() === "") {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: `graphAnalysis.signedTriads.attribute '${attribute}' deve essere mappato in graphMapping.edge.attributes`
+        });
+      }
+
+      if (rawEdgeMapping.direction !== "undirected") {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.signedTriads richiede graphMapping.edge.direction: 'undirected' esplicito"
+        });
+      }
+
+      if (signedTriads.edgeTypes !== undefined) {
+        const edgeTypes = signedTriads.edgeTypes;
+        if (typeof rawEdgeMapping.typeField !== "string" || rawEdgeMapping.typeField.trim() === "") {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: "graphAnalysis.signedTriads.edgeTypes richiede graphMapping.edge.typeField"
+          });
+        }
+        if (!Array.isArray(edgeTypes) || edgeTypes.length === 0 ||
+          edgeTypes.some((value) => typeof value !== "string" || value.trim() === "")) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: "graphAnalysis.signedTriads.edgeTypes deve contenere stringhe non vuote"
+          });
+        } else if (new Set(edgeTypes.map((value) => value.trim())).size !== edgeTypes.length) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: "graphAnalysis.signedTriads.edgeTypes non deve contenere duplicati"
+          });
+        }
+      }
+
+      const readPolarityValues = (key: "positiveValues" | "negativeValues"): GraphJsonScalar[] => {
+        const value = signedTriads[key];
+        if (!Array.isArray(value) || value.length === 0) {
+          valid = false;
+          diagnostics.push({
+            code: "invalid-graph-config-value",
+            severity: "error",
+            message: `graphAnalysis.signedTriads.${key} deve contenere almeno un valore scalare`
+          });
+          return [];
+        }
+        const seen = new Set<string>();
+        const values: GraphJsonScalar[] = [];
+        value.forEach((candidate, index) => {
+          const path = `graphAnalysis.signedTriads.${key}[${index}]`;
+          if (!(typeof candidate === "string" && candidate.trim() !== "") &&
+            !(typeof candidate === "number" && Number.isFinite(candidate)) &&
+            typeof candidate !== "boolean") {
+            valid = false;
+            diagnostics.push({
+              code: "invalid-graph-config-value",
+              severity: "error",
+              message: `${path} deve essere una stringa non vuota, un numero finito o un booleano`
+            });
+            return;
+          }
+          const signature = `${typeof candidate}:${JSON.stringify(candidate)}`;
+          if (seen.has(signature)) {
+            valid = false;
+            diagnostics.push({
+              code: "invalid-graph-config-value",
+              severity: "error",
+              message: `graphAnalysis.signedTriads.${key} non deve contenere valori duplicati`
+            });
+            return;
+          }
+          seen.add(signature);
+          values.push(candidate);
+        });
+        return values;
+      };
+      const positiveValues = readPolarityValues("positiveValues");
+      const negativeValues = readPolarityValues("negativeValues");
+      const positiveSignatures = new Set(positiveValues.map((value) => `${typeof value}:${JSON.stringify(value)}`));
+      if (negativeValues.some((value) => positiveSignatures.has(`${typeof value}:${JSON.stringify(value)}`))) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.signedTriads.positiveValues e negativeValues devono essere disgiunti"
+        });
+      }
+    }
     if (graphAnalysis.provenanceScenarios !== undefined) {
       const provenanceScenarios = asRecord(graphAnalysis.provenanceScenarios);
       if (!isRecord(graphAnalysis.provenanceScenarios)) {
@@ -1326,7 +1895,7 @@ export function normalizeGraphData(
           message: "graphAnalysis.provenanceScenarios deve essere un oggetto"
         });
       }
-      inspectConfigRecord(provenanceScenarios, ["scenarios", "unattributedEdges", "referenceMatching"], "graphAnalysis.provenanceScenarios");
+      inspectConfigRecord(provenanceScenarios, ["scenarios", "unattributedEdges", "referenceMatching", "worldAssumption"], "graphAnalysis.provenanceScenarios");
       if (!Array.isArray(provenanceScenarios.scenarios) || provenanceScenarios.scenarios.length === 0) {
         valid = false;
         diagnostics.push({
@@ -1350,6 +1919,15 @@ export function normalizeGraphData(
           code: "invalid-graph-config-value",
           severity: "error",
           message: "graphAnalysis.provenanceScenarios.referenceMatching deve essere 'any' oppure 'all'"
+        });
+      }
+      if (provenanceScenarios.worldAssumption !== undefined &&
+        provenanceScenarios.worldAssumption !== "finite-exhaustive-worlds") {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-graph-config-value",
+          severity: "error",
+          message: "graphAnalysis.provenanceScenarios.worldAssumption deve essere 'finite-exhaustive-worlds'"
         });
       }
       if (typeof rawEdgeMapping.provenanceField !== "string" || rawEdgeMapping.provenanceField.trim() === "") {
@@ -1474,10 +2052,22 @@ export function normalizeGraphData(
         }
         const roles = asRecord(motifRecord.roles);
         for (const [role, roleConfig] of Object.entries(roles)) {
-          inspectConfigRecord(roleConfig, ["nodeTypes"], `${path}.roles.${role}`);
+          inspectConfigRecord(roleConfig, ["nodeTypes", "attributes"], `${path}.roles.${role}`);
+          const roleRecord = asRecord(roleConfig);
+          if (roleRecord.attributes !== undefined) {
+            validateNodeAttributeConstraints(roleRecord.attributes, `${path}.roles.${role}.attributes`);
+          }
         }
-        inspectConfigRecordArray(motifRecord.edges, ["sourceRole", "targetRole", "edgeType"], `${path}.edges`);
+        inspectConfigRecordArray(motifRecord.edges, ["sourceRole", "targetRole", "edgeType", "attributes"], `${path}.edges`);
         inspectConfigRecordArray(motifRecord.absentEdges, ["sourceRole", "targetRole", "edgeType"], `${path}.absentEdges`);
+        if (Array.isArray(motifRecord.edges)) {
+          motifRecord.edges.forEach((edge, edgeIndex) => {
+            const edgeRecord = asRecord(edge);
+            if (edgeRecord.attributes !== undefined) {
+              validateEdgeAttributeConstraints(edgeRecord.attributes, `${path}.edges[${edgeIndex}].attributes`);
+            }
+          });
+        }
         if (Array.isArray(motifRecord.inducedEdgeTypes)) {
           motifRecord.inducedEdgeTypes.forEach((edgeType, edgeTypeIndex) => {
             if (typeof edgeType !== "string" || edgeType.trim() === "") {
@@ -1501,11 +2091,32 @@ export function normalizeGraphData(
             });
           }
         }
-        inspectConfigRecord(motifRecord.temporal, ["semantics", "strict"], `${path}.temporal`);
+        inspectConfigRecord(motifRecord.temporal, ["semantics", "strict", "maximumSpan"], `${path}.temporal`);
+        const motifTemporal = asRecord(motifRecord.temporal);
+        if (motifTemporal.maximumSpan !== undefined) {
+          const maximumSpan = asRecord(motifTemporal.maximumSpan);
+          inspectConfigRecord(motifTemporal.maximumSpan, ["value", "unit"], `${path}.temporal.maximumSpan`);
+          if (motifTemporal.semantics !== "orderedByStart" ||
+            typeof maximumSpan.value !== "number" || !Number.isSafeInteger(maximumSpan.value) ||
+            maximumSpan.value < 0 || maximumSpan.value > 2_147_483_647 ||
+            !isGraphTemporalMetricUnit(maximumSpan.unit)) {
+            valid = false;
+            diagnostics.push({
+              code: "invalid-graph-config-value",
+              severity: "error",
+              message: `${path}.temporal.maximumSpan richiede semantics: 'orderedByStart', value intero non negativo e unit tra milliseconds/seconds/minutes/hours/days`
+            });
+          }
+        }
       });
     }
     const communityConfig = asRecord(graphAnalysis.communities);
-    inspectConfigRecord(communityConfig, ["useEdgeWeights", "minCount", "maxCount", "mustLink", "cannotLink", "attributeBounds"], "graphAnalysis.communities");
+    inspectConfigRecord(communityConfig, ["useEdgeWeights", "resolution", "minCount", "maxCount", "diagnosisCosts", "mustLink", "cannotLink", "attributeBounds", "topologyCounterfactuals"], "graphAnalysis.communities");
+    inspectConfigRecord(
+      asRecord(communityConfig.diagnosisCosts),
+      ["minimumCommunityCount", "maximumCommunityCount", "mustLink", "cannotLink", "attributeBound"],
+      "graphAnalysis.communities.diagnosisCosts"
+    );
     const communityAttributeBounds = communityConfig.attributeBounds;
     if (Array.isArray(communityAttributeBounds)) {
       communityAttributeBounds.forEach((bound: unknown, index: number) => {
@@ -1516,12 +2127,38 @@ export function normalizeGraphData(
         );
       });
     }
+    const topologyCounterfactuals = asRecord(communityConfig.topologyCounterfactuals);
+    inspectConfigRecord(topologyCounterfactuals, ["edgeEdits"], "graphAnalysis.communities.topologyCounterfactuals");
+    if (Array.isArray(topologyCounterfactuals.edgeEdits)) {
+      topologyCounterfactuals.edgeEdits.forEach((edit: unknown, index: number) => {
+        if (!isRecord(edit)) return;
+        inspectConfigRecord(edit, edit.action === "add"
+          ? ["id", "action", "sourceNodeId", "targetNodeId", "cost", "weight"]
+          : ["id", "action", "edgeId", "cost"],
+        `graphAnalysis.communities.topologyCounterfactuals.edgeEdits[${index}]`);
+      });
+    }
+    const topologyError = validateCommunityTopologyCounterfactualConfig(
+      communityConfig.topologyCounterfactuals,
+      communityConfig.useEdgeWeights === true
+    );
+    if (topologyError) {
+      valid = false;
+      diagnostics.push({
+        code: "invalid-graph-config-value",
+        severity: "error",
+        message: topologyError
+      });
+    }
     const counterfactuals = asRecord(graphAnalysis.counterfactuals);
     inspectConfigRecord(counterfactuals, ["edgeAdditions"], "graphAnalysis.counterfactuals");
     if (Array.isArray(counterfactuals.edgeAdditions)) {
       counterfactuals.edgeAdditions.forEach((candidate, index) => {
         const path = `graphAnalysis.counterfactuals.edgeAdditions[${index}]`;
-        inspectConfigRecord(candidate, ["id", "sourceNodeId", "targetNodeId", "edgeType", "cost", "validity"], path);
+        inspectConfigRecord(candidate, ["id", "sourceNodeId", "targetNodeId", "edgeType", "cost", "attributes", "validity"], path);
+        if (isRecord(candidate) && candidate.attributes !== undefined) {
+          validateEdgeAttributeConstraints(candidate.attributes, `${path}.attributes`);
+        }
         inspectConfigRecord(asRecord(candidate).validity, ["from", "to"], `${path}.validity`);
       });
     }
@@ -1611,7 +2248,7 @@ export function normalizeGraphData(
         message: "graphMapping.node.attributes deve associare nomi a percorsi JSON"
       });
     } else {
-      nodeMapping.attributes = {};
+      const attributeMappings: Array<[string, string]> = [];
       for (const [name, value] of Object.entries(rawNodeMapping.attributes)) {
         if (typeof value !== "string" || value.trim() === "") {
           valid = false;
@@ -1622,8 +2259,9 @@ export function normalizeGraphData(
           });
           continue;
         }
-        nodeMapping.attributes[name] = value.trim();
+        attributeMappings.push([name, value.trim()]);
       }
+      nodeMapping.attributes = Object.fromEntries(attributeMappings);
     }
   }
 
@@ -1652,7 +2290,7 @@ export function normalizeGraphData(
         message: "graphMapping.edge.attributes deve associare nomi a percorsi JSON"
       });
     } else {
-      edgeMapping.attributes = {};
+      const attributeMappings: Array<[string, string]> = [];
       for (const [name, value] of Object.entries(rawEdgeMapping.attributes)) {
         if (typeof value !== "string" || value.trim() === "") {
           valid = false;
@@ -1663,8 +2301,9 @@ export function normalizeGraphData(
           });
           continue;
         }
-        edgeMapping.attributes[name] = value.trim();
+        attributeMappings.push([name, value.trim()]);
       }
+      edgeMapping.attributes = Object.fromEntries(attributeMappings);
     }
   }
 
@@ -1689,13 +2328,26 @@ export function normalizeGraphData(
       if (mappingEnabled) {
         rejectUnknownGraphProperties(
           asRecord(rawEdgeMapping.validity),
-          ["fromField", "toField"],
+          ["fromField", "toField", "numericUnit"],
           "graphMapping.edge.validity"
         );
       }
+      if (rawEdgeMapping.validity.numericUnit !== undefined &&
+        !isGraphTemporalMetricUnit(rawEdgeMapping.validity.numericUnit)) {
+        valid = false;
+        diagnostics.push({
+          code: "invalid-edge-validity-mapping",
+          severity: "error",
+          message: "graphMapping.edge.validity.numericUnit deve essere milliseconds, seconds, minutes, hours oppure days"
+        });
+      }
       edgeMapping.validity = {
         fromField: readPath(rawEdgeMapping.validity, "fromField", "graphMapping.edge.validity.fromField"),
-        toField: readPath(rawEdgeMapping.validity, "toField", "graphMapping.edge.validity.toField")
+        toField: readPath(rawEdgeMapping.validity, "toField", "graphMapping.edge.validity.toField"),
+        ...(rawEdgeMapping.validity.numericUnit !== undefined &&
+          isGraphTemporalMetricUnit(rawEdgeMapping.validity.numericUnit)
+          ? { numericUnit: rawEdgeMapping.validity.numericUnit as GraphTemporalMetricUnit }
+          : {})
       };
       if (!edgeMapping.validity.fromField || !edgeMapping.validity.toField) {
         valid = false;
@@ -1834,7 +2486,7 @@ export function normalizeGraphData(
     const mappedGroups = mappingEnabled
       ? mappedStrings(node, nodeMapping.groupFields)
       : [];
-    const mappedAttributes: Record<string, unknown> = {};
+    const mappedAttributeEntries: Array<[string, unknown]> = [];
 
     const mappedRemovalCost = mappingEnabled
       ? firstMappedValue(node, nodeMapping.removalCostField, undefined)
@@ -1843,9 +2495,10 @@ export function normalizeGraphData(
     if (mappingEnabled && nodeMapping.attributes) {
       for (const [name, fieldPath] of Object.entries(nodeMapping.attributes)) {
         const value = firstMappedValue(node, fieldPath, undefined);
-        if (value !== undefined) mappedAttributes[name] = value;
+        if (value !== undefined) mappedAttributeEntries.push([name, value]);
       }
     }
+    const mappedAttributes: Record<string, unknown> = Object.fromEntries(mappedAttributeEntries);
 
     const analysis: Record<string, unknown> = {};
     if (mappingEnabled && nodeMapping.typeField) analysis.type = type;
@@ -2062,11 +2715,12 @@ export function normalizeGraphData(
       }
 
       if (edgeMapping.attributes) {
-        const mappedAttributes: Record<string, unknown> = {};
+        const mappedAttributeEntries: Array<[string, unknown]> = [];
         for (const [name, fieldPath] of Object.entries(edgeMapping.attributes)) {
           const value = firstMappedValue(edge, fieldPath, undefined);
-          if (value !== undefined) mappedAttributes[name] = value;
+          if (value !== undefined) mappedAttributeEntries.push([name, value]);
         }
+        const mappedAttributes: Record<string, unknown> = Object.fromEntries(mappedAttributeEntries);
         if (Object.keys(mappedAttributes).length > 0) analysis.attributes = mappedAttributes;
       }
     }
@@ -2209,6 +2863,9 @@ export function normalizeGraphData(
     schemaVersion: mappingEnabled ? 2 : 1,
     direction,
     identity,
+    ...(edgeMapping.validity?.numericUnit
+      ? { temporalNumericUnit: edgeMapping.validity.numericUnit }
+      : {}),
     capabilities,
     diagnostics,
     valid: valid && !diagnostics.some((diagnostic) => diagnostic.severity === "error")

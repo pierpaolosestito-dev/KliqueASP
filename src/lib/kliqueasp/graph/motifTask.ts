@@ -3,7 +3,10 @@ import {
   parseGraphTimeValue,
   type AspTemporalEncoding,
   type GraphDirection,
-  type GraphMotifTemplate
+  type GraphJsonScalar,
+  type GraphMotifTemplate,
+  type GraphTemporalMetricUnit,
+  serializeAspRepairValue
 } from "./graphModel.ts";
 
 export interface CompiledMotifTemplate {
@@ -12,10 +15,13 @@ export interface CompiledMotifTemplate {
   temporal: boolean;
   temporalSemantics?: "coValid" | "orderedByStart";
   strictTemporalOrder?: boolean;
+  maximumSpan?: { value: number; unit: GraphTemporalMetricUnit };
+  metricTimeDomain?: "integer" | "date";
+  metricNumericTimeUnit?: GraphTemporalMetricUnit;
   nearMatch: boolean;
   nearMatchTemporal?: boolean;
-  roles: Array<{ name: string; nodeTypes: string[] }>;
-  edges: Array<{ sourceRole: string; targetRole: string; edgeType: string }>;
+  roles: Array<{ name: string; nodeTypes: string[]; attributes?: Record<string, GraphJsonScalar> }>;
+  edges: Array<{ sourceRole: string; targetRole: string; edgeType: string; attributes?: Record<string, GraphJsonScalar> }>;
   absentEdges: Array<{ sourceRole: string; targetRole: string; edgeType: string }>;
   inducedEdgeTypes: string[];
   closedWorld: boolean;
@@ -26,12 +32,14 @@ export interface TypedMotifMatch {
   templateId: string;
   label: string;
   timeValue?: number;
-  roles: Record<string, { nodeId: string; sourceId: string }>;
+  maximumSpan?: { value: number; unit: GraphTemporalMetricUnit };
+  roles: Record<string, { nodeId: string; sourceId: string; requiredAttributes?: Record<string, GraphJsonScalar> }>;
   nodeIds: string[];
   supportingEdges: Array<{
     sourceRole: string;
     targetRole: string;
     edgeType: string;
+    attributes?: Record<string, GraphJsonScalar>;
     edgeIds: string[];
     startTimeValue?: number;
   }>;
@@ -43,10 +51,10 @@ export interface TypedMotifMatch {
 export interface TypedMotifNearMatch {
   templateId: string;
   label: string;
-  roles: Record<string, { nodeId: string; sourceId: string }>;
+  roles: Record<string, { nodeId: string; sourceId: string; requiredAttributes?: Record<string, GraphJsonScalar> }>;
   missingRoles: string[];
-  missingPatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string }>;
-  unresolvedPatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string }>;
+  missingPatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string; attributes?: Record<string, GraphJsonScalar> }>;
+  unresolvedPatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string; attributes?: Record<string, GraphJsonScalar> }>;
   violatedAbsencePatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string; edgeIds: string[] }>;
   unresolvedAbsencePatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string }>;
   supportingEdges: Array<{
@@ -54,10 +62,13 @@ export interface TypedMotifNearMatch {
     sourceRole: string;
     targetRole: string;
     edgeType: string;
+    attributes?: Record<string, GraphJsonScalar>;
     edgeIds: string[];
   }>;
   temporalEvidence?: {
     semantics: "coValid" | "orderedByStart";
+    maximumSpan?: { value: number; unit: GraphTemporalMetricUnit };
+    spanViolation?: boolean;
     timeValue?: number;
     unavailablePatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string }>;
     inactivePatterns: Array<{ index: number; sourceRole: string; targetRole: string; edgeType: string }>;
@@ -67,6 +78,7 @@ export interface TypedMotifNearMatch {
       sourceRole: string;
       targetRole: string;
       edgeType: string;
+      attributes?: Record<string, GraphJsonScalar>;
       edgeIds: string[];
       startTimeValue?: number;
     }>;
@@ -80,6 +92,7 @@ export interface TypedMotifEdgeAdditionCandidate {
   sourceNode: number;
   targetNode: number;
   edgeType: string;
+  attributes?: Record<string, GraphJsonScalar>;
   cost: number;
   recordIndex: number;
   validity?: { from: number; to: number };
@@ -95,6 +108,7 @@ export interface TypedMotifCounterfactual {
     sourceNodeId: string;
     targetNodeId: string;
     edgeType: string;
+    attributes?: Record<string, GraphJsonScalar>;
     cost: number;
     patternIndexes: number[];
     validity?: { from: number; to: number };
@@ -127,13 +141,58 @@ function requireNames(value: unknown, path: string): string[] {
   return names;
 }
 
+function requireScalarAttributes(value: unknown, path: string): Record<string, GraphJsonScalar> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new TypeError(`${path} deve essere un oggetto non vuoto di alias e valori scalari`);
+  }
+  const attributes: Array<[string, GraphJsonScalar]> = [];
+  for (const alias of Object.keys(value).sort()) {
+    requireName(alias, `${path}.<alias>`);
+    const attributeValue = value[alias];
+    if (!(typeof attributeValue === "string" || typeof attributeValue === "boolean" ||
+      (typeof attributeValue === "number" && Number.isFinite(attributeValue)))) {
+      throw new TypeError(`${path}.${alias} deve essere una stringa, un numero finito o un booleano`);
+    }
+    attributes.push([alias, attributeValue]);
+  }
+  return Object.fromEntries(attributes);
+}
+
+function motifEdgeAttributeBody(attributes: Record<string, GraphJsonScalar> | undefined, edgeVariable: string): string[] {
+  return Object.entries(attributes ?? {}).map(([alias, value]) =>
+    `edge_attribute(${edgeVariable},${escapeAspString(alias)},${serializeAspRepairValue(value)})`
+  );
+}
+
+function motifNodeAttributeBody(attributes: Record<string, GraphJsonScalar> | undefined, nodeVariable: string): string[] {
+  return Object.entries(attributes ?? {}).map(([alias, value]) =>
+    `node_attribute(${nodeVariable},${escapeAspString(alias)},${serializeAspRepairValue(value)})`
+  );
+}
+
+function motifCandidateRules(
+  roles: Array<{ name: string; nodeTypes: string[]; attributes?: Record<string, GraphJsonScalar> }>
+): string[] {
+  return roles.flatMap((role, index) => {
+    const roleId = index + 1;
+    const attributeConditions = motifNodeAttributeBody(role.attributes, "N")
+      .map((condition) => `, ${condition}`)
+      .join("");
+    return [
+      `motif_candidate(${roleId},N) :- motif_role_type(${roleId},T), node_type(N,T), candidate_node(N)${attributeConditions}.`
+    ];
+  });
+}
+
 /** Compiles a typed role-based motif with positive edges and optional closed-world absences. */
 export function buildTypedMotifProgram(
   templateInput: GraphMotifTemplate | unknown,
   direction: GraphDirection,
   group = "",
   nearMatch = false,
-  nearMatchTemporal = false
+  nearMatchTemporal = false,
+  temporalEncoding?: AspTemporalEncoding
 ): CompiledMotifTemplate {
   if (nearMatchTemporal && !nearMatch) {
     throw new TypeError("Il why-not temporale richiede la modalità near-match");
@@ -150,6 +209,7 @@ export function buildTypedMotifProgram(
   let temporal = false;
   let temporalSemantics: CompiledMotifTemplate["temporalSemantics"];
   let strictTemporalOrder = false;
+  let maximumSpan: CompiledMotifTemplate["maximumSpan"];
   if (temporalInput !== undefined) {
     if (!isRecord(temporalInput)) {
       throw new TypeError("motif.temporal deve essere un oggetto JSON");
@@ -163,12 +223,36 @@ export function buildTypedMotifProgram(
       if (temporalInput.strict !== undefined && typeof temporalInput.strict !== "boolean") {
         throw new TypeError("motif.temporal.strict deve essere un booleano");
       }
+      if (temporalInput.maximumSpan !== undefined) {
+        if (!isRecord(temporalInput.maximumSpan)) {
+          throw new TypeError("motif.temporal.maximumSpan deve essere un oggetto con value e unit");
+        }
+        const value = temporalInput.maximumSpan.value;
+        const unit = temporalInput.maximumSpan.unit;
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647 ||
+          !["milliseconds", "seconds", "minutes", "hours", "days"].includes(String(unit))) {
+          throw new TypeError("motif.temporal.maximumSpan richiede value intero non negativo e unit tra milliseconds/seconds/minutes/hours/days");
+        }
+        maximumSpan = { value, unit: unit as GraphTemporalMetricUnit };
+      }
       temporalSemantics = "orderedByStart";
       strictTemporalOrder = temporalInput.strict === true;
     } else {
       throw new TypeError("motif.temporal.semantics deve essere 'coValid' oppure 'orderedByStart'");
     }
+    if (temporalInput.maximumSpan !== undefined && temporalInput.semantics !== "orderedByStart") {
+      throw new TypeError("motif.temporal.maximumSpan si applica soltanto a semantics: 'orderedByStart'");
+    }
     temporal = true;
+  }
+  if (maximumSpan && !temporalEncoding?.metricAvailable(maximumSpan.unit)) {
+    const numericUnitHint = temporalEncoding?.domain === "integer" && !temporalEncoding.numericUnit
+      ? "; dichiarare graphMapping.edge.validity.numericUnit per i timestamp numerici"
+      : "";
+    throw new RangeError(`motif.temporal.maximumSpan non è applicabile: i tempi del grafo non sono rappresentabili esattamente in ${maximumSpan.unit}${numericUnitHint}`);
+  }
+  if (maximumSpan && nearMatch && !nearMatchTemporal) {
+    throw new TypeError("Un motivo con maximumSpan richiede la diagnosi why-not temporale");
   }
   if (nearMatchTemporal && !temporal) {
     throw new TypeError("Il why-not temporale richiede un template con semantica temporale");
@@ -180,9 +264,11 @@ export function buildTypedMotifProgram(
   const roles = Object.entries(templateInput.roles).map(([name, roleInput]) => {
     const roleName = requireName(name, "motif.roles.<role>");
     if (!isRecord(roleInput)) throw new TypeError(`motif.roles.${roleName} deve essere un oggetto`);
+    const attributes = requireScalarAttributes(roleInput.attributes, `motif.roles.${roleName}.attributes`);
     return {
       name: roleName,
-      nodeTypes: requireNames(roleInput.nodeTypes, `motif.roles.${roleName}.nodeTypes`)
+      nodeTypes: requireNames(roleInput.nodeTypes, `motif.roles.${roleName}.nodeTypes`),
+      ...(attributes ? { attributes } : {})
     };
   });
   if (new Set(roles.map((role) => role.name)).size !== roles.length) {
@@ -201,7 +287,13 @@ export function buildTypedMotifProgram(
     if (!roleIndex.has(sourceRole) || !roleIndex.has(targetRole)) {
       throw new TypeError(`motif.edges[${index}] riferisce un ruolo non dichiarato`);
     }
-    return { sourceRole, targetRole, edgeType };
+    const attributes = requireScalarAttributes(edgeInput.attributes, `motif.edges[${index}].attributes`);
+    return {
+      sourceRole,
+      targetRole,
+      edgeType,
+      ...(attributes ? { attributes } : {})
+    };
   });
   if (templateInput.closedWorld !== undefined && typeof templateInput.closedWorld !== "boolean") {
     throw new TypeError("motif.closedWorld deve essere un booleano");
@@ -250,6 +342,8 @@ export function buildTypedMotifProgram(
       : [sourceRole, targetRole];
     return JSON.stringify([...endpoints, edgeType]);
   };
+  const edgeConditionSignature = (sourceRole: string, targetRole: string, edgeType: string, attributes?: Record<string, GraphJsonScalar>) =>
+    JSON.stringify([edgeSignature(sourceRole, targetRole, edgeType), attributes ?? {}]);
   const edgeSignatures = edges.map((edge) => edgeSignature(edge.sourceRole, edge.targetRole, edge.edgeType));
   if (new Set(edgeSignatures).size !== edgeSignatures.length) {
     throw new TypeError("motif.edges contiene relazioni duplicate; dichiarare esplicitamente una semantica di molteplicità");
@@ -290,11 +384,15 @@ export function buildTypedMotifProgram(
     const firstRole = roles.find((role) => role.name === roleGroup[0]);
     if (!firstRole) throw new TypeError(`Ruolo simmetrico non dichiarato: ${roleGroup[0]}`);
     const firstTypes = [...firstRole.nodeTypes].sort().join("\u0000");
+    const firstAttributes = JSON.stringify(firstRole.attributes ?? {});
     for (const roleName of roleGroup) {
       const role = roles.find((candidate) => candidate.name === roleName);
       if (!role) throw new TypeError(`Ruolo simmetrico non dichiarato: ${roleName}`);
       if ([...role.nodeTypes].sort().join("\u0000") !== firstTypes) {
         throw new TypeError(`I ruoli simmetrici devono consentire gli stessi tipi di nodo (${roleName})`);
+      }
+      if (JSON.stringify(role.attributes ?? {}) !== firstAttributes) {
+        throw new TypeError(`I ruoli simmetrici devono richiedere gli stessi attributi di nodo (${roleName})`);
       }
       if (usedSymmetryRoles.has(roleName)) {
         throw new TypeError(`Il ruolo '${roleName}' compare in più gruppi di simmetria`);
@@ -309,7 +407,9 @@ export function buildTypedMotifProgram(
           ? firstRole
           : roleName;
       const swappedSignaturesInOrder = edges.map((edge) => {
-        return edgeSignature(swapRole(edge.sourceRole), swapRole(edge.targetRole), edge.edgeType);
+        return edgeConditionSignature(
+          swapRole(edge.sourceRole), swapRole(edge.targetRole), edge.edgeType, edge.attributes
+        );
       });
       const swappedAbsentSignatures = absentEdges.map((edge) =>
         edgeSignature(swapRole(edge.sourceRole), swapRole(edge.targetRole), edge.edgeType)
@@ -321,9 +421,9 @@ export function buildTypedMotifProgram(
             ...swappedAbsentSignatures.map((signature) => `absent:${signature}`)
           ].sort();
       const actualSignatures = temporalSemantics === "orderedByStart"
-        ? edgeSignatures
+        ? edges.map((edge) => edgeConditionSignature(edge.sourceRole, edge.targetRole, edge.edgeType, edge.attributes))
         : [
-            ...edgeSignatures.map((signature) => `present:${signature}`),
+            ...edges.map((edge) => `present:${edgeConditionSignature(edge.sourceRole, edge.targetRole, edge.edgeType, edge.attributes)}`),
             ...absentEdgeSignatures.map((signature) => `absent:${signature}`)
           ].sort();
       if (JSON.stringify(actualSignatures) !== JSON.stringify(swappedSignatures)) {
@@ -427,20 +527,35 @@ export function buildTypedMotifProgram(
         ...edges.slice(0, -1).map((_, index) => `motif_adjacent(${index + 1},${index + 2}).`),
         `motif_order_violation(I,J) :- motif_adjacent(I,J), motif_diagnostic_support(I,_,T), motif_diagnostic_support(J,_,S), T ${strictTemporalOrder ? ">=" : ">"} S.`,
         "#minimize { 1@1,I,J : motif_order_violation(I,J); 1@1,I : motif_temporal_unavailable(I) }.",
+        ...(maximumSpan ? [
+          `motif_temporal_span_violation :- motif_diagnostic_support(1,E1,_), motif_diagnostic_support(${edges.length},E2,_), edge_valid_from_metric(E1,${escapeAspString(maximumSpan.unit)},M1), edge_valid_from_metric(E2,${escapeAspString(maximumSpan.unit)},M2), M2 - M1 > ${maximumSpan.value}.`,
+          "#minimize { 1@1,span : motif_temporal_span_violation }.",
+          "#show motif_temporal_span_violation/0."
+        ] : []),
         "#show motif_diagnostic_support/3.",
         "#show motif_temporal_unavailable/1.",
         "#show motif_order_violation/2."
       ]
       : [];
+  const temporalMetricRules = maximumSpan
+    ? [
+      `edge_valid_from_metric(E,${escapeAspString(maximumSpan.unit)},M) :- edge_valid_from(E,T), asp_time_metric(${escapeAspString(maximumSpan.unit)},T,M).`,
+      ...(nearMatchTemporal ? [] : [
+        `:- motif_ordered_support(1,E1,_), motif_ordered_support(${edges.length},E2,_), edge_valid_from_metric(E1,${escapeAspString(maximumSpan.unit)},M1), edge_valid_from_metric(E2,${escapeAspString(maximumSpan.unit)},M2), M2 - M1 > ${maximumSpan.value}.`
+      ])
+    ]
+    : [];
   const rules = [
     ...domainRules,
-    "motif_candidate(R,N) :- motif_role_type(R,T), node_type(N,T), candidate_node(N).",
+    ...motifCandidateRules(roles),
     ...motifRules,
     ":- motif_match(R1,N), motif_match(R2,N), R1 < R2.",
     ...symmetryRules,
     ...nearMatchSymmetryRules,
     ...directionRules,
-    "motif_edge_witness(I,E) :- motif_edge(I,R1,R2,T), motif_match(R1,U), motif_match(R2,V), motif_edge_relation(E,U,V,T).",
+    ...edges.map((edge, index) =>
+      `motif_edge_witness(${index + 1},E) :- motif_edge(${index + 1},${roleIndex.get(edge.sourceRole)},${roleIndex.get(edge.targetRole)},${escapeAspString(edge.edgeType)}), motif_match(${roleIndex.get(edge.sourceRole)},U), motif_match(${roleIndex.get(edge.targetRole)},V), motif_edge_relation(E,U,V,${escapeAspString(edge.edgeType)})${motifEdgeAttributeBody(edge.attributes, "E").map((condition) => `, ${condition}`).join("")}.`
+    ),
     "motif_edge_satisfied(I) :- motif_edge_witness(I,_).",
     "motif_absent_edge_violation_witness(I,E) :- motif_absent_edge(I,R1,R2,T), motif_match(R1,U), motif_match(R2,V), motif_edge_relation(E,U,V,T).",
     "motif_absent_edge_violated(I) :- motif_absent_edge_violation_witness(I,_).",
@@ -462,7 +577,8 @@ export function buildTypedMotifProgram(
       ]),
     "#show motif_match/2.",
     ...temporalRules,
-    ...temporalNearMatchRules
+    ...temporalNearMatchRules,
+    ...temporalMetricRules
   ];
 
   return {
@@ -471,6 +587,13 @@ export function buildTypedMotifProgram(
     temporal,
     temporalSemantics,
     strictTemporalOrder,
+    maximumSpan,
+    ...(maximumSpan && temporalEncoding?.domain
+      ? { metricTimeDomain: temporalEncoding.domain }
+      : {}),
+    ...(maximumSpan && temporalEncoding?.numericUnit
+      ? { metricNumericTimeUnit: temporalEncoding.numericUnit }
+      : {}),
     nearMatch,
     nearMatchTemporal,
     roles,
@@ -482,22 +605,215 @@ export function buildTypedMotifProgram(
   };
 }
 
+/** Builds an exact aggregate query without returning one solver model per motif instance. */
+export interface TypedMotifCountProgramOptions {
+  /** Restricts the first ordered pattern to these ASP-encoded valid-from values for disjoint batching. */
+  firstPatternStartValues?: readonly number[];
+  /** Restricts the first ordered pattern to these ASP edge-record indexes for disjoint batching. */
+  firstPatternEdgeIndexes?: readonly number[];
+  /** Restricts the first role to these ASP node indexes for disjoint batching. */
+  firstRoleNodeIndexes?: readonly number[];
+  /** Metric encoding shared with the serialized graph facts. */
+  temporalEncoding?: AspTemporalEncoding;
+}
+
+export function buildTypedMotifCountProgram(
+  templateInput: GraphMotifTemplate | unknown,
+  direction: GraphDirection,
+  group = "",
+  options: TypedMotifCountProgramOptions = {}
+): { template: CompiledMotifTemplate; program: string } {
+  const template = buildTypedMotifProgram(templateInput, direction, group, false, false, options.temporalEncoding);
+  const firstPatternStartValues = options.firstPatternStartValues === undefined
+    ? undefined
+    : [...new Set(options.firstPatternStartValues)];
+  const firstPatternEdgeIndexes = options.firstPatternEdgeIndexes === undefined
+    ? undefined
+    : [...new Set(options.firstPatternEdgeIndexes)];
+  const firstRoleNodeIndexes = options.firstRoleNodeIndexes === undefined
+    ? undefined
+    : [...new Set(options.firstRoleNodeIndexes)];
+  if (firstPatternStartValues !== undefined) {
+    if (template.temporalSemantics !== "orderedByStart") {
+      throw new TypeError("Il partizionamento del conteggio richiede temporal.semantics: 'orderedByStart'");
+    }
+    if (firstPatternStartValues.length === 0 || firstPatternStartValues.some((value) =>
+      !Number.isSafeInteger(value) || value < -2_147_483_648 || value > 2_147_483_647
+    )) {
+      throw new TypeError("firstPatternStartValues deve contenere valori ASP interi validi e non vuoti");
+    }
+  }
+  if (firstPatternEdgeIndexes !== undefined) {
+    if (template.temporalSemantics !== "orderedByStart") {
+      throw new TypeError("Il partizionamento per record del conteggio richiede temporal.semantics: 'orderedByStart'");
+    }
+    if (firstPatternEdgeIndexes.length === 0 || firstPatternEdgeIndexes.some((value) =>
+      !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647
+    )) {
+      throw new TypeError("firstPatternEdgeIndexes deve contenere indici ASP di arco validi e non vuoti");
+    }
+  }
+  if (firstRoleNodeIndexes !== undefined && (firstRoleNodeIndexes.length === 0 || firstRoleNodeIndexes.some((value) =>
+    !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647
+  ))) {
+    throw new TypeError("firstRoleNodeIndexes deve contenere indici ASP di nodo validi e non vuoti");
+  }
+  const roleIndex = new Map(template.roles.map((role, index) => [role.name, index + 1]));
+  const roleVariables = template.roles.map((_, index) => `N${index + 1}`);
+  const facts: string[] = [];
+  template.roles.forEach((role, index) => {
+    const roleId = index + 1;
+    facts.push(`motif_role(${roleId}).`);
+    for (const nodeType of role.nodeTypes) {
+      facts.push(`motif_role_type(${roleId},${escapeAspString(nodeType)}).`);
+    }
+  });
+  template.edges.forEach((edge, index) => {
+    facts.push(`motif_edge(${index + 1},${roleIndex.get(edge.sourceRole)},${roleIndex.get(edge.targetRole)},${escapeAspString(edge.edgeType)}).`);
+  });
+  template.absentEdges.forEach((edge, index) => {
+    facts.push(`motif_absent_edge(${index + 1},${roleIndex.get(edge.sourceRole)},${roleIndex.get(edge.targetRole)},${escapeAspString(edge.edgeType)}).`);
+  });
+  for (const value of firstPatternStartValues ?? []) {
+    facts.push(`motif_count_first_start(${value}).`);
+  }
+  for (const edgeIndex of firstPatternEdgeIndexes ?? []) {
+    facts.push(`motif_count_first_edge(${edgeIndex}).`);
+  }
+  for (const nodeIndex of firstRoleNodeIndexes ?? []) {
+    facts.push(`motif_count_first_role(${nodeIndex}).`);
+  }
+
+  const body = [
+    ...template.roles.flatMap((_, index) => [
+      `motif_candidate(${index + 1},${roleVariables[index]})`,
+      ...(index === 0 && firstRoleNodeIndexes !== undefined
+        ? [`motif_count_first_role(${roleVariables[index]})`]
+        : [])
+    ]),
+    ...roleVariables.flatMap((first, index) => roleVariables.slice(index + 1).map((second) => `${first} != ${second}`))
+  ];
+
+  // Reuse the canonical ordering constraints already validated by the normal template compiler.
+  for (const line of template.program.split("\n")) {
+    const symmetryMatch = /^:- motif_match\((\d+),N1\), motif_match\((\d+),N2\), N1 > N2\.$/.exec(line);
+    if (symmetryMatch) {
+      body.push(`N${symmetryMatch[1]} <= N${symmetryMatch[2]}`);
+    }
+  }
+
+  const edgeVariables = template.edges.map((_, index) => `E${index + 1}`);
+  const timeVariables = template.edges.map((_, index) => `T${index + 1}`);
+  if (firstPatternStartValues !== undefined) {
+    body.push(`motif_count_first_start(${timeVariables[0]})`);
+  }
+  if (firstPatternEdgeIndexes !== undefined) {
+    body.push(`motif_count_first_edge(${edgeVariables[0]})`);
+  }
+  const temporalDomainRules: string[] = [];
+  if (template.temporalSemantics === "coValid") {
+    temporalDomainRules.push("motif_candidate_time(T) :- edge_valid_from(_,T).");
+    body.push("motif_candidate_time(T)");
+  }
+  template.edges.forEach((edge, index) => {
+    const source = `N${roleIndex.get(edge.sourceRole)}`;
+    const target = `N${roleIndex.get(edge.targetRole)}`;
+    body.push(`motif_edge_relation(${edgeVariables[index]},${source},${target},${escapeAspString(edge.edgeType)})`);
+    body.push(...motifEdgeAttributeBody(edge.attributes, edgeVariables[index]));
+    if (template.temporalSemantics === "coValid") {
+      body.push(`edge_valid_from(${edgeVariables[index]},From${index + 1})`);
+      body.push(`edge_valid_to(${edgeVariables[index]},To${index + 1})`);
+      body.push(`From${index + 1} <= T`);
+      body.push(`T <= To${index + 1}`);
+    } else if (template.temporalSemantics === "orderedByStart") {
+      body.push(`edge_valid_from(${edgeVariables[index]},${timeVariables[index]})`);
+      body.push(`edge_valid_to(${edgeVariables[index]},To${index + 1})`);
+      body.push(`${timeVariables[index]} <= To${index + 1}`);
+    }
+  });
+  if (template.maximumSpan) {
+    const unit = escapeAspString(template.maximumSpan.unit);
+    body.push(`edge_valid_from_metric(E1,${unit},MetricFirst)`);
+    body.push(`edge_valid_from_metric(E${template.edges.length},${unit},MetricLast)`);
+    body.push(`MetricLast - MetricFirst <= ${template.maximumSpan.value}`);
+  }
+  for (const edge of template.absentEdges) {
+    const source = `N${roleIndex.get(edge.sourceRole)}`;
+    const target = `N${roleIndex.get(edge.targetRole)}`;
+    body.push(`not motif_edge_relation(_,${source},${target},${escapeAspString(edge.edgeType)})`);
+  }
+  if (template.temporalSemantics === "orderedByStart") {
+    for (let first = 0; first < timeVariables.length; first += 1) {
+      for (let second = first + 1; second < timeVariables.length; second += 1) {
+        const operator = template.strictTemporalOrder ? "<" : "<=";
+        body.push(`${timeVariables[first]} ${operator} ${timeVariables[second]}`);
+      }
+    }
+  }
+
+  const countedTuple = template.temporalSemantics === "orderedByStart"
+    ? [...roleVariables, ...edgeVariables.flatMap((edge, index) => [edge, timeVariables[index]])]
+    : roleVariables;
+  const commonProgram = [
+    ...facts,
+    ...(group
+      ? [`candidate_node(N) :- node(N), group(N, ${escapeAspString(group)}).`]
+      : ["candidate_node(N) :- node(N)."]),
+    ...motifCandidateRules(template.roles),
+    ...(direction === "undirected"
+      ? [
+          "motif_edge_relation(E,U,V,T) :- edge_type(E,T), edge_source(E,U), edge_target(E,V).",
+          "motif_edge_relation(E,U,V,T) :- edge_type(E,T), edge_source(E,V), edge_target(E,U)."
+        ]
+      : ["motif_edge_relation(E,U,V,T) :- edge_type(E,T), edge_source(E,U), edge_target(E,V)."]),
+    ...(template.maximumSpan
+      ? [`edge_valid_from_metric(E,${escapeAspString(template.maximumSpan.unit)},M) :- edge_valid_from(E,T), asp_time_metric(${escapeAspString(template.maximumSpan.unit)},T,M).`]
+      : [])
+  ];
+
+  const program = [
+    ...commonProgram,
+    ...temporalDomainRules,
+    `motif_count(N) :- N = #count { ${countedTuple.join(",")} : ${body.join(", ")} }.`,
+    "#show motif_count/1."
+  ].join("\n");
+  return { template, program };
+}
+
+/** Parses the single exact count emitted by buildTypedMotifCountProgram. */
+export function parseTypedMotifCount(witnesses: unknown): string | undefined {
+  const counts = new Set<string>();
+  for (const witness of Array.isArray(witnesses) ? witnesses : []) {
+    const value = witness !== null && typeof witness === "object"
+      ? (witness as Record<string, unknown>).Value
+      : undefined;
+    for (const atom of Array.isArray(value) ? value : []) {
+      if (typeof atom !== "string") continue;
+      const match = /^motif_count\((\d+)\)$/.exec(atom);
+      if (match) counts.add(match[1]);
+    }
+  }
+  return counts.size === 1 ? [...counts][0] : undefined;
+}
+
 /** Finds one lexicographically best partial role assignment and its missing structural patterns. */
 export function buildTypedMotifNearMatchProgram(
   templateInput: GraphMotifTemplate | unknown,
   direction: GraphDirection,
-  group = ""
+  group = "",
+  temporalEncoding?: AspTemporalEncoding
 ): CompiledMotifTemplate {
-  return buildTypedMotifProgram(templateInput, direction, group, true);
+  return buildTypedMotifProgram(templateInput, direction, group, true, false, temporalEncoding);
 }
 
 /** Finds the best partial temporal motif match and reports the chosen temporal witnesses or blockers. */
 export function buildTypedMotifTemporalNearMatchProgram(
   templateInput: GraphMotifTemplate | unknown,
   direction: GraphDirection,
-  group = ""
+  group = "",
+  temporalEncoding?: AspTemporalEncoding
 ): CompiledMotifTemplate {
-  return buildTypedMotifProgram(templateInput, direction, group, true, true);
+  return buildTypedMotifProgram(templateInput, direction, group, true, true, temporalEncoding);
 }
 
 /** Finds a minimum-cost set of explicitly authorized hypothetical edge additions that satisfies a motif. */
@@ -508,7 +824,7 @@ export function buildTypedMotifCompletionCounterfactualProgram(
   candidatesInput: unknown,
   temporalEncoding?: AspTemporalEncoding
 ): { template: CompiledMotifTemplate; candidates: TypedMotifEdgeAdditionCandidate[]; program: string } {
-  const template = buildTypedMotifProgram(templateInput, direction, group);
+  const template = buildTypedMotifProgram(templateInput, direction, group, false, false, temporalEncoding);
   if (!Array.isArray(candidatesInput) || candidatesInput.length === 0) {
     throw new TypeError("graphAnalysis.counterfactuals.edgeAdditions deve elencare almeno un arco candidato");
   }
@@ -524,6 +840,7 @@ export function buildTypedMotifCompletionCounterfactualProgram(
     const sourceNodeId = requireName(input.sourceNodeId, `edgeAdditions[${index}].sourceNodeId`);
     const targetNodeId = requireName(input.targetNodeId, `edgeAdditions[${index}].targetNodeId`);
     const edgeType = requireName(input.edgeType, `edgeAdditions[${index}].edgeType`);
+    const attributes = requireScalarAttributes(input.attributes, `edgeAdditions[${index}].attributes`);
     const sourceNode = input.sourceNode;
     const targetNode = input.targetNode;
     const cost = input.cost;
@@ -574,6 +891,7 @@ export function buildTypedMotifCompletionCounterfactualProgram(
       sourceNode,
       targetNode,
       edgeType,
+      ...(attributes ? { attributes } : {}),
       cost,
       recordIndex,
       ...(validity ? { validity } : {})
@@ -582,6 +900,9 @@ export function buildTypedMotifCompletionCounterfactualProgram(
 
   const candidateFacts = candidates.flatMap((candidate) => [
     `cf_candidate_edge(${candidate.recordIndex},${candidate.sourceNode},${candidate.targetNode},${escapeAspString(candidate.edgeType)},${candidate.cost}).`,
+    ...Object.entries(candidate.attributes ?? {}).map(([alias, value]) =>
+      `cf_candidate_attribute(${candidate.recordIndex},${escapeAspString(alias)},${serializeAspRepairValue(value)}).`
+    ),
     ...(candidate.validity
       ? (() => {
         const encoded = aspValidityByRecord.get(candidate.recordIndex);
@@ -596,6 +917,7 @@ export function buildTypedMotifCompletionCounterfactualProgram(
     "edge_source(E,U) :- cf_add_edge(E), cf_candidate_edge(E,U,_,_,_).",
     "edge_target(E,V) :- cf_add_edge(E), cf_candidate_edge(E,_,V,_,_).",
     "edge_type(E,T) :- cf_add_edge(E), cf_candidate_edge(E,_,_,T,_).",
+    "edge_attribute(E,A,V) :- cf_add_edge(E), cf_candidate_attribute(E,A,V).",
     "edge_valid_from(E,From) :- cf_add_edge(E), cf_candidate_interval(E,From,_).",
     "edge_valid_to(E,To) :- cf_add_edge(E), cf_candidate_interval(E,_,To).",
     "#minimize { Cost,E : cf_add_edge(E), cf_candidate_edge(E,_,_,_,Cost) }.",
@@ -606,6 +928,30 @@ export function buildTypedMotifCompletionCounterfactualProgram(
     candidates,
     program: [template.program, ...candidateFacts, ...candidateRules].join("\n")
   };
+}
+
+function metricSpanFromValues(
+  first: number,
+  last: number,
+  unit: GraphTemporalMetricUnit,
+  domain: "integer" | "date" | undefined,
+  numericUnit: GraphTemporalMetricUnit | undefined
+): number | null {
+  const difference = last - first;
+  if (!Number.isSafeInteger(difference) || difference < 0 || !domain) return null;
+  const factor: Record<GraphTemporalMetricUnit, bigint> = {
+    milliseconds: 1n,
+    seconds: 1_000n,
+    minutes: 60_000n,
+    hours: 3_600_000n,
+    days: 86_400_000n
+  };
+  if (domain === "integer" && numericUnit === undefined) return null;
+  const sourceFactor = domain === "date" ? 1n : factor[numericUnit!];
+  const scaledDifference = BigInt(difference) * sourceFactor;
+  if (scaledDifference % factor[unit] !== 0n) return null;
+  const span = scaledDifference / factor[unit];
+  return span <= 2_147_483_647n ? Number(span) : null;
 }
 
 /** Maps role assignments and supporting edge records back to source IDs. */
@@ -664,7 +1010,7 @@ export function parseTypedMotifMatches(
     }
 
     if (roleNodeIndices.size !== template.roles.length) continue;
-    const roles: TypedMotifMatch["roles"] = {};
+    const roleEntries: Array<[string, TypedMotifMatch["roles"][string]]> = [];
     const nodeIds: string[] = [];
     let valid = true;
     template.roles.forEach((role, index) => {
@@ -675,10 +1021,15 @@ export function parseTypedMotifMatches(
         valid = false;
         return;
       }
-      roles[role.name] = { nodeId, sourceId };
+      roleEntries.push([role.name, {
+        nodeId,
+        sourceId,
+        ...(role.attributes ? { requiredAttributes: role.attributes } : {})
+      }]);
       nodeIds.push(nodeId);
     });
     if (!valid) continue;
+    const roles = Object.fromEntries(roleEntries) as TypedMotifMatch["roles"];
 
     if (template.temporalSemantics === "orderedByStart") {
       const hasOneMappedWitnessPerPattern = template.edges.every((_, index) => {
@@ -687,6 +1038,20 @@ export function parseTypedMotifMatches(
           (Boolean(reverseEdgeIndex[support[0].edgeIndex]) || syntheticSupportIndices.has(support[0].edgeIndex));
       });
       if (!hasOneMappedWitnessPerPattern) continue;
+    }
+
+    if (template.maximumSpan) {
+      const firstStart = orderedSupportIndices.get(1)?.[0]?.startTimeValue;
+      const lastStart = orderedSupportIndices.get(template.edges.length)?.[0]?.startTimeValue;
+      if (firstStart === undefined || lastStart === undefined) continue;
+      const observedSpan = metricSpanFromValues(
+        firstStart,
+        lastStart,
+        template.maximumSpan.unit,
+        template.metricTimeDomain,
+        template.metricNumericTimeUnit
+      );
+      if (observedSpan === null || observedSpan > template.maximumSpan.value) continue;
     }
 
     const roleKey = template.roles.map((role) => roles[role.name].nodeId).join("\u0000");
@@ -715,6 +1080,7 @@ export function parseTypedMotifMatches(
     matches.push({
       templateId: template.id,
       label: template.label,
+      ...(template.maximumSpan ? { maximumSpan: template.maximumSpan } : {}),
       timeValue,
       roles,
       nodeIds,
@@ -808,6 +1174,7 @@ export function parseTypedMotifCompletionCounterfactuals(
       sourceNodeId: candidate.sourceNodeId,
       targetNodeId: candidate.targetNodeId,
       edgeType: candidate.edgeType,
+      ...(candidate.attributes ? { attributes: candidate.attributes } : {}),
       cost: candidate.cost,
       patternIndexes: [...(supportsByCandidate.get(candidate.recordIndex) ?? [])].sort((left, right) => left - right),
       ...(candidate.validity ? { validity: candidate.validity } : {})
@@ -832,6 +1199,22 @@ export function parseTypedMotifNearMatches(
   decodeTemporalValue?: (value: number) => number | undefined
 ): TypedMotifNearMatch[] {
   const results: TypedMotifNearMatch[] = [];
+  const seenDiagnostics = new Set<string>();
+  const canonicalize = (item: unknown): unknown => {
+    if (Array.isArray(item)) {
+      return item.map(canonicalize).sort((left, right) => {
+        const leftKey = JSON.stringify(left);
+        const rightKey = JSON.stringify(right);
+        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+      });
+    }
+    if (item !== null && typeof item === "object") {
+      return Object.fromEntries(Object.entries(item)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, value]) => [key, canonicalize(value)]));
+    }
+    return item;
+  };
   const candidates = Array.isArray(witnesses)
     ? witnesses.filter((witness) => witness !== null && typeof witness === "object")
     : [];
@@ -872,6 +1255,7 @@ export function parseTypedMotifNearMatches(
     const temporalInactiveIndices = new Set<number>();
     const temporalSupportIndices = new Map<number, Array<{ edgeIndex: number; startTimeValue?: number }>>();
     const orderViolationPairs = new Set<string>();
+    let temporalSpanViolation = false;
     let temporalTimeValue: number | undefined;
     for (const atom of Array.isArray(value) ? value : []) {
       if (typeof atom !== "string") continue;
@@ -955,10 +1339,12 @@ export function parseTypedMotifNearMatches(
       const orderViolationMatch = /^motif_order_violation\((\d+),(\d+)\)$/.exec(atom);
       if (orderViolationMatch) {
         orderViolationPairs.add(`${Number(orderViolationMatch[1])}:${Number(orderViolationMatch[2])}`);
+        continue;
       }
+      if (atom === "motif_temporal_span_violation") temporalSpanViolation = true;
     }
 
-    const roles: TypedMotifNearMatch["roles"] = {};
+    const roleEntries: Array<[string, TypedMotifNearMatch["roles"][string]]> = [];
     let valid = true;
     template.roles.forEach((role, index) => {
       const nodeIndex = roleNodeIndices.get(index + 1);
@@ -969,12 +1355,17 @@ export function parseTypedMotifNearMatches(
         valid = false;
         return;
       }
-      roles[role.name] = { nodeId, sourceId };
+      roleEntries.push([role.name, {
+        nodeId,
+        sourceId,
+        ...(role.attributes ? { requiredAttributes: role.attributes } : {})
+      }]);
     });
     if (!valid || template.roles.some((_, index) => {
       const isMapped = roleNodeIndices.has(index + 1);
       return isMapped === missingRoleIndices.has(index + 1);
     })) continue;
+    const roles = Object.fromEntries(roleEntries) as TypedMotifNearMatch["roles"];
 
     const patterns = template.edges.map((edge, index) => ({ index: index + 1, ...edge }));
     const absencePatterns = template.absentEdges.map((edge, index) => ({ index: index + 1, ...edge }));
@@ -982,6 +1373,7 @@ export function parseTypedMotifNearMatches(
     const temporalEvidence = template.nearMatchTemporal && template.temporalSemantics
       ? {
         semantics: template.temporalSemantics,
+        ...(template.maximumSpan ? { maximumSpan: template.maximumSpan, spanViolation: temporalSpanViolation } : {}),
         ...(temporalTimeValue === undefined ? {} : { timeValue: temporalTimeValue }),
         unavailablePatterns: temporalPatterns.filter((pattern) => temporalUnavailableIndices.has(pattern.index)),
         inactivePatterns: temporalPatterns.filter((pattern) => temporalInactiveIndices.has(pattern.index)),
@@ -1001,7 +1393,7 @@ export function parseTypedMotifNearMatches(
         }))
       }
       : undefined;
-    results.push({
+    const nearMatch: TypedMotifNearMatch = {
       templateId: template.id,
       label: template.label,
       roles,
@@ -1024,7 +1416,11 @@ export function parseTypedMotifNearMatches(
           .filter((edgeId): edgeId is string => Boolean(edgeId)))].sort()
       })),
       ...(temporalEvidence ? { temporalEvidence } : {})
-    });
+    };
+    const signature = JSON.stringify(canonicalize(nearMatch));
+    if (seenDiagnostics.has(signature)) continue;
+    seenDiagnostics.add(signature);
+    results.push(nearMatch);
   }
   return results;
 }

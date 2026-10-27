@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ClingoWorkerClient } from "../src/lib/kliqueasp/clingoWorkerClient.ts";
+import {
+  ClingoWorkerClient,
+  getClingoWasmProgramSizeError,
+  MAX_CLINGO_WASM_PROGRAM_BYTES
+} from "../src/lib/kliqueasp/clingoWorkerClient.ts";
 import { WorkerReadinessGate } from "../src/lib/kliqueasp/workerReadiness.ts";
+
+test("the clingo worker size guard counts UTF-8 bytes and accepts the tested limit", () => {
+  assert.equal(getClingoWasmProgramSizeError("x".repeat(MAX_CLINGO_WASM_PROGRAM_BYTES)), null);
+  assert.match(getClingoWasmProgramSizeError("x".repeat(MAX_CLINGO_WASM_PROGRAM_BYTES + 1)), /supera il limite prudenziale/);
+  assert.match(getClingoWasmProgramSizeError("è".repeat(MAX_CLINGO_WASM_PROGRAM_BYTES / 2 + 1)), /byte/);
+});
 
 class FakeWorker {
   messages = [];

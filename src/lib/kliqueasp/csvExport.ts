@@ -1,7 +1,7 @@
 /** Quotes one CSV cell and neutralizes spreadsheet formulas from graph data. */
 export function csvCell(value: unknown): string {
   const text = String(value ?? "");
-  const safeText = typeof value === "string" && /^[\s\uFEFF]*[=+\-@]/.test(text)
+  const safeText = typeof value !== "number" && /^[\s\uFEFF]*[=+\-@]/.test(text)
     ? `'${text}`
     : text;
   return `"${safeText.replace(/"/g, '""')}"`;

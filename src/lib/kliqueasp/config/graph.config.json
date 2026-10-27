@@ -1,4 +1,43 @@
 {
+  "schemaVersion": 2,
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type"
+    },
+    "edge": {
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "simple"
+    }
+  },
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "shared-place",
+        "label": "Due persone collegate allo stesso luogo",
+        "roles": {
+          "personA": { "nodeTypes": ["person"] },
+          "personB": { "nodeTypes": ["person"] },
+          "place": { "nodeTypes": ["place"] }
+        },
+        "edges": [
+          { "sourceRole": "personA", "targetRole": "place", "edgeType": "person-place" },
+          { "sourceRole": "personB", "targetRole": "place", "edgeType": "person-place" }
+        ],
+        "symmetricRoles": [["personA", "personB"]]
+      }
+    ],
+    "contextualClique": {
+      "focusNodeTypes": ["person"],
+      "contextNodeTypes": ["place"],
+      "edgeTypes": ["person-place"],
+      "minimumSize": 3
+    }
+  },
   "graph": {
     "backgroundColor": "#050816",
     "nodeOpacity": 0.95,
@@ -17,7 +56,11 @@
     "neighbor": "#60a5fa",
     "preview": "#7dd3fc",
     "default": "#334155",
-    "clique": "#7dd3fc"
+    "clique": "#7dd3fc",
+    "edgeTypes": {
+      "person-person": "#38bdf8",
+      "person-place": "#f472b6"
+    }
   },
 
   "node": {
@@ -38,7 +81,8 @@
   "features": {
     "filters": true,
     "timeline": true,
-    "labelVisibilityToggle": true
+    "labelVisibilityToggle": true,
+    "nodeLabelsVisibleByDefault": false
   },
 
   "timeline": {

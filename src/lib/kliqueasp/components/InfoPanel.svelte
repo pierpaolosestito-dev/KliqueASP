@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { NeighborhoodDirection } from "../graph/graphVisualization.ts";
+
   type Neighbor = {
     id: string;
     label: string;
@@ -10,12 +12,33 @@
   export let selectedNode: any = null;
   export let selectedDetails: GenericRecord | null = null;
   export let rootSelectedId: string | null = null;
+  export let directedGraph = false;
+  export let neighborhoodFocus: {
+    rootNodeId: string;
+    maxHops: number;
+    direction: NeighborhoodDirection;
+    nodeCount: number;
+    recordCount: number;
+    renderedLinkCount: number;
+  } | null = null;
+  export let totalGraphNodeCount = 0;
   export let neighborIds: Neighbor[] = [];
   export let highlightedNeighbors: Set<string> = new Set();
 
   export let onBackToRoot: () => void = () => {};
+  export let onFocusNeighborhood: (rootNodeId: string, maxHops: number, direction: NeighborhoodDirection) => void = () => {};
+  export let onClearNeighborhoodFocus: () => void = () => {};
   export let onViewNeighbor: (id: string) => void = () => {};
   export let onCommitNeighbor: (id: string) => void = () => {};
+
+  let neighborhoodRadius: number | undefined = 1;
+  let maximumNeighborhoodRadius = 1;
+  let neighborhoodRadiusIsValid = true;
+  let neighborhoodDirection: NeighborhoodDirection = "weak";
+
+  $: maximumNeighborhoodRadius = Math.max(1, totalGraphNodeCount);
+  $: neighborhoodRadiusIsValid = Number.isSafeInteger(Number(neighborhoodRadius)) &&
+    Number(neighborhoodRadius) >= 1 && Number(neighborhoodRadius) <= maximumNeighborhoodRadius;
 
   let showModal = false;
 
@@ -157,6 +180,50 @@
     </button>
 
     <p><strong>Degree:</strong> {selectedNode.degree}</p>
+
+    <section class="neighborhood-focus">
+      <strong>Focus del vicinato (solo vista)</strong>
+      <label>
+        Raggio in archi
+        <input
+          type="number"
+          min="1"
+          max={maximumNeighborhoodRadius}
+          step="1"
+          bind:value={neighborhoodRadius}
+        />
+      </label>
+      {#if directedGraph}
+        <label>
+          Direzione
+          <select bind:value={neighborhoodDirection}>
+            <option value="weak">Debole: segue gli archi in entrambi i sensi</option>
+            <option value="outgoing">In uscita</option>
+            <option value="incoming">In ingresso</option>
+          </select>
+        </label>
+      {/if}
+      <button
+        type="button"
+        disabled={!neighborhoodRadiusIsValid}
+        on:click={() => neighborhoodRadiusIsValid && onFocusNeighborhood(
+          String(selectedNode.id),
+          Number(neighborhoodRadius),
+          directedGraph ? neighborhoodDirection : "weak"
+        )}
+      >Isola questo vicinato</button>
+      {#if neighborhoodFocus}
+        <small role="status">
+          {#if neighborhoodFocus.nodeCount >= totalGraphNodeCount}
+            Il raggio di {neighborhoodFocus.maxHops} archi da {neighborhoodFocus.rootNodeId} ({neighborhoodFocus.direction}) raggiunge tutti i {totalGraphNodeCount} nodi filtrati: questo focus non esclude nodi.
+          {:else}
+            Vista limitata a {neighborhoodFocus.nodeCount} di {totalGraphNodeCount} nodi entro {neighborhoodFocus.maxHops} archi da {neighborhoodFocus.rootNodeId} ({neighborhoodFocus.direction}).
+          {/if}
+          Mostra {neighborhoodFocus.recordCount} record in {neighborhoodFocus.renderedLinkCount} linee. Proiezione ASP, risultati ed export restano sull'intero grafo filtrato.
+        </small>
+        <button type="button" on:click={onClearNeighborhoodFocus}>Mostra tutta la proiezione</button>
+      {/if}
+    </section>
 
     {#if rootSelectedId && selectedNode.id !== rootSelectedId}
       <button class="back-btn" type="button" on:click={onBackToRoot}>
@@ -382,6 +449,32 @@
     cursor: pointer;
   }
 
+  .neighborhood-focus {
+    display: grid;
+    gap: 6px;
+    margin: 12px 0;
+    padding: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+  }
+
+  .neighborhood-focus label {
+    display: grid;
+    gap: 4px;
+  }
+
+  .neighborhood-focus select {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .neighborhood-focus input[type="number"] {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
   .explore-btn {
     cursor: pointer;
   }
@@ -446,5 +539,22 @@
     width: 36px;
     height: 36px;
     cursor: pointer;
+  }
+
+  @media (max-width: 600px) {
+    .info-panel {
+      top: calc(var(--toolbar-top, 10px) + var(--toolbar-height, 180px) + 10px);
+      right: 10px;
+      width: min(
+        calc(var(--info-width, 260px) + var(--info-padding, 12px) + var(--info-padding, 12px)),
+        calc(100vw - 20px)
+      );
+      box-sizing: border-box;
+      max-height: min(
+        var(--info-max-height, 340px),
+        max(120px, calc(100vh - var(--toolbar-top, 10px) - var(--toolbar-height, 180px) - 150px))
+      );
+      z-index: calc(var(--toolbar-z, 30) - 1);
+    }
   }
 </style>

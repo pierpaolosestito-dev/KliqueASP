@@ -1,0 +1,87 @@
+{
+  "config": {
+    "schemaVersion": 2,
+    "graphMapping": {
+      "node": {
+        "idField": "$.id",
+        "typeField": "$.kind"
+      },
+      "edge": {
+        "idField": "$.id",
+        "sourceField": "$.source",
+        "targetField": "$.target",
+        "typeField": "$.kind",
+        "direction": "undirected",
+        "identity": "multigraph",
+        "validity": {
+          "fromField": "$.validFrom",
+          "toField": "$.validTo",
+          "numericUnit": "seconds"
+        }
+      }
+    }
+  },
+  "data": {
+    "nodes": [
+      { "id": "150", "kind": "person" },
+      { "id": "21", "kind": "person" },
+      { "id": "205", "kind": "person" },
+      { "id": "153", "kind": "person" }
+    ],
+    "edges": [
+      {
+        "id": "invs13-row-6",
+        "source": "21",
+        "target": "150",
+        "kind": "face-to-face-contact",
+        "validFrom": 30000,
+        "validTo": 30020
+      },
+      {
+        "id": "invs13-row-7",
+        "source": "21",
+        "target": "205",
+        "kind": "face-to-face-contact",
+        "validFrom": 30040,
+        "validTo": 30060
+      },
+      {
+        "id": "invs13-row-49",
+        "source": "153",
+        "target": "205",
+        "kind": "face-to-face-contact",
+        "validFrom": 30500,
+        "validTo": 30520
+      }
+    ]
+  },
+  "template": {
+    "id": "observed-contact-chain",
+    "label": "Catena di contatti consecutivi",
+    "temporal": {
+      "semantics": "orderedByStart",
+      "strict": true
+    },
+    "roles": {
+      "first": { "nodeTypes": ["person"] },
+      "second": { "nodeTypes": ["person"] },
+      "third": { "nodeTypes": ["person"] },
+      "fourth": { "nodeTypes": ["person"] }
+    },
+    "edges": [
+      { "sourceRole": "first", "targetRole": "second", "edgeType": "face-to-face-contact" },
+      { "sourceRole": "second", "targetRole": "third", "edgeType": "face-to-face-contact" },
+      { "sourceRole": "third", "targetRole": "fourth", "edgeType": "face-to-face-contact" }
+    ]
+  },
+  "expected": {
+    "roles": {
+      "first": "150",
+      "second": "21",
+      "third": "205",
+      "fourth": "153"
+    },
+    "edgeIds": ["invs13-row-6", "invs13-row-7", "invs13-row-49"],
+    "startTimes": [30000, 30040, 30500]
+  }
+}

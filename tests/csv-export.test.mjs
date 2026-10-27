@@ -65,6 +65,12 @@ test("CSV cell quoting neutralizes spreadsheet formulas after whitespace or BOM"
   assert.equal(csvCell("\uFEFF-HYPERLINK(\"https://example.invalid\")"), '"\'\uFEFF-HYPERLINK(""https://example.invalid"")"');
 });
 
+test("CSV formula protection also covers arrays coerced to text while preserving numeric negatives", () => {
+  assert.equal(csvCell(["=unsafe-node", "other-node"]), '"\'=unsafe-node,other-node"');
+  assert.equal(csvCell([-1, "negative-edge"]), '"\'-1,negative-edge"');
+  assert.equal(csvCell(-2), '"-2"');
+});
+
 test("CSV serialization preserves numeric values and row boundaries", () => {
   assert.equal(serializeCsv([
     ["node_id", "score", "label"],
@@ -166,6 +172,29 @@ test("CSV round-trip covers schema v2 multigraph provenance, special characters,
     edge_id: specialRecordId,
     references: provenanceReferencesBySourceId[specialRecordId]
   });
+});
+
+test("clique witness CSV looks up provenance using own source-ID properties", () => {
+  const links = [{
+    source: "a",
+    target: "b",
+    sourceId: "__proto__",
+    analysis: { provenance: ["archive-a", "archive-z"] }
+  }];
+  const provenanceBySourceId = buildEdgeProvenanceBySourceId(links);
+  const referencesBySourceId = buildEdgeProvenanceReferencesBySourceId(links);
+  const rows = buildCliqueSupportingExportRows(
+    [["a", "b"]],
+    { ["a\u0000b"]: [{ sourceNodeId: "a", targetNodeId: "b", edgeId: "__proto__", edgeIdGenerated: false }] },
+    provenanceBySourceId,
+    referencesBySourceId
+  );
+
+  assert.equal(rows[1][5], '__proto__: ["archive-a","archive-z"]');
+  assert.deepEqual(JSON.parse(rows[1][10]), [{
+    edge_id: "__proto__",
+    references: ["archive-a", "archive-z"]
+  }]);
 });
 
 test("CSV download keeps its object URL valid through the anchor click", async () => {

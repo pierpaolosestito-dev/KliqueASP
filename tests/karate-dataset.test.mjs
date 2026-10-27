@@ -3,12 +3,17 @@ import graphConfig from "../src/lib/kliqueasp/data/examples/karate-club.config.j
 import dataset from "../src/lib/kliqueasp/data/examples/karate-club.json" with { type: "json" };
 import test from "node:test";
 import { normalizeGraphData, buildAspFactsFromGraph } from "../src/lib/kliqueasp/graph/graphModel.ts";
+import { getGraphNeighborhoodNodeIds } from "../src/lib/kliqueasp/graph/graphVisualization.ts";
 import {
   buildMaximumKPlexProgram,
   buildKCoreProgram,
+  buildKCoreMembershipCompletionCounterfactualProgram,
+  computeKCoreNumbers,
+  getKCoreMembershipCounterfactualSolverOptions,
   getStructuralSolverOptions,
   parseWitnessNodeSets,
   parseWitnessKPlexExplanations,
+  solveKCoreMembershipCompletionWhyNotByRounds,
   searchMaximumKPlexWithAsp,
   selectMaximumNodeSets
 } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
@@ -21,6 +26,36 @@ import {
 function normalizeKarateGraph() {
   return normalizeGraphData(dataset, graphConfig);
 }
+
+test("il focus display-only è data-driven anche sul Karate Club e non sostituisce la proiezione ASP", () => {
+  const graph = normalizeKarateGraph();
+  assert.equal(graph.valid, true, JSON.stringify(graph.diagnostics));
+  const originalLinks = graph.links;
+  const expectedByRadius = [
+    { radius: 1, nodes: 17, edges: 34 },
+    { radius: 2, nodes: 26, edges: 59 },
+    { radius: 3, nodes: 34, edges: 78 }
+  ];
+
+  for (const expected of expectedByRadius) {
+    const focusedNodeIds = getGraphNeighborhoodNodeIds(
+      graph.nodes.map((node) => String(node.id)),
+      graph.links,
+      "0",
+      { maxHops: expected.radius, direction: "weak", defaultGraphDirection: graph.direction }
+    );
+    const focusedLinks = graph.links.filter((link) =>
+      focusedNodeIds.has(String(link.source)) && focusedNodeIds.has(String(link.target))
+    );
+
+    assert.equal(focusedNodeIds.size, expected.nodes, `raggio ${expected.radius}: nodi raggiunti`);
+    assert.equal(focusedLinks.length, expected.edges, `raggio ${expected.radius}: archi indotti`);
+  }
+
+  assert.equal(graph.nodes.length, 34);
+  assert.equal(graph.links.length, 78);
+  assert.equal(graph.links, originalLinks, "il focus non sostituisce né muta gli archi usati dall'analisi");
+});
 
 function peelKCore(nodeIds, links, k) {
   const active = new Set(nodeIds);
@@ -42,6 +77,34 @@ function peelKCore(nodeIds, links, k) {
     }
   }
   return [...active].sort();
+}
+
+function peelKCoreRounds(nodeIds, links, k) {
+  const active = new Set(nodeIds);
+  const neighbors = new Map(nodeIds.map((id) => [id, new Set()]));
+  for (const { source, target } of links) {
+    neighbors.get(source)?.add(target);
+    neighbors.get(target)?.add(source);
+  }
+
+  const peeling = [];
+  for (let round = 1; round <= nodeIds.length; round += 1) {
+    const wave = [...active].filter((id) =>
+      [...(neighbors.get(id) ?? [])].filter((neighbor) => active.has(neighbor)).length < k
+    ).sort((left, right) => Number(left) - Number(right));
+    if (wave.length === 0) break;
+    for (const id of wave) {
+      peeling.push({
+        nodeId: id,
+        round,
+        survivingNeighborIds: [...(neighbors.get(id) ?? [])]
+          .filter((neighbor) => active.has(neighbor))
+          .sort((left, right) => Number(left) - Number(right))
+      });
+    }
+    for (const id of wave) active.delete(id);
+  }
+  return { peeling, remaining: [...active].sort() };
 }
 
 function exhaustiveMaximumSPlexSize(nodeIds, links, s) {
@@ -122,23 +185,89 @@ test("Karate Club si mappa nello schema v2 senza perdere la struttura semplice n
   assert.equal(new Set(undirectedPairKeys).size, 78, "every stored edge is a distinct undirected pair");
 });
 
-test("il k-core ASP sul dataset indipendente coincide con il peeling iterativo", async () => {
+test("la decomposizione k-core ASP sul dataset indipendente coincide col profilo di peeling", async () => {
   const graph = normalizeKarateGraph();
   const base = buildAspFactsFromGraph(graph);
+  const nodeIds = graph.nodes.map((node) => node.id);
+  const coreNumbers = computeKCoreNumbers(nodeIds, graph.links);
+  const maximumCoreNumber = Math.max(...coreNumbers.values());
+  assert.ok(maximumCoreNumber >= 3, "Karate Club deve contenere livelli k-core distinti");
   const runner = await createClingoWasmRunner();
-  const result = await runner.run(
-    `${base.facts.trim()}\n\n${buildKCoreProgram(3)}\n`,
-    getStructuralSolverOptions("kCore")
-  );
-  const actual = selectMaximumNodeSets(
-    parseWitnessNodeSets(result.Call?.[0]?.Witnesses, base.reverseIndex)
-  );
-  const expected = peelKCore(graph.nodes.map((node) => node.id), graph.links, 3);
+  for (let k = 1; k <= maximumCoreNumber; k += 1) {
+    const result = await runner.run(
+      `${base.facts.trim()}\n\n${buildKCoreProgram(k)}\n`,
+      getStructuralSolverOptions("kCore")
+    );
+    const actual = selectMaximumNodeSets(
+      parseWitnessNodeSets(result.Call?.[0]?.Witnesses, base.reverseIndex)
+    );
+    const expectedByPeeling = peelKCore(nodeIds, graph.links, k);
+    const expectedByCoreNumber = nodeIds.filter((nodeId) => (coreNumbers.get(nodeId) ?? -1) >= k).sort();
 
-  assert.equal(result.Result, "OPTIMUM FOUND");
-  assert.equal(actual.length, 1);
-  assert.deepEqual(actual[0].sort(), expected);
-  assert.equal(actual[0].length, 22);
+    assert.equal(result.Result, "OPTIMUM FOUND", `k=${k}`);
+    assert.equal(actual.length, 1, `un solo k-core massimo per k=${k}`);
+    assert.deepEqual(actual[0].sort(), expectedByPeeling, `peeling di riferimento, k=${k}`);
+    assert.deepEqual(actual[0].sort(), expectedByCoreNumber, `profilo dei core number, k=${k}`);
+    if (k === 3) assert.equal(actual[0].length, 22);
+  }
+});
+
+test("il why-not k-core ASP e il batching adattivo si trasferiscono al grafo Karate Club", async () => {
+  const graph = normalizeKarateGraph();
+  const { facts, reverseIndex } = buildAspFactsFromGraph(graph);
+  const indexByNodeId = new Map(Object.entries(reverseIndex).map(([index, id]) => [id, Number(index)]));
+  const nodeIdByIndex = new Map(Object.entries(reverseIndex).map(([index, id]) => [Number(index), id]));
+  const nodeIds = graph.nodes.map((node) => node.id);
+  const candidateNodeIndices = nodeIds.map((nodeId) => indexByNodeId.get(nodeId));
+  const k = 4;
+  const expected = peelKCoreRounds(nodeIds, graph.links, k);
+  assert.ok(expected.peeling.length > 0, "la soglia scelta deve escludere almeno un nodo");
+  const targetNodeId = expected.peeling.at(-1).nodeId;
+  const targetNodeIndex = indexByNodeId.get(targetNodeId);
+  const primary = buildKCoreMembershipCompletionCounterfactualProgram(
+    k,
+    targetNodeIndex,
+    candidateNodeIndices,
+    []
+  );
+  const runner = await createClingoWasmRunner();
+  const primaryResult = await runner.run(
+    `${facts.trim()}\n\n${primary.program}\n`,
+    getKCoreMembershipCounterfactualSolverOptions()
+  );
+  assert.equal(primaryResult.Result, "UNSATISFIABLE");
+
+  const observedEdges = graph.links.map((link) => ({
+    sourceNode: indexByNodeId.get(link.source),
+    targetNode: indexByNodeId.get(link.target)
+  }));
+  let queryCount = 0;
+  const certificate = await solveKCoreMembershipCompletionWhyNotByRounds(
+    k,
+    targetNodeIndex,
+    candidateNodeIndices,
+    observedEdges,
+    [],
+    nodeIdByIndex,
+    async (program) => {
+      queryCount += 1;
+      return runner.run(program);
+    },
+    { stopAfterTargetRemoval: true, maxRoundsPerQuery: 4, adaptiveBatching: true }
+  );
+  const targetRound = expected.peeling.find((step) => step.nodeId === targetNodeId).round;
+  const expectedPrefix = expected.peeling.filter((step) => step.round <= targetRound);
+  assert.equal(targetRound, 3, "la fixture Karate k=4 ha una catena di peeling di tre wave");
+  const waveCounts = new Map();
+  for (const step of expectedPrefix) waveCounts.set(step.round, (waveCounts.get(step.round) ?? 0) + 1);
+  const hasParallelWave = [...waveCounts.values()].some((count) => count > 1);
+
+  assert.equal(certificate.peelingScope, "target_prefix");
+  assert.equal(certificate.targetNodeId, targetNodeId);
+  assert.deepEqual(certificate.peeling, expectedPrefix);
+  assert.equal(hasParallelWave, true, "la fixture Karate deve esercitare la scelta adattiva per wave parallele");
+  assert.equal(queryCount, 3, "il target al round 3 usa query ASP a round singolo per il peeling ramificato");
+  assert.equal(queryCount, hasParallelWave ? targetRound : Math.ceil(targetRound / 4));
 });
 
 test("il 2-plex massimo ASP sul dataset indipendente restituisce un ottimo verificabile", async () => {
@@ -194,7 +323,7 @@ test("il 3-plex massimo ASP sul dataset indipendente coincide con il branch-and-
   assert.ok([...missingByNode.values()].every((count) => count <= 2));
 });
 
-test("i massimi k-plex ASP s=4–9 sul dataset indipendente coincidono col branch-and-bound", async () => {
+test("i massimi k-plex ASP s=4\u201312 sul dataset indipendente coincidono col branch-and-bound", async () => {
   const graph = normalizeKarateGraph();
   const base = buildAspFactsFromGraph(graph);
   const nodeIds = graph.nodes.map((node) => node.id);
@@ -211,7 +340,10 @@ test("i massimi k-plex ASP s=4–9 sul dataset indipendente coincidono col branc
     { s: 6, expectedSize: 10 },
     { s: 7, expectedSize: 10 },
     { s: 8, expectedSize: 11 },
-    { s: 9, expectedSize: 12 }
+    { s: 9, expectedSize: 12 },
+    { s: 10, expectedSize: 13 },
+    { s: 11, expectedSize: 14 },
+    { s: 12, expectedSize: 15 }
   ]) {
     const search = await searchMaximumKPlexWithAsp(s, nodeIds, graph.links, "", false, (program, modelLimit) =>
       runner.run(`${base.facts.trim()}\n\n${program}\n`, [], modelLimit)

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { deepMergeConfig } from "../config/deepMergeConfig";
 
   // Sezione ui.timeline del config già risolta dal parent (GraphApp).
   export let uiConfig: any = {};
@@ -32,36 +33,8 @@
     }
   };
 
-  function isPlainObject(value: any): boolean {
-    return (
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value)
-    );
-  }
-
-  function deepMerge<T = any>(base: T, override: any): T {
-    if (!isPlainObject(base)) return override ?? base;
-    if (!isPlainObject(override)) return base;
-
-    const result: any = { ...(base as any) };
-
-    for (const key of Object.keys(override)) {
-      const baseValue = (base as any)[key];
-      const overrideValue = override[key];
-
-      if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
-        result[key] = deepMerge(baseValue, overrideValue);
-      } else {
-        result[key] = overrideValue;
-      }
-    }
-
-    return result;
-  }
-
   const UI = {
-    timeline: deepMerge(
+    timeline: deepMergeConfig(
       DEFAULT_TIMELINE_UI,
       uiConfig ?? {}
     )
@@ -182,6 +155,7 @@
     .timeline-container {
       width: min(var(--tl-width), calc(100vw - 24px));
       box-sizing: border-box;
+      bottom: calc(var(--tl-bottom) + var(--mobile-status-reserve, 48px));
     }
   }
 

@@ -1,10 +1,18 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { deepMergeConfig } from "../config/deepMergeConfig";
   import { downloadCsvText, serializeCsv } from "../csvExport";
   import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { CliqueSupportingEdge } from "../graph/graphModel";
-  import { buildCliqueSupportingExportRows } from "../graph/cliqueCsvExport";
+  import type { CliqueMaximumMembershipDiagnosis } from "../graph/cliqueMembershipDiagnosis";
+  import { getGraphTaskContract } from "../graph/graphTaskContracts";
+  import { buildCliqueMaximumMembershipDiagnosisCsv, buildCliqueSupportingExportRows } from "../graph/cliqueCsvExport";
+  import { getOwnRecordValue } from "../graph/recordUtils";
+
+  const cliqueMembershipQueryContract = getGraphTaskContract("clique")?.supportingQueries?.find(
+    (query) => query.id === "cliqueMaximumMembershipDiagnosis"
+  );
 
   // Sezione "solver" del config già risolta dal parent (GraphApp).
   export let config: any = {};
@@ -20,11 +28,13 @@
     linksCount?: number;
     periodLabel?: string;
     cliqueMode?: string;
+    selectedGroup?: string;
   };
 
   export let error: string = "";
 
   export let maximumCliques: string[][] = [];
+  export let maximumCliquesForMembership: string[][] = [];
   export let allCliques: string[][] = [];
   export let supportingEdgesByClique: Record<string, CliqueSupportingEdge[]> = {};
   export let edgeProvenanceBySourceId: Record<string, string> = {};
@@ -36,12 +46,21 @@
   export let showClingoStats: boolean = false;
 
   export let selectedNodeId: string | null = null;
+  export let sourceIdByNodeId: Record<string, string> = {};
+  export let cliqueMembershipDiagnosis: CliqueMaximumMembershipDiagnosis | null = null;
+  export let cliqueMembershipDiagnosisTargetNodeId: string | null = null;
+  export let cliqueMembershipDiagnosisRunning: boolean = false;
+  export let cliqueMembershipDiagnosisError: string = "";
 
   export let minSize: number = 3;
   export let topPerSize: number = 5;
 
   export let selectedGroup: string = "";
   export let availableGroups: string[] = [];
+
+  function edgeProvenance(edgeId: string): string | undefined {
+    return getOwnRecordValue<string>(edgeProvenanceBySourceId, edgeId);
+  }
 
   const dispatch = createEventDispatcher();
 
@@ -61,35 +80,7 @@
     }
   };
 
-  function isPlainObject(value: any): boolean {
-    return (
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value)
-    );
-  }
-
-  function deepMerge<T = any>(base: T, override: any): T {
-    if (!isPlainObject(base)) return override ?? base;
-    if (!isPlainObject(override)) return base;
-
-    const result: any = { ...(base as any) };
-
-    for (const key of Object.keys(override)) {
-      const baseValue = (base as any)[key];
-      const overrideValue = override[key];
-
-      if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
-        result[key] = deepMerge(baseValue, overrideValue);
-      } else {
-        result[key] = overrideValue;
-      }
-    }
-
-    return result;
-  }
-
-  const SOLVER_CFG = deepMerge(
+  const SOLVER_CFG = deepMergeConfig(
     DEFAULT_SOLVER_CFG,
     config ?? {}
   );
@@ -207,7 +198,7 @@
 
   $: selectedInMaximum =
     selectedNodeId
-      ? (maximumCliques ?? []).some(c => Array.isArray(c) && c.includes(selectedNodeId))
+      ? (maximumCliquesForMembership ?? []).some(c => Array.isArray(c) && c.includes(selectedNodeId))
       : false;
 
   function downloadCSV() {
@@ -228,6 +219,15 @@
     );
     const csv = serializeCsv(rows);
     downloadCsvText("cliques_with_supporting_edges.csv", csv);
+  }
+
+  function downloadMembershipDiagnosisCSV() {
+    if (!cliqueMembershipDiagnosis) return;
+    downloadCsvText("maximum_clique_membership_diagnosis.csv", buildCliqueMaximumMembershipDiagnosisCsv(
+      cliqueMembershipDiagnosis,
+      sourceIdByNodeId,
+      stats?.selectedGroup ?? ""
+    ));
   }
 </script>
 
@@ -287,14 +287,75 @@
   </div>
   {/if}
 
+  {#if stats?.maxSize > 0 && stats.maxSize < 3}
+    <p class="clique-threshold-note">
+      L'ottimo matematico ha taglia {stats.maxSize}; il riepilogo legacy elenca solo clique di almeno 3 nodi.
+    </p>
+  {/if}
+
   {#if F.selectedAnalysis !== false && selectedNodeId}
   <div class="selected-analysis">
     <div><strong>Selected node:</strong> {selectedNodeId}</div>
-    <div><strong>Cliques containing it:</strong> {selectedCliqueCount}</div>
+    <div><strong>Displayed cliques containing it:</strong> {selectedCliqueCount}</div>
     <div>
       <strong>In maximum clique:</strong>
       {selectedInMaximum ? "YES" : "NO"}
     </div>
+    <div><strong>Analyzed group:</strong> {stats?.selectedGroup || "all nodes"}</div>
+    {#if !selectedInMaximum && stats?.maxSize > 0}
+      <button
+        type="button"
+        disabled={cliqueMembershipDiagnosisRunning}
+        on:click={() => dispatch("diagnoseMaximumMembership", selectedNodeId)}
+      >
+        {cliqueMembershipDiagnosisRunning ? "Verifica ASP in corso…" : "Diagnosi ASP why-not"}
+      </button>
+      {#if cliqueMembershipQueryContract}
+        <details class="membership-query-contract">
+          <summary>Semantica della diagnosi ASP</summary>
+          <p>{cliqueMembershipQueryContract.querySemantics}</p>
+          <p><strong>Enumerazione:</strong> {cliqueMembershipQueryContract.supportedEnumeration.join(" / ")}.</p>
+          <p><strong>Input:</strong> {cliqueMembershipQueryContract.inputPredicates.join(", ")}.</p>
+          <p><strong>Witness:</strong> {cliqueMembershipQueryContract.witnessPredicates.join(", ")}.</p>
+          <p><strong>Campi:</strong> {cliqueMembershipQueryContract.resultFields.join(", ")}.</p>
+          <small>Encoding `{cliqueMembershipQueryContract.aspEncoding}` v{cliqueMembershipQueryContract.encodingVersion}; parser `{cliqueMembershipQueryContract.parser}`.</small>
+        </details>
+      {/if}
+    {/if}
+    {#if cliqueMembershipDiagnosisTargetNodeId === selectedNodeId && cliqueMembershipDiagnosisError}
+      <p role="alert">Diagnosi non disponibile: {cliqueMembershipDiagnosisError}</p>
+    {/if}
+    {#if cliqueMembershipDiagnosisTargetNodeId === selectedNodeId && cliqueMembershipDiagnosis}
+      {#if cliqueMembershipDiagnosis.outcome === "excluded-from-maximum"}
+        <strong>Esclusione dalla clique massima verificata da ASP</strong>
+        <p>
+          La migliore clique che contiene il nodo ha taglia {cliqueMembershipDiagnosis.maximumContainingSize};
+          l'ottimo globale è {cliqueMembershipDiagnosis.globalMaximumSize} (gap {cliqueMembershipDiagnosis.sizeGap}).
+          Il solver ha provato l'ottimo con il nodo forzato e il witness è stato verificato sul grafo corrente.
+        </p>
+      {:else}
+        <strong>Controesempio: il nodo appartiene a una clique massima</strong>
+        <p>La query ASP ha trovato una clique con il nodo di taglia {cliqueMembershipDiagnosis.maximumContainingSize}; il precedente elenco massimo non è coerente con questo witness.</p>
+      {/if}
+      <p>È una spiegazione strutturale della proiezione analizzata, non una causa storica o sociale.</p>
+      <p><strong>Witness:</strong> {cliqueMembershipDiagnosis.witnessNodeIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(" | ")}</p>
+      {#if cliqueMembershipDiagnosis.supportingEdges.length > 0}
+        <ul>
+          {#each cliqueMembershipDiagnosis.supportingEdges as edge}
+            <li>
+              {sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId} — {sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId}
+              {#if edge.edgeId}<small>{edge.edgeIdGenerated ? "chiave record locale" : "ID arco sorgente"}: {edge.edgeId}</small>{/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <div class="membership-diagnosis-actions">
+        <button type="button" on:click={() => dispatch("highlightMembershipWitness", cliqueMembershipDiagnosis)}>
+          Evidenzia witness 3D
+        </button>
+        <button type="button" on:click={downloadMembershipDiagnosisCSV}>Esporta diagnosi CSV</button>
+      </div>
+    {/if}
   </div>
   {/if}
 
@@ -371,8 +432,8 @@
               {edge.sourceNodeId} — {edge.targetNodeId}
               {#if edge.edgeId}
                 <small>{edge.edgeIdGenerated ? "generated local record key" : "source edge ID"}: {edge.edgeId}</small>
-                {#if edgeProvenanceBySourceId[edge.edgeId]}
-                  <small>declared source: {edgeProvenanceBySourceId[edge.edgeId]}</small>
+                {#if edgeProvenance(edge.edgeId)}
+                  <small>declared source: {edgeProvenance(edge.edgeId)}</small>
                 {/if}
               {/if}
             </li>
@@ -399,7 +460,7 @@
 
         {#each group.cliques as c}
           <button type="button" class="clique-item" on:click={() => highlightClique(c)}>
-            {c.join(", ")}
+            <span class="clique-label">{c.join(", ")}</span>
             {#if c.length === stats?.maxSize}
               <span class="max-badge">MAX</span>
             {/if}
@@ -452,6 +513,40 @@
     padding: var(--solver-selected-padding);
     background: var(--solver-selected-bg);
     border-radius: var(--solver-selected-radius);
+  }
+
+  .membership-diagnosis-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .membership-query-contract {
+    margin-top: 8px;
+    font-size: 0.82rem;
+    line-height: 1.35;
+  }
+
+  .membership-query-contract summary {
+    cursor: pointer;
+  }
+
+  .membership-query-contract p {
+    margin: 5px 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .membership-query-contract small {
+    display: block;
+    margin-top: 5px;
+    overflow-wrap: anywhere;
+  }
+
+  .clique-threshold-note {
+    margin: 8px 0;
+    font-size: 0.9em;
+    opacity: 0.85;
   }
 
   .clique-explanation p {
@@ -516,6 +611,11 @@
     justify-content: space-between;
   }
 
+  .clique-label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .clique-item:hover {
     background: var(--solver-item-hover);
   }
@@ -527,6 +627,7 @@
     padding: var(--solver-badge-padding);
     border-radius: var(--solver-badge-radius);
     margin-left: 6px;
+    flex: 0 0 auto;
   }
 
   .empty {
@@ -591,7 +692,7 @@
       width: min(var(--solver-width), calc(100vw - 20px));
       right: 10px;
       top: calc(var(--toolbar-top) + var(--toolbar-height, 180px) + 10px);
-      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px);
+      max-height: calc(100vh - var(--toolbar-height, 180px) - var(--toolbar-top) - 20px - var(--mobile-status-reserve, 48px));
     }
   }
 </style>

@@ -3,6 +3,12 @@
   "features": {
     "timeline": true
   },
+  "colors": {
+    "edgeTypes": {
+      "collaboration": "#38bdf8",
+      "mentorship": "#f59e0b"
+    }
+  },
   "graphMapping": {
     "node": {
       "idField": "$.id",

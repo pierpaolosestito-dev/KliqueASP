@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KliqueASP · stima memoria Worker</title>
+    <style>
+      :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+      body { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+      button { font: inherit; padding: .55rem .8rem; }
+      pre { overflow: auto; padding: 1rem; border: 1px solid #8888; border-radius: .4rem; }
+      .note { opacity: .8; }
+    </style>
+  </head>
+  <body>
+    <h1>Stima di memoria del Worker clingo</h1>
+    <p>Questa sonda inizializza il Worker di produzione, esegue una query ASP minima e chiede al browser una misura dopo il solve.</p>
+    <p class="note">La misura API è specifica del browser e riguarda l'app web. Sono riportate separatamente le voci attribuite al realm DedicatedWorker; il risultato non è RSS e le attribuzioni possono essere aggregate.</p>
+    <button id="run-probe" type="button">Esegui la sonda</button>
+    <pre id="result" role="status" aria-live="polite">In attesa dell'avvio manuale.</pre>
+    <script type="module">
+      const base = "/KliqueASP";
+      const workerPath = `${base}/clingo/clingo-memory.worker.js`;
+      const wasmPath = `${base}/clingo/clingo.wasm`;
+      const output = document.querySelector("#result");
+      const button = document.querySelector("#run-probe");
+      const formatMiB = (bytes) => `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+      output.textContent = `In attesa dell'avvio manuale.\nBrowser: ${navigator.userAgent}`;
+
+      function waitForWorkerMessage(worker, predicate, timeoutMs = 30000) {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => finish(new Error("Timeout del Worker clingo.")), timeoutMs);
+          const onMessage = (event) => {
+            if (predicate(event.data)) finish(null, event.data);
+          };
+          const onError = (event) => finish(new Error(event.message || "Errore del Worker clingo."));
+          function finish(error, value) {
+            clearTimeout(timeout);
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+            if (error) reject(error);
+            else resolve(value);
+          }
+          worker.addEventListener("message", onMessage);
+          worker.addEventListener("error", onError);
+        });
+      }
+
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        output.textContent = "Controllo le capability e inizializzo clingo-WASM…";
+        let worker;
+        try {
+          const supported = typeof performance.measureUserAgentSpecificMemory === "function";
+          if (!isSecureContext || !crossOriginIsolated || !supported) {
+            output.textContent = JSON.stringify({
+              secureContext: isSecureContext,
+              crossOriginIsolated,
+              measureUserAgentSpecificMemory: supported,
+              result: "Misura non disponibile in questo contesto browser."
+            }, null, 2);
+            return;
+          }
+
+          worker = new Worker(workerPath, { type: "module" });
+          const initialization = waitForWorkerMessage(worker, (message) => message === null);
+          worker.postMessage({ type: "init", wasmUrl: wasmPath });
+          await initialization;
+
+          const solve = waitForWorkerMessage(worker, (message) =>
+            message !== null && typeof message === "object" && typeof message.Result === "string");
+          worker.postMessage({
+            type: "run",
+            args: ["probe_node. #show probe_node/0.", 1, []]
+          });
+          const solverResult = await solve;
+          if (solverResult.Result !== "SATISFIABLE" && solverResult.Result !== "OPTIMUM FOUND") {
+            throw new Error(`La query ASP di prova è terminata con ${solverResult.Result}: ${solverResult.Error ?? ""}`);
+          }
+
+          const measurement = await performance.measureUserAgentSpecificMemory();
+          const expectedWorkerUrl = new URL(workerPath, location.href).href;
+          const breakdown = measurement.breakdown.map((entry) => {
+            const attribution = Array.isArray(entry.attribution) ? entry.attribution : [];
+            const workerAttributions = attribution.filter((item) => item.scope === "DedicatedWorkerGlobalScope");
+            const solelyAttributedToClingoWorker = attribution.length === 1 && workerAttributions.length === 1 &&
+              workerAttributions[0].url === expectedWorkerUrl;
+            return {
+              bytes: entry.bytes,
+              types: entry.types,
+              attribution,
+              solelyAttributedToClingoWorker
+            };
+          });
+          const solelyAttributedWorkerBytes = breakdown.reduce((sum, entry) =>
+            sum + (entry.solelyAttributedToClingoWorker ? entry.bytes : 0), 0);
+          const taggedWorkerBytes = breakdown.reduce((sum, entry) =>
+            sum + (entry.attribution.some((item) => item.scope === "DedicatedWorkerGlobalScope" && item.url === expectedWorkerUrl)
+              ? entry.bytes
+              : 0), 0);
+
+          output.textContent = JSON.stringify({
+            userAgent: navigator.userAgent,
+            secureContext: isSecureContext,
+            crossOriginIsolated,
+            solverResult: solverResult.Result,
+            wasmLinearMemory: solverResult.KliqueDiagnostics?.wasmLinearMemory ?? null,
+            browserEstimatedApplicationBytes: measurement.bytes,
+            browserEstimatedApplicationMiB: formatMiB(measurement.bytes),
+            solelyAttributedClingoWorkerEstimateBytes: solelyAttributedWorkerBytes,
+            solelyAttributedClingoWorkerEstimateMiB: formatMiB(solelyAttributedWorkerBytes),
+            anyEntryTaggedWithClingoWorkerBytes: taggedWorkerBytes,
+            anyEntryTaggedWithClingoWorkerMiB: formatMiB(taggedWorkerBytes),
+            expectedWorkerUrl,
+            breakdown
+          }, null, 2);
+        } catch (error) {
+          output.textContent = JSON.stringify({
+            error: error instanceof Error ? error.message : String(error),
+            secureContext: isSecureContext,
+            crossOriginIsolated
+          }, null, 2);
+        } finally {
+          worker?.terminate();
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

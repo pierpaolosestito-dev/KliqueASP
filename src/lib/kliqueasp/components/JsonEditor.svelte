@@ -11,7 +11,10 @@
   export let onReset: () => void = () => {};
   export let onLoadDavis: () => void = () => {};
   export let onLoadKarate: () => void = () => {};
+  export let onLoadGahukuGama: () => void = () => {};
   export let onLoadTemporalEdges: () => void = () => {};
+  export let onLoadInVS: () => void = () => {};
+  export let onLoadInVSFull: () => void = () => {};
   export let onClose: () => void = () => {};
 </script>
 
@@ -96,10 +99,37 @@
       <button
         class="secondary-button"
         type="button"
+        on:click={onLoadGahukuGama}
+        title="Carica la rete Gahuku-Gama con segni di alleanza/inimicizia e triadi firmate"
+      >
+        Gahuku-Gama · 16 nodi, 58 archi firmati
+      </button>
+
+      <button
+        class="secondary-button"
+        type="button"
         on:click={onLoadTemporalEdges}
         title="Carica una fixture sintetica schema v2 con intervalli temporali sugli archi"
       >
         Rete temporale · 4 nodi, 5 archi
+      </button>
+
+      <button
+        class="secondary-button"
+        type="button"
+        on:click={onLoadInVS}
+        title="Carica la finestra inclusiva [28.800, 34.800] s; conserva intero il record al bordo che arriva a 34.820 s"
+      >
+        SocioPatterns InVS · 45 nodi, 134 contatti
+      </button>
+
+      <button
+        class="secondary-button"
+        type="button"
+        on:click={onLoadInVSFull}
+        title="Carica tutti i 9.827 contatti InVS; il conteggio del motivo è partizionato in blocchi da otto record con budget complessivo di 30 minuti"
+      >
+        SocioPatterns InVS completo · 92 nodi, 9.827 contatti
       </button>
     </div>
   </aside>
