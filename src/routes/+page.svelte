@@ -1,5 +1,6 @@
 <script lang="ts">
   import GraphApp from "$lib/kliqueasp/GraphApp.svelte";
+  import WorkspaceNavigation from "$lib/kliqueasp/components/WorkspaceNavigation.svelte";
 
   const graphConfig = {
     features: {
@@ -88,3 +89,5 @@
   {graphData}
   forceEasterEgg={true}
 />
+
+<WorkspaceNavigation variant="home" />

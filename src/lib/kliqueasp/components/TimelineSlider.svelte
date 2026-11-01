@@ -82,6 +82,8 @@
 
 <div
   class="timeline-container"
+  role="group"
+  aria-label="Intervallo temporale del grafo"
   style="
     --tl-bottom: {UI.timeline.bottom}px;
     --tl-width: {UI.timeline.width};
@@ -116,6 +118,7 @@
   <div class="slider-wrapper">
     <input
       type="range"
+      aria-label="Anno iniziale del periodo"
       min={min}
       max={max}
       value={localStart}
@@ -126,6 +129,7 @@
 
     <input
       type="range"
+      aria-label="Anno finale del periodo"
       min={min}
       max={max}
       value={localEnd}

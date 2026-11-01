@@ -318,6 +318,23 @@ test("typed-path why-not CSV esporta i prefissi certificati e neutralizza i camp
   assert.match(rows[3][10], /nessun nodo raggiungibile dopo il passo 2/);
 });
 
+test("typed-path why-not CSV descrive in italiano un cammino con nodi ripetuti", () => {
+  const rows = parseCsv(buildTypedPathCounterfactualWhyNotCsv({
+    certificate: {
+      edgeTypeSequence: ["x"],
+      reachableByStep: [{ step: 0, nodeIds: ["a"] }, { step: 1, nodeIds: ["goal"] }],
+      goalReachableAsWalk: true,
+      candidateEdgeIds: []
+    },
+    startNodeId: "a",
+    goalNodeId: "goal",
+    selectedGroup: "",
+    sourceIdByNodeId: {}
+  }));
+
+  assert.equal(rows[1][10], "meta raggiunta con un cammino che ripete nodi; la query principale ha provato che non esiste un cammino semplice");
+});
+
 test("k-plex massimo CSV conserva schema e righe per le coppie non adiacenti", () => {
   const rows = parseCsv(buildKPlexWitnessCsv({
     semantics: "maximum_cardinality",

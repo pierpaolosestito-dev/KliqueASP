@@ -198,15 +198,17 @@ test("clique witness CSV looks up provenance using own source-ID properties", ()
 });
 
 test("CSV download keeps its object URL valid through the anchor click", async () => {
-  const { downloadCsvText } = await import("../src/lib/kliqueasp/csvExport.ts");
+  const { CSV_DOWNLOAD_REQUESTED_EVENT, downloadCsvText } = await import("../src/lib/kliqueasp/csvExport.ts");
   const originalCreate = URL.createObjectURL;
   const originalRevoke = URL.revokeObjectURL;
   const originalDocument = globalThis.document;
+  const originalWindow = globalThis.window;
   const originalSetTimeout = globalThis.setTimeout;
   const calls = [];
   let deferredRevoke;
   let anchor;
   let capturedBlob;
+  let downloadEvent;
 
   URL.createObjectURL = (blob) => {
     capturedBlob = blob;
@@ -224,6 +226,12 @@ test("CSV download keeps its object URL valid through the anchor click", async (
       };
     }
   };
+  globalThis.window = {
+    dispatchEvent: (event) => {
+      downloadEvent = event;
+      return true;
+    }
+  };
   globalThis.setTimeout = (callback, delay) => {
     deferredRevoke = callback;
     calls.push(["defer", delay]);
@@ -239,6 +247,8 @@ test("CSV download keeps its object URL valid through the anchor click", async (
     downloadCsvText("result.csv", certificateCsv);
     assert.equal(anchor.href, "blob:test-csv");
     assert.equal(anchor.download, "result.csv");
+    assert.equal(downloadEvent.type, CSV_DOWNLOAD_REQUESTED_EVENT);
+    assert.deepEqual(downloadEvent.detail, { filename: "result.csv" });
     assert.ok(capturedBlob instanceof Blob);
     assert.equal(capturedBlob.type, "text/csv;charset=utf-8;");
     assert.deepEqual(
@@ -253,6 +263,8 @@ test("CSV download keeps its object URL valid through the anchor click", async (
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
     globalThis.document = originalDocument;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
     globalThis.setTimeout = originalSetTimeout;
   }
 });

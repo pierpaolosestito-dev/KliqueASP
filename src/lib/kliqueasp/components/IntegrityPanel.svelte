@@ -1,20 +1,30 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
   import { csvCell, downloadCsvText } from "../csvExport";
-  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+  import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import SolverDiagnosticsDetails from "./SolverDiagnosticsDetails.svelte";
+  import ResultListPager from "./ResultListPager.svelte";
+  import ProgressiveList from "./ProgressiveList.svelte";
   import { summarizeEdgeProvenance } from "../graph/structuralTasks";
   import { getOwnRecordValue } from "../graph/recordUtils";
+  import { getIntegrityViolationLabel } from "../graph/integrityViolationLabels.ts";
   import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { IntegrityRepairProposal, IntegrityViolation } from "../graph/integrityTask";
 
   export let open = false;
   export let running = false;
+  export let requirementsAvailable = true;
+  export let requirementReasons: string[] = [];
+  export let onOpenData: () => void = () => {};
   export let error = "";
   export let hasRun = false;
   export let violations: IntegrityViolation[] = [];
   export let timeMs: number | undefined;
   export let repairEnabled = false;
+  export let repairRequirementsAvailable = true;
+  export let repairRequirementReasons: string[] = [];
   export let repairRunning = false;
   export let repairError = "";
   export let repairProposal: IntegrityRepairProposal | null = null;
@@ -29,6 +39,97 @@
   const dispatch = createEventDispatcher();
   const integrityDiagnosisContract = getGraphTaskContract("graphIntegrity");
   const integrityRepairContract = getGraphTaskContract("minimumIntegrityRepair");
+  const violationPageSize = 50;
+  const repairActionPageSize = 50;
+  let visibleViolationLimit = violationPageSize;
+  let visibleRepairActionLimit = repairActionPageSize;
+  let previousViolations = violations;
+  let expandedViolationIndex: number | null = null;
+  let repairProposalDetailsOpen = false;
+  let previousRepairProposal = repairProposal;
+  $: if (violations !== previousViolations) {
+    previousViolations = violations;
+    visibleViolationLimit = violationPageSize;
+    expandedViolationIndex = null;
+  }
+  $: visibleViolations = violations.slice(0, visibleViolationLimit);
+  $: if (repairProposal !== previousRepairProposal) {
+    previousRepairProposal = repairProposal;
+    repairProposalDetailsOpen = false;
+    visibleRepairActionLimit = repairActionPageSize;
+  }
+  $: repairActions = buildRepairActions(repairProposal);
+  $: visibleRepairActions = repairActions.slice(0, visibleRepairActionLimit);
+  $: repairProposalActionCount = repairProposal
+    ? repairProposal.edgeIds.length +
+      (repairProposal.nodeAttributes?.length ?? 0) +
+      (repairProposal.edgeAttributes?.length ?? 0) +
+      (repairProposal.nodeAttributeReplacements?.length ?? 0) +
+      (repairProposal.edgeAttributeReplacements?.length ?? 0) +
+      (repairProposal.nodeTypeReplacements?.length ?? 0) +
+      (repairProposal.edgeTypeReplacements?.length ?? 0) +
+      (repairProposal.edgeIntervalReplacements?.length ?? 0)
+    : 0;
+
+  function showMoreViolations() {
+    visibleViolationLimit += violationPageSize;
+  }
+
+  function violationDetailsOpen(index: number): boolean {
+    return expandedViolationIndex === index;
+  }
+
+  function setViolationDetailsOpen(index: number, open: boolean) {
+    if (open) expandedViolationIndex = index;
+    else if (expandedViolationIndex === index) expandedViolationIndex = null;
+  }
+
+  function showMoreRepairActions() {
+    visibleRepairActionLimit += repairActionPageSize;
+  }
+
+  function formatRepairValue(value: unknown): string {
+    return value === undefined ? "assente" : JSON.stringify(value);
+  }
+
+  function buildRepairActions(proposal: IntegrityRepairProposal | null): { description: string; highlightEdgeId?: string }[] {
+    if (!proposal) return [];
+
+    const actions: { description: string; highlightEdgeId?: string }[] = [];
+    for (const edgeId of proposal.edgeIds) {
+      const provenance = edgeProvenance(edgeId);
+      actions.push({ description: `Rimuovere l’arco ${edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""} · costo ${proposal.edgeCosts?.[edgeId] ?? "?"}` });
+    }
+    for (const candidate of proposal.nodeAttributes ?? []) {
+      actions.push({ description: `Assegnare ${candidate.attribute} = ${JSON.stringify(candidate.value)} al nodo ${candidate.nodeId} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.edgeAttributes ?? []) {
+      const provenance = edgeProvenance(candidate.edgeId);
+      actions.push({ description: `Assegnare ${candidate.attribute} = ${JSON.stringify(candidate.value)} all’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.nodeAttributeReplacements ?? []) {
+      actions.push({ description: `Sostituire ${candidate.attribute} del nodo ${candidate.nodeId}: ${JSON.stringify(candidate.expectedValue)} → ${JSON.stringify(candidate.value)} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.edgeAttributeReplacements ?? []) {
+      const provenance = edgeProvenance(candidate.edgeId);
+      actions.push({ description: `Sostituire ${candidate.attribute} dell’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""}: ${JSON.stringify(candidate.expectedValue)} → ${JSON.stringify(candidate.value)} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.nodeTypeReplacements ?? []) {
+      actions.push({ description: `Correggere il tipo del nodo ${candidate.nodeId}: ${candidate.expectedType} → ${candidate.newType} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.edgeTypeReplacements ?? []) {
+      const provenance = edgeProvenance(candidate.edgeId);
+      actions.push({ description: `Correggere il tipo dell’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""}: ${candidate.expectedType} → ${candidate.newType} · costo ${candidate.cost}` });
+    }
+    for (const candidate of proposal.edgeIntervalReplacements ?? []) {
+      const provenance = edgeProvenance(candidate.edgeId);
+      actions.push({
+        description: `Sostituire l’intervallo chiuso dell’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""}: [${formatRepairValue(candidate.expectedFrom)}, ${formatRepairValue(candidate.expectedTo)}] → [${JSON.stringify(candidate.from)}, ${JSON.stringify(candidate.to)}] · costo ${candidate.cost}`,
+        highlightEdgeId: candidate.edgeId
+      });
+    }
+    return actions;
+  }
 
   function provenanceForEdges(edgeIds: string[]): string {
     return summarizeEdgeProvenance(edgeIds, edgeProvenanceBySourceId);
@@ -44,26 +145,6 @@
       provenance_references: getOwnRecordValue<string[]>(edgeProvenanceReferencesBySourceId, edgeId) ?? []
     }));
   }
-
-  const labels: Record<string, string> = {
-    edge_endpoint_type: "Tipo degli estremi incompatibile",
-    missing_endpoint_node_type: "Tipo nodo mancante su un estremo",
-    missing_node_type: "Tipo nodo richiesto ma assente",
-    missing_edge_type: "Tipo arco richiesto ma assente",
-    node_type_out_of_domain: "Tipo nodo fuori dal vocabolario dichiarato",
-    edge_type_out_of_domain: "Tipo arco fuori dal vocabolario dichiarato",
-    missing_node_attribute: "Attributo nodo obbligatorio assente",
-    missing_edge_attribute: "Attributo arco obbligatorio assente",
-    node_attribute_out_of_domain: "Attributo nodo fuori dal dominio dichiarato",
-    edge_attribute_out_of_domain: "Attributo arco fuori dal dominio dichiarato",
-    missing_edge_interval: "Estremo dell'intervallo temporale assente",
-    invalid_edge_interval_value: "Valore temporale non interpretabile",
-    invalid_edge_interval: "Intervallo temporale invertito",
-    duplicate_node_attribute: "Valore univoco duplicato",
-    duplicate_edge_attribute: "Valore arco univoco duplicato",
-    cardinality_min: "Cardinalità minima non rispettata",
-    cardinality_max: "Cardinalità massima superata"
-  };
 
   const edgeSubjectKinds = new Set([
     "edge_endpoint_type", "missing_endpoint_node_type", "edge_type_out_of_domain", "missing_edge_type",
@@ -84,7 +165,7 @@
         violation.kind,
         violation.subjectId ?? "",
         violation.nodeIds.join(" | "),
-        violation.edgeIds?.join(" | ") ?? "",
+        violationEdgeIds(violation).join(" | "),
         provenanceForEdges(violationEdgeIds(violation)),
         violation.edgeType ?? "",
         violation.attribute ?? "",
@@ -199,10 +280,10 @@
 </script>
 
 {#if open}
-  <section class="integrity-panel" aria-label="Diagnosi ASP d'integrità del grafo">
+  <section class="integrity-panel" aria-labelledby="integrity-panel-title">
     <header>
       <div>
-        <h3>Integrità del grafo · ASP</h3>
+        <h3 id="integrity-panel-title">Integrità del grafo</h3>
         <p>Verifica i vincoli dichiarati sul grafo importato completo dopo l'eventuale scenario di provenienza selezionato. I filtri visivi e temporali non si applicano; nessuna correzione viene eseguita.</p>
       </div>
       <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
@@ -210,7 +291,7 @@
 
     {#if integrityDiagnosisContract && integrityRepairContract}
       <details class="asp-contract">
-        <summary>Semantica dei task ASP</summary>
+        <summary>Dettagli tecnici della verifica</summary>
         <div>
           <strong>Diagnosi · {integrityDiagnosisContract.aspEncoding} v{integrityDiagnosisContract.encodingVersion}</strong>
           <p>{integrityDiagnosisContract.querySemantics}</p>
@@ -232,98 +313,144 @@
       </details>
     {/if}
 
-    <button type="button" class="run" on:click={() => dispatch("run")} disabled={running}>
-      {running ? "Verifica in esecuzione…" : "Esegui verifica ASP"}
+    {#if !requirementsAvailable}
+      <div class="requirements" role="status" aria-live="polite">
+        <strong>Controllo non disponibile</strong>
+        <ul>{#each requirementReasons as reason}<li>{reason}</li>{/each}</ul>
+        <button type="button" on:click={onOpenData}>Apri Dati e mapping</button>
+      </div>
+    {/if}
+
+    <button type="button" class="run" on:click={() => dispatch("run")} disabled={running || !requirementsAvailable}>
+      {running ? "Verifica in esecuzione…" : "Esegui verifica"}
     </button>
 
     {#if error}
-      <div class="error" role="alert">{error}</div>
+      <AnalysisErrorMessage message={error} />
     {/if}
 
     {#if repairError}
-      <div class="error" role="alert">{repairError}</div>
+      <AnalysisErrorMessage message={repairError} />
     {/if}
 
     {#if hasRun && !error}
       <div class="summary" role="status">
         <strong>{violations.length}</strong> violazioni dichiarate trovate
-        {#if timeMs !== undefined}<span> · {timeMs.toFixed(1)} ms</span>{/if}
-        <WorkerMemoryReadout stats={workerWasmMemoryStats} {clingoTiming} showClingoTiming={showClingoTiming} {clingoStats} showClingoStats={showClingoStats} />
+        {#if timeMs !== undefined}<span> · {formatItalianNumber(timeMs, 1)} ms</span>{/if}
+        <SolverDiagnosticsDetails
+          {workerWasmMemoryStats}
+          {clingoTiming}
+          {showClingoTiming}
+          {clingoStats}
+          {showClingoStats}
+        />
         {#if violations.length === 0}<p>Nessuna violazione dei vincoli configurati.</p>{/if}
       </div>
     {/if}
 
     {#if violations.length > 0}
       <div class="results-heading">
-        <strong>Testimoni ASP</strong>
+        <strong>Violazioni trovate</strong>
         <button type="button" on:click={exportResults}>Esporta CSV</button>
       </div>
       <ul class="results">
-        {#each violations as violation, index}
+        {#each visibleViolations as violation, index}
           <li>
             <button type="button" class="violation" on:click={() => dispatch("highlight", violation)}>
-              <span class="title">{index + 1}. {labels[violation.kind] ?? violation.kind}</span>
+              <span class="title">{index + 1}. {getIntegrityViolationLabel(violation.kind)}</span>
               {#if violation.subjectId}<span>ID: {violation.subjectId}</span>{/if}
-              {#if violation.nodeIds.length}<span>Nodi: {violation.nodeIds.join(", ")}</span>{/if}
-              {#if violation.edgeIds?.length}
-                <span>Archi: {violation.edgeIds.join(", ")}</span>
-              {/if}
-              {#if provenanceForEdges(violationEdgeIds(violation))}<span>Fonti dichiarate: {provenanceForEdges(violationEdgeIds(violation))}</span>{/if}
-              {#if violation.edgeType}<span>Relazione: {violation.edgeType}</span>{/if}
-              {#if violation.attribute}<span>Attributo: {violation.attribute}</span>{/if}
-              {#if violation.value !== undefined}<span>Valore: {violation.value}</span>{/if}
-              {#if violation.expectedDescription}
-                <span>Atteso: {violation.expectedDescription}</span>
-              {:else if violation.expected !== undefined}
-                <span>Atteso: {violation.expected} · rilevato: {violation.actual}</span>
-              {/if}
+              <span>{violation.nodeIds.length} nodi · {violationEdgeIds(violation).length} archi coinvolti</span>
             </button>
+            <details
+              class="violation-evidence"
+              open={violationDetailsOpen(index)}
+              on:toggle={(event) => setViolationDetailsOpen(index, event.currentTarget.open)}
+            >
+              <summary>Dettagli della violazione</summary>
+              {#if violationDetailsOpen(index)}
+                <div class="violation-evidence-content">
+                  {#if violation.nodeIds.length}
+                    <strong>Nodi coinvolti · {violation.nodeIds.length}</strong>
+                    <ProgressiveList items={violation.nodeIds} resetKey={violation} label="nodi della violazione" let:item>
+                      <span>{item}</span>
+                    </ProgressiveList>
+                  {/if}
+                  {#if violationEdgeIds(violation).length}
+                    <strong>Archi e fonti · {violationEdgeIds(violation).length}</strong>
+                    <ProgressiveList items={violationEdgeIds(violation)} resetKey={violation} label="archi della violazione" let:item>
+                      <span><code>{item}</code>{#if edgeProvenance(item)} · fonte dichiarata: {edgeProvenance(item)}{/if}</span>
+                    </ProgressiveList>
+                  {/if}
+                  {#if violation.edgeType}<span>Relazione: {violation.edgeType}</span>{/if}
+                  {#if violation.attribute}<span>Attributo: {violation.attribute}</span>{/if}
+                  {#if violation.value !== undefined}<span>Valore: {violation.value}</span>{/if}
+                  {#if violation.expectedDescription}
+                    <span>Atteso: {violation.expectedDescription}</span>
+                  {:else if violation.expected !== undefined}
+                    <span>Atteso: {violation.expected} · rilevato: {violation.actual}</span>
+                  {/if}
+                </div>
+              {/if}
+            </details>
           </li>
         {/each}
       </ul>
-      <small>Seleziona un testimone per evidenziare i nodi e gli archi coinvolti attualmente visibili. I risultati descrivono i vincoli configurati, non la verità dei dati.</small>
+      <ResultListPager
+        total={violations.length}
+        visible={visibleViolations.length}
+        pageSize={violationPageSize}
+        label="violazioni"
+        showMore={showMoreViolations}
+      />
+      <small>Seleziona una violazione per evidenziare i nodi e gli archi coinvolti nella vista corrente. I risultati descrivono i vincoli configurati, non la verità dei dati.</small>
     {/if}
 
-    {#if repairEnabled && hasRun && violations.length > 0}
-      <button type="button" class="run repair-run" on:click={() => dispatch("repair")} disabled={running || repairRunning}>
-        {repairRunning ? "Ricerca proposta minima…" : "Calcola proposta minima"}
-      </button>
+    {#if hasRun && !error && violations.length > 0}
+      {#if repairEnabled}
+        <button type="button" class="run repair-run" on:click={() => dispatch("repair")} disabled={running || repairRunning || !repairRequirementsAvailable}>
+          {repairRunning ? "Ricerca proposta minima…" : "Calcola proposta minima"}
+        </button>
+        {#if !repairRequirementsAvailable}
+          <div class="requirements repair-requirements" role="status" aria-live="polite">
+            <strong>Proposta di riparazione non disponibile</strong>
+            <ul>{#each repairRequirementReasons as reason}<li>{reason}</li>{/each}</ul>
+            <button type="button" on:click={onOpenData}>Apri Dati e mapping</button>
+          </div>
+        {/if}
+      {:else}
+        <div class="requirements repair-requirements" role="status">
+          <strong>Proposta minima non configurata</strong>
+          <p>Aggiungi azioni candidate in graphIntegrity.repairSuggestions per calcolare il costo minimo di una riparazione.</p>
+          <button type="button" on:click={onOpenData}>Apri Dati e configurazione</button>
+        </div>
+      {/if}
     {/if}
 
     {#if repairProposal}
-      <div class="repair-proposal" role="status">
-        <strong>Proposta di riparazione · costo {repairProposal.cost}</strong>
-        {#if repairProposal.edgeIds.length > 0}
-          <span>Rimuovere gli archi: {repairProposal.edgeIds.map((edgeId) => `${edgeId} (costo ${repairProposal?.edgeCosts?.[edgeId] ?? "?"})`).join(", ")}</span>
-          {#if provenanceForEdges(repairProposal.edgeIds)}<span>Fonti dichiarate: {provenanceForEdges(repairProposal.edgeIds)}</span>{/if}
-        {/if}
-        {#each repairProposal.nodeAttributes ?? [] as candidate}
-          <span>Assegnare {candidate.attribute} = {JSON.stringify(candidate.value)} al nodo {candidate.nodeId} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.edgeAttributes ?? [] as candidate}
-          <span>Assegnare {candidate.attribute} = {JSON.stringify(candidate.value)} all'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.nodeAttributeReplacements ?? [] as candidate}
-          <span>Sostituire {candidate.attribute} del nodo {candidate.nodeId}: {JSON.stringify(candidate.expectedValue)} → {JSON.stringify(candidate.value)} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.edgeAttributeReplacements ?? [] as candidate}
-          <span>Sostituire {candidate.attribute} dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: {JSON.stringify(candidate.expectedValue)} → {JSON.stringify(candidate.value)} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.nodeTypeReplacements ?? [] as candidate}
-          <span>Correggere il tipo del nodo {candidate.nodeId}: {candidate.expectedType} → {candidate.newType} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.edgeTypeReplacements ?? [] as candidate}
-          <span>Correggere il tipo dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: {candidate.expectedType} → {candidate.newType} · costo {candidate.cost}</span>
-        {/each}
-        {#each repairProposal.edgeIntervalReplacements ?? [] as candidate}
-          <span>
-            Sostituire l'intervallo chiuso dell'arco {candidate.edgeId}{#if edgeProvenance(candidate.edgeId)} · fonte dichiarata: {edgeProvenance(candidate.edgeId)}{/if}: [{candidate.expectedFrom === undefined ? "assente" : JSON.stringify(candidate.expectedFrom)}, {candidate.expectedTo === undefined ? "assente" : JSON.stringify(candidate.expectedTo)}] → [{JSON.stringify(candidate.from)}, {JSON.stringify(candidate.to)}] · costo {candidate.cost}
-            <button type="button" on:click={() => dispatch("highlight", { kind: "invalid_edge_interval", subjectId: candidate.edgeId, edgeIds: [candidate.edgeId], nodeIds: [] })}>Evidenzia arco</button>
+      <details class="repair-proposal" bind:open={repairProposalDetailsOpen}>
+        <summary><strong>Proposta di riparazione · costo {repairProposal.cost} · {repairProposalActionCount} azioni</strong></summary>
+        {#if repairProposalDetailsOpen}
+        <div role="status">
+        <button type="button" class="visualize-repair" on:click={() => dispatch("highlightRepairProposal", repairProposal)}>Visualizza proposta sul grafo 2D</button>
+        {#each visibleRepairActions as action}
+          <span>{action.description}
+            {#if action.highlightEdgeId}
+              <button type="button" on:click={() => dispatch("highlight", { kind: "invalid_edge_interval", subjectId: action.highlightEdgeId, edgeIds: [action.highlightEdgeId], nodeIds: [] })}>Evidenzia arco</button>
+            {/if}
           </span>
         {/each}
+        <ResultListPager
+          total={repairActions.length}
+          visible={visibleRepairActions.length}
+          pageSize={repairActionPageSize}
+          label="azioni di riparazione"
+          showMore={showMoreRepairActions}
+        />
         <button type="button" on:click={exportRepairProposal}>Esporta proposta CSV</button>
         <small>La proposta usa solo azioni candidate dichiarate nella configurazione e non modifica il grafo. Le sostituzioni temporali usano intervalli chiusi con estremi interi oppure date ISO.</small>
-      </div>
+        </div>
+        {/if}
+      </details>
     {/if}
   </section>
 {/if}
@@ -334,6 +461,28 @@
     border: 1px solid #cbd5e1;
     border-radius: 8px;
     background: #f8fafc;
+  }
+
+  .requirements {
+    padding: 9px 10px;
+    border: 1px solid #e8c785;
+    border-radius: 8px;
+    background: #fff9ec;
+    color: #713f12;
+  }
+
+  .requirements ul {
+    margin: 5px 0 8px;
+    padding-left: 18px;
+  }
+
+  .requirements button {
+    padding: 6px 8px;
+    border: 1px solid #bd8c37;
+    border-radius: 6px;
+    background: #fff;
+    color: #713f12;
+    cursor: pointer;
   }
 
   .asp-contract summary {
@@ -401,7 +550,22 @@
     font-size: 22px;
   }
 
-  .run,
+  .run {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid #1e645d;
+    border-radius: 8px;
+    background: #1e645d;
+    color: #fff;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .run:hover:not(:disabled) {
+    border-color: #174f49;
+    background: #174f49;
+  }
+
   .results-heading button {
     padding: 7px 9px;
     border: 1px solid #cbd5e1;
@@ -414,13 +578,6 @@
   button:disabled {
     cursor: wait;
     opacity: 0.6;
-  }
-
-  .error {
-    padding: 8px;
-    border-radius: 6px;
-    background: #fef2f2;
-    color: #991b1b;
   }
 
   .summary {
@@ -443,12 +600,36 @@
     overflow-wrap: anywhere;
   }
 
+  .repair-proposal button {
+    margin: 4px 5px 4px 0;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+  }
+
+  .repair-proposal .visualize-repair {
+    border-color: #0f766e;
+    background: #f0fdfa;
+    color: #115e59;
+    font-weight: 650;
+  }
+
   .results {
     display: grid;
     gap: 6px;
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  .results > li {
+    overflow: hidden;
+    border: 1px solid #fed7aa;
+    border-radius: 6px;
+    background: #fff;
   }
 
   .violation {
@@ -467,6 +648,28 @@
 
   .violation:hover {
     background: #ffedd5;
+  }
+
+  .violation-evidence {
+    margin: 0 8px 7px;
+    color: #475569;
+    font-size: 0.78rem;
+  }
+
+  .violation-evidence summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .violation-evidence-content {
+    display: grid;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 5px;
+    background: #fff7ed;
+    overflow-wrap: anywhere;
   }
 
   .title {

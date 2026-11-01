@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { NeighborhoodDirection } from "../graph/graphVisualization.ts";
+  import ProgressiveList from "./ProgressiveList.svelte";
+  import ResultListPager from "./ResultListPager.svelte";
 
   type Neighbor = {
     id: string;
@@ -35,23 +38,73 @@
   let maximumNeighborhoodRadius = 1;
   let neighborhoodRadiusIsValid = true;
   let neighborhoodDirection: NeighborhoodDirection = "weak";
+  const neighborPageSize = 50;
+  let visibleNeighborLimit = neighborPageSize;
+  let genericDetails: Array<{ key: string; label: string; value: any }> = [];
+  let previousSelectedNodeId = "";
+  let previousNeighborCount = -1;
 
   $: maximumNeighborhoodRadius = Math.max(1, totalGraphNodeCount);
   $: neighborhoodRadiusIsValid = Number.isSafeInteger(Number(neighborhoodRadius)) &&
     Number(neighborhoodRadius) >= 1 && Number(neighborhoodRadius) <= maximumNeighborhoodRadius;
+  $: selectedNodeId = selectedNode?.id == null ? "" : String(selectedNode.id);
+  $: if (selectedNodeId !== previousSelectedNodeId || neighborIds.length !== previousNeighborCount) {
+    previousSelectedNodeId = selectedNodeId;
+    previousNeighborCount = neighborIds.length;
+    visibleNeighborLimit = neighborPageSize;
+  }
+  $: visibleNeighborIds = neighborIds.slice(0, visibleNeighborLimit);
+  $: genericDetails = getGenericDetails(selectedDetails);
+
+  function showMoreNeighbors() {
+    visibleNeighborLimit += neighborPageSize;
+  }
 
   let showModal = false;
+  let modalElement: HTMLDivElement | null = null;
+  let modalTrigger: HTMLButtonElement | null = null;
 
-  function openModal() {
+  function openModal(event: MouseEvent) {
+    modalTrigger = event.currentTarget as HTMLButtonElement;
     showModal = true;
   }
 
   function closeModal() {
+    if (!showModal) return;
     showModal = false;
+    const trigger = modalTrigger;
+    modalTrigger = null;
+    void tick().then(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (showModal && e.key === "Escape") closeModal();
+    if (!showModal) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeModal();
+      return;
+    }
+    if (e.key !== "Tab" || !modalElement) return;
+
+    const focusable = Array.from(modalElement.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true");
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+
+    if (!first || !last) {
+      e.preventDefault();
+      modalElement.focus();
+    } else if (e.shiftKey && (activeElement === first || activeElement === modalElement)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (activeElement === last || activeElement === modalElement)) {
+      e.preventDefault();
+      first.focus();
+    }
   }
 
   function focusOnMount(node: HTMLElement) {
@@ -144,6 +197,13 @@
   }
 
   function formatKey(key: string) {
+    const knownLabels: Record<string, string> = {
+      active_from: "Attivo dal",
+      active_to: "Attivo fino al"
+    };
+    const knownLabel = knownLabels[key.trim().toLowerCase()];
+    if (knownLabel) return knownLabel;
+
     return key
       .replace(/_/g, " ")
       .replace(/\b\w/g, c => c.toUpperCase());
@@ -171,15 +231,13 @@
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
-
 {#if selectedNode}
   <div class="info-panel">
-    <button class="title-btn" type="button" on:click={openModal}>
-      <h3>{selectedNode.label}</h3>
-    </button>
+    <h3 class="info-title">
+      <button class="title-btn" type="button" on:click={openModal}>{selectedNode.label}</button>
+    </h3>
 
-    <p><strong>Degree:</strong> {selectedNode.degree}</p>
+    <p><strong>Grado:</strong> {selectedNode.degree}</p>
 
     <section class="neighborhood-focus">
       <strong>Focus del vicinato (solo vista)</strong>
@@ -219,7 +277,7 @@
           {:else}
             Vista limitata a {neighborhoodFocus.nodeCount} di {totalGraphNodeCount} nodi entro {neighborhoodFocus.maxHops} archi da {neighborhoodFocus.rootNodeId} ({neighborhoodFocus.direction}).
           {/if}
-          Mostra {neighborhoodFocus.recordCount} record in {neighborhoodFocus.renderedLinkCount} linee. Proiezione ASP, risultati ed export restano sull'intero grafo filtrato.
+          Mostra {neighborhoodFocus.recordCount} record in {neighborhoodFocus.renderedLinkCount} linee. L'analisi e gli export restano riferiti all'intero grafo filtrato.
         </small>
         <button type="button" on:click={onClearNeighborhoodFocus}>Mostra tutta la proiezione</button>
       {/if}
@@ -231,9 +289,12 @@
       </button>
     {/if}
 
-    <strong>Neighbors:</strong>
+    <strong>Vicini · {neighborIds.length}</strong>
+    {#if neighborIds.length === 0}
+      <p>Nessun vicino nella proiezione corrente.</p>
+    {:else}
     <ul>
-      {#each neighborIds as n}
+      {#each visibleNeighborIds as n}
         <li style="display:flex; align-items:center; gap:6px;">
           <label style="flex:1; display:flex; align-items:center; gap:6px;">
             <input
@@ -249,6 +310,7 @@
           </label>
 
           <button
+            aria-label={`Esplora ${n.label}`}
             title="Esplora questo nodo"
             type="button"
             on:click={() => onCommitNeighbor(n.id)}
@@ -259,13 +321,23 @@
         </li>
       {/each}
     </ul>
+    <ResultListPager
+      total={neighborIds.length}
+      visible={visibleNeighborIds.length}
+      pageSize={neighborPageSize}
+      label="vicini"
+      showMore={showMoreNeighbors}
+    />
+    {/if}
   </div>
 
   {#if showModal}
     <div
+      bind:this={modalElement}
       class="modal-backdrop"
       role="dialog"
       aria-modal="true"
+      aria-labelledby="node-details-title"
       on:click={onBackdropClick}
       on:keydown={handleKeydown}
       tabindex="-1"
@@ -274,8 +346,8 @@
       <div class="modal-card">
 
         <!-- HEADER -->
-        <div class="modal-header">
-          {selectedNode.label}
+        <div class="modal-header" id="node-details-title">
+          Dettagli del nodo {selectedNode.label}
         </div>
 
         <!-- BODY -->
@@ -312,9 +384,9 @@
               {#if selectedDetails.roles && selectedDetails.roles.length > 0}
                 <hr />
                 <p><strong>Ambiti professionali:</strong></p>
-                <ul>
-                  {#each selectedDetails.roles as role}
-                    <li>
+                <div class="node-detail-list">
+                  <ProgressiveList items={selectedDetails.roles} resetKey={selectedDetails} label="ambiti professionali" let:item={role}>
+                    <div class="role-entry">
                       {#if role.professione}
                         <strong>{role.professione}</strong>
                       {/if}
@@ -328,16 +400,18 @@
                           / {role.sotto_area}
                         {/if}
                       {/if}
-                    </li>
-                  {/each}
-                </ul>
+                    </div>
+                  </ProgressiveList>
+                </div>
               {/if}
 
-              {#if getGenericDetails(selectedDetails).length > 0}
+              {#if genericDetails.length > 0}
                 <hr />
-                {#each getGenericDetails(selectedDetails) as item}
-                  <p><strong>{item.label}:</strong> {item.value}</p>
-                {/each}
+                <div class="node-detail-list">
+                  <ProgressiveList items={genericDetails} resetKey={selectedDetails} label="campi aggiuntivi" let:item>
+                    <p><strong>{item.label}:</strong> {item.value}</p>
+                  </ProgressiveList>
+                </div>
               {/if}
 
               {#if selectedDetails.biografia_html}
@@ -370,11 +444,13 @@
                 <p><strong>Descrizione:</strong> {selectedDetails.description}</p>
               {/if}
 
-              {#if getGenericDetails(selectedDetails).length > 0}
+              {#if genericDetails.length > 0}
                 <hr />
-                {#each getGenericDetails(selectedDetails) as item}
-                  <p><strong>{item.label}:</strong> {item.value}</p>
-                {/each}
+                <div class="node-detail-list">
+                  <ProgressiveList items={genericDetails} resetKey={selectedDetails} label="campi aggiuntivi" let:item>
+                    <p><strong>{item.label}:</strong> {item.value}</p>
+                  </ProgressiveList>
+                </div>
               {/if}
 
               {#if selectedDetails.contenuto}
@@ -385,10 +461,12 @@
 
             {:else}
 
-              {#if getGenericDetails(selectedDetails).length > 0}
-                {#each getGenericDetails(selectedDetails) as item}
-                  <p><strong>{item.label}:</strong> {item.value}</p>
-                {/each}
+              {#if genericDetails.length > 0}
+                <div class="node-detail-list">
+                  <ProgressiveList items={genericDetails} resetKey={selectedDetails} label="campi aggiuntivi" let:item>
+                    <p><strong>{item.label}:</strong> {item.value}</p>
+                  </ProgressiveList>
+                </div>
               {:else}
                 <p>Nessun dettaglio disponibile.</p>
               {/if}
@@ -403,7 +481,7 @@
 
         <!-- FOOTER -->
         <div class="modal-footer">
-          <button class="modal-close" type="button" on:click={closeModal}>
+          <button class="modal-close" type="button" aria-label={`Chiudi dettagli di ${selectedNode.label}`} on:click={closeModal}>
             ✕
           </button>
         </div>
@@ -428,20 +506,27 @@
   }
 
   .title-btn {
-    width: 100%;
+    display: block;
     text-align: left;
     background: transparent;
     border: none;
     padding: 0;
-    margin: 0 0 6px 0;
+    margin: 0;
     cursor: pointer;
     color: inherit;
+    font: inherit;
+    text-decoration: underline;
   }
 
-  .title-btn h3 {
+  .title-btn:focus-visible,
+  .modal-close:focus-visible {
+    outline: 2px solid var(--focus-color, #2563eb);
+    outline-offset: 2px;
+  }
+
+  .info-title {
     margin: 0;
     font-size: var(--info-title-size);
-    text-decoration: underline;
   }
 
   .back-btn {
@@ -490,8 +575,9 @@
     padding: 18px;
   }
 
-  .modal-backdrop:focus {
-    outline: none;
+  .modal-backdrop:focus-visible {
+    outline: 2px solid var(--focus-color, #2563eb);
+    outline-offset: -4px;
   }
 
   .modal-card {
@@ -513,6 +599,19 @@
   .modal-body {
     padding: var(--modal-body-padding);
     line-height: var(--modal-line-height);
+  }
+
+  .node-detail-list {
+    display: grid;
+    gap: 4px;
+  }
+
+  .node-detail-list :global(p) {
+    margin: 2px 0;
+  }
+
+  .role-entry {
+    overflow-wrap: anywhere;
   }
 
   .biografia {

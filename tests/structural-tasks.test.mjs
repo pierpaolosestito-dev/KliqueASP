@@ -3886,7 +3886,7 @@ test("la fattorizzazione ASP conserva scala pesata e tratta i volumi nulli senza
   }, true), null, "la fattorizzazione richiede gamma strettamente positiva");
 });
 
-test("la modularitÃ  fattorizzata fallisce in modo chiuso se un sottoproblema non prova l'ottimo", async () => {
+test("la modularità fattorizzata fallisce in modo chiuso se un sottoproblema non prova l'ottimo", async () => {
   const facts = buildModularityFacts([1, 2, 3, 4], [
     { source: 1, target: 2 }, { source: 3, target: 4 }
   ], { includePairwiseObjective: true });
@@ -4754,6 +4754,39 @@ test("i cammini tipizzati temporali verificano co-validità, ordine e record par
   );
   assert.equal(nonStrict.Result, "SATISFIABLE", "l'ordine non stretto ammette inizi di validità uguali");
   assert.equal(strict.Result, "UNSATISFIABLE", "l'ordine stretto rifiuta inizi di validità uguali");
+
+  const overlappingGraph = normalizeGraphData({
+    nodes: [{ id: "start" }, { id: "middle" }, { id: "goal" }],
+    edges: [
+      { id: "first-overlap", source: "start", target: "middle", type: "affiliation", from: 1, to: 5 },
+      { id: "second-overlap", source: "middle", target: "goal", type: "publication", from: 3, to: 7 }
+    ]
+  }, config);
+  const overlappingBundle = buildAspFactsFromGraph(overlappingGraph);
+  const overlappingOptions = {
+    startNode: overlappingBundle.indexByNodeId.get("start"),
+    goalNode: overlappingBundle.indexByNodeId.get("goal"),
+    edgeTypeSequence: ["affiliation", "publication"],
+    direction: "directed",
+    temporalSemantics: "orderedByStart",
+    strictTemporalOrder: true
+  };
+  const overlapping = await runner.run(
+    `${overlappingBundle.facts.trim()}\n\n${buildTypedPathProgram(overlappingOptions)}\n`,
+    getStructuralSolverOptions("typedPath"), 1
+  );
+  assert.equal(overlapping.Result, "SATISFIABLE", "l'ordine degli inizi ammette intervalli di validità sovrapposti");
+  const overlappingEdgeFacts = buildMinimumEdgeSeparatorFacts(overlappingGraph.links, overlappingBundle.indexByNodeId);
+  const overlappingPath = parseWitnessTemporalTypedPath(
+    overlapping.Call?.[0]?.Witnesses,
+    overlappingBundle.reverseIndex,
+    overlappingEdgeFacts.reverseEdgeIndex,
+    toTemporalRecords(overlappingGraph, overlappingBundle),
+    overlappingOptions,
+    overlappingBundle.temporalEncoding.decode
+  );
+  assert.deepEqual(overlappingPath?.startTimeValuesByStep, [1, 3]);
+
   assert.throws(() => buildTypedPathProgram({
     ...dateOptions, temporalSemantics: "coValid", strictTemporalOrder: true
   }), /soltanto alla semantica orderedByStart/);

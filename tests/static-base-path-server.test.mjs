@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,12 @@ import svelteConfig from "../svelte.config.js";
 import * as rootLayoutOptions from "../src/routes/+layout.ts";
 
 const buildDirectory = path.resolve("test-build-root");
+
+test("the documented preview command serves the adapter's build directory at the configured base path", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(packageJson.scripts.preview, "node scripts/serve-static-base-path.mjs");
+  assert.equal(packageJson.scripts["preview:base"], packageJson.scripts.preview);
+});
 
 test("the configured base path uses root-relative assets for nested and trailing-slash routes", () => {
   assert.equal(svelteConfig.kit.paths.base, BASE_PATH);

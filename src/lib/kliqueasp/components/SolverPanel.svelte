@@ -1,8 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
   import { deepMergeConfig } from "../config/deepMergeConfig";
   import { downloadCsvText, serializeCsv } from "../csvExport";
-  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+  import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import SolverDiagnosticsDetails from "./SolverDiagnosticsDetails.svelte";
+  import ResultListPager from "./ResultListPager.svelte";
+  import ProgressiveList from "./ProgressiveList.svelte";
+  import SearchableNodeSelect from "./SearchableNodeSelect.svelte";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { CliqueSupportingEdge } from "../graph/graphModel";
   import type { CliqueMaximumMembershipDiagnosis } from "../graph/cliqueMembershipDiagnosis";
@@ -18,6 +23,7 @@
   export let config: any = {};
 
   export let open: boolean = false;
+  export let running: boolean = false;
 
   export let stats: {
     totalCliques: number;
@@ -58,6 +64,9 @@
   export let selectedGroup: string = "";
   export let availableGroups: string[] = [];
 
+  $: groupSelectionChanged = (selectedGroup || "") !== (stats?.selectedGroup || "");
+  $: searchableGroupOptions = availableGroups.map((group) => ({ value: group, label: group }));
+
   function edgeProvenance(edgeId: string): string | undefined {
     return getOwnRecordValue<string>(edgeProvenanceBySourceId, edgeId);
   }
@@ -93,13 +102,45 @@
 
   let filteredCliques: string[][] = [];
   let grouped: { size: number; cliques: string[][] }[] = [];
-  let selectedCliqueSignature = "";
+  let visibleCliqueLimits: Record<number, number> = {};
+  let visibleGrouped: { size: number; cliques: string[][]; visibleCliques: string[][] }[] = [];
+  let previousMaximumCliques = maximumCliques;
+  let selectedCliqueSignature = maximumCliques[0] ? cliqueSignature(maximumCliques[0]) : "";
+  const cliquePageSize = 100;
+  let previousFilteredCliques = filteredCliques;
+  let previousShowAll = showAll;
+  let previousTopPerSize = topPerSize;
+  let selectedCliqueEvidenceLimit = 100;
+  let selectedCliqueMembersOpen = false;
+  let membershipEvidenceLimit = 100;
+  let previousSelectedCliqueSignature = selectedCliqueSignature;
+  let previousMembershipDiagnosis = cliqueMembershipDiagnosis;
 
   function cliqueSignature(clique: string[]): string {
     return [...clique].sort().join("\u0000");
   }
 
   $: selectedCliqueSupportingEdges = supportingEdgesByClique[ selectedCliqueSignature ] ?? [];
+  $: visibleSelectedCliqueSupportingEdges = selectedCliqueSupportingEdges.slice(0, selectedCliqueEvidenceLimit);
+  $: selectedCliqueNodes = filteredCliques.find((clique) => cliqueSignature(clique) === selectedCliqueSignature)
+    ?? maximumCliques.find((clique) => cliqueSignature(clique) === selectedCliqueSignature)
+    ?? [];
+  $: visibleMembershipSupportingEdges = (cliqueMembershipDiagnosis?.supportingEdges ?? []).slice(0, membershipEvidenceLimit);
+
+  $: if (maximumCliques !== previousMaximumCliques) {
+    previousMaximumCliques = maximumCliques;
+    selectedCliqueSignature = maximumCliques[0] ? cliqueSignature(maximumCliques[0]) : "";
+  }
+
+  $: if (selectedCliqueSignature !== previousSelectedCliqueSignature) {
+    previousSelectedCliqueSignature = selectedCliqueSignature;
+    selectedCliqueEvidenceLimit = 100;
+    selectedCliqueMembersOpen = false;
+  }
+  $: if (cliqueMembershipDiagnosis !== previousMembershipDiagnosis) {
+    previousMembershipDiagnosis = cliqueMembershipDiagnosis;
+    membershipEvidenceLimit = 100;
+  }
 
   function highlightClique(c: string[]) {
     selectedCliqueSignature = cliqueSignature(c);
@@ -150,9 +191,6 @@
   function groupCliques(cliques: string[][]) {
     if (!cliques || !cliques.length) return [];
 
-    const top = Number(topPerSize);
-    const safeTop = Number.isFinite(top) ? top : 5;
-
     const map = new Map<number, string[][]>();
 
     for (const c of cliques) {
@@ -165,9 +203,7 @@
 
     return sizes.map(size => ({
       size,
-      cliques: showAll
-        ? map.get(size)!
-        : map.get(size)!.slice(0, safeTop)
+      cliques: map.get(size)!
     }));
   }
 
@@ -180,15 +216,42 @@
     grouped = groupCliques(filteredCliques ?? []);
   }
 
+  $: if (
+    filteredCliques !== previousFilteredCliques ||
+    showAll !== previousShowAll ||
+    topPerSize !== previousTopPerSize
+  ) {
+    previousFilteredCliques = filteredCliques;
+    previousShowAll = showAll;
+    previousTopPerSize = topPerSize;
+    visibleCliqueLimits = {};
+  }
+
+  $: visibleGrouped = grouped.map((group) => {
+    const requestedTop = Number(topPerSize);
+    const topLimit = Number.isFinite(requestedTop) ? Math.max(0, Math.floor(requestedTop)) : 5;
+    const visibleLimit = showAll
+      ? visibleCliqueLimits[group.size] ?? cliquePageSize
+      : topLimit;
+    return { ...group, visibleCliques: group.cliques.slice(0, visibleLimit) };
+  });
+
+  function showMoreCliques(size: number) {
+    visibleCliqueLimits = {
+      ...visibleCliqueLimits,
+      [size]: (visibleCliqueLimits[size] ?? cliquePageSize) + cliquePageSize
+    };
+  }
+
   $: selectedCliqueCount =
     selectedNodeId
       ? (allCliques ?? []).filter(c => Array.isArray(c) && c.includes(selectedNodeId)).length
       : 0;
 
   const CLIQUE_MODE_LABELS: Record<string, string> = {
-    maximal: "maximal cliques",
-    all: "all cliques (incl. sub-cliques)",
-    maximum: "maximum cliques only"
+    maximal: "clique massimali",
+    all: "tutte le clique (incluse le sottoclique)",
+    maximum: "solo clique di taglia massima"
   };
 
   $: histogramRows = Array.from(stats?.histogram?.entries?.() ?? [])
@@ -232,52 +295,59 @@
 </script>
 
 {#if open}
-<div class="solver-panel">
+<section class="solver-panel" aria-labelledby="solver-panel-title">
 
   <div class="solver-header">
-    <h3>ASP Clique Analysis</h3>
-    <button class="close-btn" on:click={closePanel}>✕</button>
+    <h3 id="solver-panel-title">Risultati clique</h3>
+    <button class="close-btn" aria-label="Chiudi" on:click={closePanel}>×</button>
   </div>
 
   {#if F.stats !== false}
   <div class="solver-meta">
     {#if stats?.cliqueMode}
-      <div><strong>Mode:</strong> {CLIQUE_MODE_LABELS[stats.cliqueMode] ?? stats.cliqueMode}</div>
+    <div><strong>Modalità:</strong> {CLIQUE_MODE_LABELS[stats.cliqueMode] ?? stats.cliqueMode}</div>
     {/if}
-    <div><strong>Total cliques:</strong> {stats?.totalCliques ?? 0}</div>
-    <div><strong>Maximum size:</strong> {stats?.maxSize ?? 0}</div>
+    <div><strong>Gruppo analizzato:</strong> {stats?.selectedGroup || "tutti i nodi"}</div>
+    <div><strong>Clique trovate:</strong> {stats?.totalCliques ?? 0}</div>
+    <div><strong>Taglia massima:</strong> {stats?.maxSize ?? 0}</div>
 
     {#if stats?.timeMs}
-      <div><strong>Solver time:</strong> {stats.timeMs.toFixed(2)} ms</div>
+      <div><strong>Tempo di calcolo:</strong> {formatItalianNumber(stats.timeMs, 2)} ms</div>
     {/if}
 
     {#if stats?.nodesCount}
-      <div><strong>Nodes:</strong> {stats.nodesCount}</div>
+      <div><strong>Nodi analizzati:</strong> {stats.nodesCount}</div>
     {/if}
 
     {#if stats?.linksCount}
-      <div><strong>Edges:</strong> {stats.linksCount}</div>
+      <div><strong>Archi analizzati:</strong> {stats.linksCount}</div>
     {/if}
 
     {#if stats?.periodLabel}
-      <div><strong>Period:</strong> {stats.periodLabel}</div>
+      <div><strong>Periodo:</strong> {stats.periodLabel}</div>
     {/if}
-    <WorkerMemoryReadout stats={workerWasmMemoryStats} {clingoTiming} showClingoTiming={showClingoTiming} {clingoStats} showClingoStats={showClingoStats} />
+    <SolverDiagnosticsDetails
+      {workerWasmMemoryStats}
+      {clingoTiming}
+      {showClingoTiming}
+      {clingoStats}
+      {showClingoStats}
+    />
   </div>
   {/if}
 
   {#if error}
-    <div class="solver-error" role="alert">
-      <strong>Solver error</strong>
-      <pre>{error}</pre>
+    <div class="solver-error">
+      <strong>Errore di calcolo</strong>
+      <AnalysisErrorMessage message={error} />
     </div>
   {/if}
 
   {#if F.histogram !== false && histogramRows.length > 0}
-  <div class="histogram" aria-label="Clique size distribution">
+  <div class="histogram" aria-label="Distribuzione delle clique per taglia">
     {#each histogramRows as [size, count]}
       <div class="histogram-row">
-        <span class="histogram-label">Size {size}</span>
+        <span class="histogram-label">Taglia {size}</span>
         <span class="histogram-track">
           <span class="histogram-bar" style="width: {(count / histogramMax) * 100}%"></span>
         </span>
@@ -289,69 +359,87 @@
 
   {#if stats?.maxSize > 0 && stats.maxSize < 3}
     <p class="clique-threshold-note">
-      L'ottimo matematico ha taglia {stats.maxSize}; il riepilogo legacy elenca solo clique di almeno 3 nodi.
+      La clique massima ha {stats.maxSize} nodi. La lista mostra solo gruppi di almeno 3 nodi, quindi resta vuota.
     </p>
   {/if}
 
   {#if F.selectedAnalysis !== false && selectedNodeId}
   <div class="selected-analysis">
-    <div><strong>Selected node:</strong> {selectedNodeId}</div>
-    <div><strong>Displayed cliques containing it:</strong> {selectedCliqueCount}</div>
+    <div><strong>Nodo selezionato:</strong> {selectedNodeId}</div>
+    <div><strong>Clique mostrate che lo includono:</strong> {selectedCliqueCount}</div>
     <div>
-      <strong>In maximum clique:</strong>
-      {selectedInMaximum ? "YES" : "NO"}
+      <strong>In una clique massima:</strong>
+      {selectedInMaximum ? "Sì" : "No"}
     </div>
-    <div><strong>Analyzed group:</strong> {stats?.selectedGroup || "all nodes"}</div>
+    <div><strong>Gruppo analizzato:</strong> {stats?.selectedGroup || "tutti i nodi"}</div>
     {#if !selectedInMaximum && stats?.maxSize > 0}
       <button
         type="button"
-        disabled={cliqueMembershipDiagnosisRunning}
+        disabled={running || cliqueMembershipDiagnosisRunning}
         on:click={() => dispatch("diagnoseMaximumMembership", selectedNodeId)}
       >
-        {cliqueMembershipDiagnosisRunning ? "Verifica ASP in corso…" : "Diagnosi ASP why-not"}
+      {cliqueMembershipDiagnosisRunning ? "Verifica in corso…" : "Spiega l’esclusione dall’ottimo"}
       </button>
       {#if cliqueMembershipQueryContract}
         <details class="membership-query-contract">
-          <summary>Semantica della diagnosi ASP</summary>
+          <summary>Dettagli tecnici della spiegazione</summary>
           <p>{cliqueMembershipQueryContract.querySemantics}</p>
           <p><strong>Enumerazione:</strong> {cliqueMembershipQueryContract.supportedEnumeration.join(" / ")}.</p>
           <p><strong>Input:</strong> {cliqueMembershipQueryContract.inputPredicates.join(", ")}.</p>
-          <p><strong>Witness:</strong> {cliqueMembershipQueryContract.witnessPredicates.join(", ")}.</p>
+          <p><strong>Testimone:</strong> {cliqueMembershipQueryContract.witnessPredicates.join(", ")}.</p>
           <p><strong>Campi:</strong> {cliqueMembershipQueryContract.resultFields.join(", ")}.</p>
           <small>Encoding `{cliqueMembershipQueryContract.aspEncoding}` v{cliqueMembershipQueryContract.encodingVersion}; parser `{cliqueMembershipQueryContract.parser}`.</small>
         </details>
       {/if}
     {/if}
     {#if cliqueMembershipDiagnosisTargetNodeId === selectedNodeId && cliqueMembershipDiagnosisError}
-      <p role="alert">Diagnosi non disponibile: {cliqueMembershipDiagnosisError}</p>
+      <AnalysisErrorMessage message={"Diagnosi non disponibile: " + cliqueMembershipDiagnosisError} />
     {/if}
     {#if cliqueMembershipDiagnosisTargetNodeId === selectedNodeId && cliqueMembershipDiagnosis}
       {#if cliqueMembershipDiagnosis.outcome === "excluded-from-maximum"}
-        <strong>Esclusione dalla clique massima verificata da ASP</strong>
+        <strong>Esclusione dalla clique massima verificata</strong>
         <p>
           La migliore clique che contiene il nodo ha taglia {cliqueMembershipDiagnosis.maximumContainingSize};
           l'ottimo globale è {cliqueMembershipDiagnosis.globalMaximumSize} (gap {cliqueMembershipDiagnosis.sizeGap}).
-          Il solver ha provato l'ottimo con il nodo forzato e il witness è stato verificato sul grafo corrente.
+          La ricerca vincolata al nodo è stata confrontata con il massimo globale e il testimone è stato verificato sul grafo corrente.
         </p>
       {:else}
         <strong>Controesempio: il nodo appartiene a una clique massima</strong>
-        <p>La query ASP ha trovato una clique con il nodo di taglia {cliqueMembershipDiagnosis.maximumContainingSize}; il precedente elenco massimo non è coerente con questo witness.</p>
+        <p>Una verifica ha trovato una clique con il nodo di taglia {cliqueMembershipDiagnosis.maximumContainingSize}; il precedente elenco non è coerente con questo testimone.</p>
       {/if}
       <p>È una spiegazione strutturale della proiezione analizzata, non una causa storica o sociale.</p>
-      <p><strong>Witness:</strong> {cliqueMembershipDiagnosis.witnessNodeIds.map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(" | ")}</p>
+      <div class="membership-witness">
+        <strong>Testimone ({cliqueMembershipDiagnosis.witnessNodeIds.length} nodi)</strong>
+        <ProgressiveList
+          items={cliqueMembershipDiagnosis.witnessNodeIds}
+          resetKey={cliqueMembershipDiagnosis}
+          label="nodi del testimone"
+          let:item
+          let:index
+        >
+          <span>{index ? " · " : ""}{sourceIdByNodeId[item] ?? item}</span>
+        </ProgressiveList>
+      </div>
       {#if cliqueMembershipDiagnosis.supportingEdges.length > 0}
         <ul>
-          {#each cliqueMembershipDiagnosis.supportingEdges as edge}
+          {#each visibleMembershipSupportingEdges as edge}
             <li>
               {sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId} — {sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId}
               {#if edge.edgeId}<small>{edge.edgeIdGenerated ? "chiave record locale" : "ID arco sorgente"}: {edge.edgeId}</small>{/if}
             </li>
           {/each}
         </ul>
+        <ResultListPager
+          total={cliqueMembershipDiagnosis.supportingEdges.length}
+          visible={visibleMembershipSupportingEdges.length}
+          pageSize={100}
+          label="archi testimoni"
+          showMore={() => membershipEvidenceLimit += 100}
+        />
       {/if}
       <div class="membership-diagnosis-actions">
         <button type="button" on:click={() => dispatch("highlightMembershipWitness", cliqueMembershipDiagnosis)}>
-          Evidenzia witness 3D
+          Evidenzia testimone 3D
         </button>
         <button type="button" on:click={downloadMembershipDiagnosisCSV}>Esporta diagnosi CSV</button>
       </div>
@@ -362,59 +450,75 @@
   <div class="solver-controls">
 
     {#if F.groupFilter !== false}
-    <label>
-      Group
-      <select bind:value={selectedGroup}>
-        <option value="">-- none --</option>
-        {#each availableGroups as group}
-          <option value={group}>{group}</option>
-        {/each}
-      </select>
+    <label class="solver-filter-field">
+      Gruppo da analizzare
+      <SearchableNodeSelect
+        id="clique-analysis-group"
+        bind:value={selectedGroup}
+        options={searchableGroupOptions}
+        ariaLabel="Cerca il gruppo da analizzare"
+        placeholder="Tutti i nodi"
+        disabled={running}
+      />
     </label>
+    {#if groupSelectionChanged}
+      <button
+        type="button"
+        class="solver-rerun-action"
+        disabled={running}
+        on:click={() => dispatch("rerun")}
+      >
+        {running
+          ? "Calcolo in corso…"
+          : selectedGroup
+            ? `Ricalcola clique nel gruppo: ${selectedGroup}`
+            : "Ricalcola clique su tutti i nodi"}
+      </button>
+    {/if}
     {/if}
 
     {#if F.minSize !== false}
-    <label>
-      Min clique size
-      <input type="number" bind:value={minSize} min="2" />
+    <label class="solver-filter-field">
+      Taglia minima
+      <input type="number" bind:value={minSize} min="3" />
     </label>
     {/if}
 
     {#if F.topPerSize !== false}
-    <label>
-      Top per size
+    <label class="solver-filter-field">
+      Massimo per taglia
       <input type="number" bind:value={topPerSize} min="1" max="50" />
     </label>
     {/if}
 
     {#if F.onlyMaximum !== false}
-    <label>
+    <label class="solver-toggle">
       <input type="checkbox" bind:checked={showOnlyMaximum} />
-      Only maximum cliques
+      Mostra solo le clique massime
     </label>
     {/if}
 
     {#if F.showAll !== false}
-    <label>
+    <label class="solver-toggle">
       <input type="checkbox" bind:checked={showAll} />
-      Show all (no top limit)
+      Mostra tutti i risultati
     </label>
     {/if}
 
     {#if F.filterBySelectedNode !== false && selectedNodeId}
-    <label>
+    <label class="solver-toggle">
       <input type="checkbox" bind:checked={filterBySelectedNode} />
-      Only cliques containing "{selectedNodeId}"
+      Solo clique che includono "{selectedNodeId}"
     </label>
     {/if}
 
     {#if F.downloadCSV !== false}
-    <button on:click={downloadCSV}>
-      Download CSV (filtered)
+    <button type="button" class="solver-export-action" on:click={downloadCSV}>
+      Esporta risultati CSV
     </button>
     {#if Object.keys(supportingEdgesByClique).length > 0}
-    <button on:click={downloadExplanationCSV}>
-      Download clique witnesses CSV
+    <button type="button" class="solver-export-action solver-export-secondary" on:click={downloadExplanationCSV}>
+      Esporta gli archi testimoni CSV
     </button>
     {/if}
     {/if}
@@ -422,55 +526,91 @@
   </div>
 
   {#if F.selectedAnalysis !== false && selectedCliqueSignature}
-    <div class="selected-analysis clique-explanation">
-      <strong>Positive ASP explanation</strong>
-      <p>Each unordered pair of clique nodes has at least one supporting edge record.</p>
+    <details class="selected-analysis clique-explanation">
+      <summary>
+        Evidenza della clique
+        · {selectedCliqueNodes.length} nodi
+        {#if selectedCliqueSupportingEdges.length > 0}
+          · {formatItalianNumber(selectedCliqueSupportingEdges.length)} record di supporto
+        {/if}
+      </summary>
+      <p>Ogni coppia di nodi della clique è sostenuta da almeno un record di arco.</p>
+      <details
+        class="clique-member-evidence"
+        open={selectedCliqueMembersOpen}
+        on:toggle={(event) => selectedCliqueMembersOpen = event.currentTarget.open}
+      >
+        <summary>Elenco dei nodi</summary>
+        {#if selectedCliqueMembersOpen}
+          <div class="clique-member-list">
+            <ProgressiveList items={selectedCliqueNodes} resetKey={selectedCliqueSignature} label="nodi della clique" let:item>
+              <span>{item}</span>
+            </ProgressiveList>
+          </div>
+        {/if}
+      </details>
       {#if selectedCliqueSupportingEdges.length > 0}
         <ul>
-          {#each selectedCliqueSupportingEdges as edge}
+          {#each visibleSelectedCliqueSupportingEdges as edge}
             <li>
               {edge.sourceNodeId} — {edge.targetNodeId}
               {#if edge.edgeId}
-                <small>{edge.edgeIdGenerated ? "generated local record key" : "source edge ID"}: {edge.edgeId}</small>
+                <small>{edge.edgeIdGenerated ? "chiave locale del record" : "ID arco sorgente"}: {edge.edgeId}</small>
                 {#if edgeProvenance(edge.edgeId)}
-                  <small>declared source: {edgeProvenance(edge.edgeId)}</small>
+                  <small>fonte dichiarata: {edgeProvenance(edge.edgeId)}</small>
                 {/if}
               {/if}
             </li>
           {/each}
         </ul>
+        <ResultListPager
+          total={selectedCliqueSupportingEdges.length}
+          visible={visibleSelectedCliqueSupportingEdges.length}
+          pageSize={100}
+          label="archi testimoni"
+          showMore={() => selectedCliqueEvidenceLimit += 100}
+        />
       {:else}
-        <small>Edge-record details are unavailable for this result.</small>
+        <small>I dettagli dei record di arco non sono disponibili per questo risultato.</small>
       {/if}
-    </div>
+    </details>
   {/if}
 
   <div class="solver-cliques">
-    <h4>Cliques</h4>
+    <h4>Risultati</h4>
 
     {#if grouped.length === 0}
-      <div class="empty">No cliques for current filters.</div>
+      <div class="empty">Nessuna clique per i filtri attuali.</div>
     {/if}
 
-    {#each grouped as group}
+    {#each visibleGrouped as group}
       <div class="size-group">
         <div class="size-title">
-          Size {group.size}
+          Taglia {group.size}
         </div>
 
-        {#each group.cliques as c}
-          <button type="button" class="clique-item" on:click={() => highlightClique(c)}>
-            <span class="clique-label">{c.join(", ")}</span>
+        {#each group.visibleCliques as c}
+          <button type="button" class="clique-item" aria-pressed={cliqueSignature(c) === selectedCliqueSignature} on:click={() => highlightClique(c)}>
+            <span class="clique-label">{c.length} nodi · {c.slice(0, 5).join(", ")}{c.length > 5 ? ` · +${c.length - 5} altri` : ""}</span>
             {#if c.length === stats?.maxSize}
-              <span class="max-badge">MAX</span>
+              <span class="max-badge">MASSIMA</span>
             {/if}
           </button>
         {/each}
+        {#if showAll}
+          <ResultListPager
+            total={group.cliques.length}
+            visible={group.visibleCliques.length}
+            pageSize={cliquePageSize}
+            label={`clique di taglia ${group.size}`}
+            showMore={() => showMoreCliques(group.size)}
+          />
+        {/if}
       </div>
     {/each}
   </div>
 
-</div>
+</section>
 {/if}
 
 <style>
@@ -553,11 +693,29 @@
     margin: 5px 0;
   }
 
+  .clique-explanation summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+
   .clique-explanation ul {
     max-height: 180px;
     overflow: auto;
     margin: 6px 0 0;
     padding-left: 20px;
+  }
+
+  .clique-member-evidence {
+    margin: 7px 0;
+  }
+
+  .clique-member-list {
+    display: grid;
+    gap: 3px;
+    max-height: 180px;
+    margin-top: 5px;
+    overflow: auto;
+    overflow-wrap: anywhere;
   }
 
   .clique-explanation small {
@@ -574,12 +732,108 @@
   }
 
   .solver-controls input[type="number"] {
-    width: var(--solver-input-width);
-    margin-left: 6px;
+    width: min(var(--solver-input-width), 100%);
+    margin-left: auto;
   }
 
-  .solver-controls select {
-    margin-left: 6px;
+  .solver-filter-field {
+    display: flex;
+    min-height: 34px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: #334155;
+    font-weight: 550;
+  }
+
+  .solver-controls input[type="number"] {
+    box-sizing: border-box;
+    min-height: 32px;
+    padding: 5px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #172033;
+    font: inherit;
+    font-weight: 450;
+  }
+
+  .solver-filter-field :global(.searchable-node-select) {
+    min-width: 132px;
+    max-width: 60%;
+    margin-left: auto;
+  }
+
+  .solver-controls input[type="number"] {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .solver-toggle {
+    display: flex;
+    min-height: 28px;
+    align-items: center;
+    gap: 9px;
+    color: #334155;
+    line-height: 1.35;
+  }
+
+  .solver-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    flex: 0 0 auto;
+    accent-color: #1e645d;
+  }
+
+  .solver-rerun-action,
+  .solver-export-action,
+  .membership-diagnosis-actions button,
+  .selected-analysis > button {
+    min-height: 34px;
+    border: 1px solid #1e645d;
+    border-radius: 8px;
+    padding: 7px 10px;
+    background: #1e645d;
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .solver-rerun-action:hover:not(:disabled),
+  .solver-export-action:hover,
+  .membership-diagnosis-actions button:hover,
+  .selected-analysis > button:hover {
+    border-color: #174d47;
+    background: #174d47;
+  }
+
+  .solver-rerun-action:disabled,
+  .solver-export-action:disabled,
+  .membership-diagnosis-actions button:disabled,
+  .selected-analysis > button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .solver-controls .solver-export-secondary,
+  .membership-diagnosis-actions button + button {
+    border-color: #cbd5e1;
+    background: #fff;
+    color: #334155;
+  }
+
+  .solver-controls .solver-export-secondary:hover,
+  .membership-diagnosis-actions button + button:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+  }
+
+  .clique-item[aria-pressed="true"] {
+    outline: 2px solid #1e645d;
+    outline-offset: 1px;
+    background: #bfe7df;
   }
 
   .solver-cliques {
@@ -636,16 +890,13 @@
 
   .solver-error {
     margin-top: 10px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: rgba(239, 68, 68, 0.12);
-    color: #991b1b;
+    display: grid;
+    gap: 6px;
   }
 
-  .solver-error pre {
-    margin: 4px 0 0;
-    white-space: pre-wrap;
-    font-size: 11px;
+  .solver-error > strong {
+    color: #803b2e;
+    font-size: 12px;
   }
 
   .histogram {

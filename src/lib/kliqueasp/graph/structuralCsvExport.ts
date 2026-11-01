@@ -284,7 +284,7 @@ export function buildTypedPathCounterfactualWhyNotCsv({
   const interpretation = certificate.firstEmptyStep !== undefined
     ? `nessun nodo raggiungibile dopo il passo ${certificate.firstEmptyStep}`
     : certificate.goalReachableAsWalk
-      ? "meta raggiunta come walk; la query primaria ha provato l'assenza di un cammino semplice"
+      ? "meta raggiunta con un cammino che ripete nodi; la query principale ha provato che non esiste un cammino semplice"
       : "meta non raggiunta dopo la sequenza completa";
   const rows: unknown[][] = [[
     "record_type", "prefix_step", "required_edge_type", "reachable_node_ids_json", "start_node_id", "goal_node_id",

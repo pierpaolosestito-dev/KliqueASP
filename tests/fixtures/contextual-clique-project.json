@@ -1,0 +1,50 @@
+{
+  "format": "kliqueasp-project",
+  "version": 1,
+  "graphConfig": {
+    "schemaVersion": 2,
+    "graphMapping": {
+      "node": {
+        "idField": "$.id",
+        "labelField": "$.label",
+        "typeField": "$.kind"
+      },
+      "edge": {
+        "idField": "$.id",
+        "sourceField": "$.from",
+        "targetField": "$.to",
+        "typeField": "$.kind",
+        "direction": "undirected",
+        "identity": "multigraph"
+      }
+    },
+    "graphAnalysis": {
+      "contextualClique": {
+        "focusNodeTypes": ["person"],
+        "contextNodeTypes": ["place"],
+        "edgeTypes": ["person-place"],
+        "minimumSize": 3
+      }
+    }
+  },
+  "graphData": {
+    "nodes": [
+      { "id": "p1", "label": "Persona 1", "kind": "person" },
+      { "id": "p2", "label": "Persona 2", "kind": "person" },
+      { "id": "p3", "label": "Persona 3", "kind": "person" },
+      { "id": "p4", "label": "Persona esclusa", "kind": "person" },
+      { "id": "a", "label": "Luogo A", "kind": "place" },
+      { "id": "b", "label": "Luogo B", "kind": "place" },
+      { "id": "c", "label": "Luogo C", "kind": "place" }
+    ],
+    "edges": [
+      { "id": "p1-a", "from": "p1", "to": "a", "kind": "person-place" },
+      { "id": "p2-a", "from": "p2", "to": "a", "kind": "person-place" },
+      { "id": "p2-b", "from": "p2", "to": "b", "kind": "person-place" },
+      { "id": "p3-b", "from": "p3", "to": "b", "kind": "person-place" },
+      { "id": "p1-c", "from": "p1", "to": "c", "kind": "person-place" },
+      { "id": "p3-c", "from": "p3", "to": "c", "kind": "person-place" },
+      { "id": "p1-p4", "from": "p1", "to": "p4", "kind": "person-person" }
+    ]
+  }
+}

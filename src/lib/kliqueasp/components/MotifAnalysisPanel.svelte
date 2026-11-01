@@ -1,28 +1,38 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import ResultListPager from "./ResultListPager.svelte";
+  import ProgressiveList from "./ProgressiveList.svelte";
+  import ProvenanceReferences from "./ProvenanceReferences.svelte";
+  import SearchableNodeSelect from "./SearchableNodeSelect.svelte";
   import { csvCell, downloadCsvText } from "../csvExport";
-  import WorkerMemoryReadout from "./WorkerMemoryReadout.svelte";
+import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import GraphFilterSummary from "./GraphFilterSummary.svelte";
+  import CounterfactualConfigHint from "./CounterfactualConfigHint.svelte";
+import SolverDiagnosticsDetails from "./SolverDiagnosticsDetails.svelte";
   import ContextualCliquePanel from "./ContextualCliquePanel.svelte";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { GraphContextualCliqueConfig, GraphJsonScalar, GraphMotifTemplate } from "../graph/graphModel";
   import type { ContextualCliqueResult } from "../graph/contextualCliqueTask";
   import type { TypedMotifMatch, TypedMotifNearMatch, TypedMotifCounterfactual } from "../graph/motifTask";
   import {
-    resolveTypedMotifCountPartitionDomainForSemantics,
     type TypedMotifCountPartitionProgress
   } from "../graph/motifCountTask";
-  import { summarizeSignedTriads, type SignedTriadResult } from "../graph/signedTriadTask";
+import { summarizeSignedTriads, type SignedTriadDyad, type SignedTriadResult } from "../graph/signedTriadTask";
   import { buildSignedTriadCsv } from "../graph/signedTriadCsvExport";
   import {
     buildSignedTriadScenarioCsv,
     type SignedTriadScenarioComparison,
+    type SignedTriadScenarioMembership,
     type SignedTriadScenarioStability
   } from "../graph/signedTriadScenarioAnalysis";
   import { summarizeEdgeProvenance } from "../graph/structuralTasks";
   import { getOwnRecordValue } from "../graph/recordUtils";
+  import { getMotifPanelHeading } from "./motifPanelHeading";
   import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
   import {
     buildProvenanceScenarioMotifCsv,
+    type ProvenanceMotifMembership,
     type ProvenanceMotifScenarioComparison
   } from "../graph/motifScenarioAnalysis";
 
@@ -36,6 +46,8 @@
   export let availableGroups: string[] = [];
   export let matches: TypedMotifMatch[] = [];
   export let scenarioComparisonAvailable = false;
+  export let scenarioComparisonRequirementReason = "";
+  export let provenanceScenarioCount = 0;
   export let scenarioComparisonProgress = "";
   export let scenarioComparisonError = "";
   export let scenarioComparison: ProvenanceMotifScenarioComparison | null = null;
@@ -44,8 +56,6 @@
   export let motifCountHasRun = false;
   export let motifCountError = "";
   export let motifCountTimeMs: number | undefined;
-  export let motifCountPartitionCount: number | undefined;
-  export let motifCountPartitionSize: number | undefined;
   export let motifCountMaxDurationMs: number | undefined;
   export let motifCountProgress: TypedMotifCountPartitionProgress | undefined;
   export let motifCountNotice = "";
@@ -88,6 +98,7 @@
   export let signedTriadTimeMs: number | undefined;
   export let signedTriadFocusedKey = "";
   export let signedTriadScenarioComparisonAvailable = false;
+  export let signedTriadScenarioComparisonRequirementReason = "";
   export let signedTriadScenarioComparison: SignedTriadScenarioComparison | null = null;
   export let signedTriadScenarioComparisonError = "";
   export let signedTriadScenarioComparisonProgress = "";
@@ -103,16 +114,73 @@
   export let contextualCliqueHasRun = false;
   export let contextualCliqueError = "";
   export let contextualCliqueTimeMs: number | undefined;
+  export let activeAnalysisKind = "";
 
+  $: panelHeading = getMotifPanelHeading({
+    activeAnalysisKind,
+    hasMotifTemplates: templates.length > 0,
+    signedTriadsEnabled,
+    contextualCliqueConfigured: Boolean(contextualCliqueConfig)
+  });
+
+  const scenarioDetailPageSize = 20;
   let visibleLimit = 100;
+  let visibleMotifScenarioLimit = scenarioDetailPageSize;
   let visibleScenarioMembershipLimit = 100;
+  let visibleSignedTriadScenarioSummaryLimit = scenarioDetailPageSize;
   let visibleSignedTriadLimit = 100;
   let visibleSignedTriadScenarioLimit = 100;
+  let visibleMotifScenarioEvidenceLimits: Record<string, number> = {};
+  let visibleSignedTriadWorldLimits: Record<string, number> = {};
+  let visibleSignedTriadEdgeRecordLimits: Record<string, number> = {};
+  let visibleCounterfactualLimit = 100;
+  let visibleNearMatchLimit = 100;
+  let expandedResultEvidence: { kind: "counterfactual" | "match" | "nearMatch"; index: number } | null = null;
+  let previousMatches = matches;
+  let previousCounterfactuals = counterfactuals;
+  let previousNearMatches = nearMatches;
+  let previousScenarioComparison = scenarioComparison;
+  let previousSignedTriadScenarioComparison = signedTriadScenarioComparison;
+  $: if (counterfactuals !== previousCounterfactuals) {
+    previousCounterfactuals = counterfactuals;
+    visibleCounterfactualLimit = 100;
+    if (expandedResultEvidence?.kind === "counterfactual") expandedResultEvidence = null;
+  }
+  $: if (nearMatches !== previousNearMatches) {
+    previousNearMatches = nearMatches;
+    visibleNearMatchLimit = 100;
+    if (expandedResultEvidence?.kind === "nearMatch") expandedResultEvidence = null;
+  }
+  $: if (scenarioComparison !== previousScenarioComparison) {
+    previousScenarioComparison = scenarioComparison;
+    visibleMotifScenarioLimit = scenarioDetailPageSize;
+    visibleScenarioMembershipLimit = 100;
+    visibleMotifScenarioEvidenceLimits = {};
+  }
+  $: if (signedTriadScenarioComparison !== previousSignedTriadScenarioComparison) {
+    previousSignedTriadScenarioComparison = signedTriadScenarioComparison;
+    visibleSignedTriadScenarioSummaryLimit = scenarioDetailPageSize;
+    visibleSignedTriadScenarioLimit = 100;
+    visibleSignedTriadWorldLimits = {};
+    visibleSignedTriadEdgeRecordLimits = {};
+  }
   const dispatch = createEventDispatcher();
+  let pendingScenarioComparison: "motif" | "signedTriads" | null = null;
+  $: if (!running && pendingScenarioComparison !== null) pendingScenarioComparison = null;
   const signedTriadContract = getGraphTaskContract("signedTriads");
   $: selectedTemplate = templates[Number(selectedTemplateIndex)];
   $: visibleMatches = matches.slice(0, visibleLimit);
+  $: if (matches !== previousMatches) {
+    previousMatches = matches;
+    visibleLimit = 100;
+    if (expandedResultEvidence?.kind === "match") expandedResultEvidence = null;
+  }
+  $: searchableGroupOptions = availableGroups.map((group) => ({ value: group, label: group }));
+  $: visibleCounterfactuals = counterfactuals.slice(0, visibleCounterfactualLimit);
+  $: visibleNearMatches = nearMatches.slice(0, visibleNearMatchLimit);
   $: visibleSignedTriads = signedTriadResults.slice(0, visibleSignedTriadLimit);
+  $: visibleMotifScenarioSummaries = scenarioComparison?.scenarios.slice(0, visibleMotifScenarioLimit) ?? [];
+  $: visibleSignedTriadScenarioSummaries = signedTriadScenarioComparison?.scenarios.slice(0, visibleSignedTriadScenarioSummaryLimit) ?? [];
   $: signedTriadSummary = summarizeSignedTriads(signedTriadResults);
   $: visibleSignedTriadScenarioMemberships = signedTriadScenarioComparison?.memberships.slice(0, visibleSignedTriadScenarioLimit) ?? [];
   $: stableBalancedScenarioTriadCount = signedTriadScenarioComparison?.memberships.filter((entry) => entry.stability === "stable-balanced").length ?? 0;
@@ -121,11 +189,59 @@
   $: scenarioComparisonCautiousCount = scenarioComparison?.memberships.filter((entry) => entry.status === "brave-and-cautious").length ?? 0;
   $: scenarioComparisonBraveOnlyCount = scenarioComparison?.memberships.filter((entry) => entry.status === "brave-only").length ?? 0;
   $: selectedTemporalSemantics = selectedTemplate?.temporal?.semantics;
-  $: selectedCountPartitionDomain = resolveTypedMotifCountPartitionDomainForSemantics(selectedTemporalSemantics);
   $: selectedStrictTemporalOrder = selectedTemplate?.temporal?.semantics === "orderedByStart" &&
     selectedTemplate.temporal.strict === true;
   $: selectedIsTemporal = selectedTemporalSemantics !== undefined;
   $: selectedInducedEdgeTypes = selectedTemplate?.inducedEdgeTypes ?? [];
+
+  function motifScenarioMembershipKey(membership: ProvenanceMotifMembership): string {
+    return JSON.stringify(Object.entries(membership.roleAssignments).sort(([left], [right]) => left.localeCompare(right)));
+  }
+
+  function visibleMotifScenarioEvidence(membership: ProvenanceMotifMembership): ProvenanceMotifMembership["evidenceByScenario"] {
+    const key = motifScenarioMembershipKey(membership);
+    return membership.evidenceByScenario.slice(0, visibleMotifScenarioEvidenceLimits[key] ?? scenarioDetailPageSize);
+  }
+
+  function showMoreMotifScenarioEvidence(membership: ProvenanceMotifMembership) {
+    const key = motifScenarioMembershipKey(membership);
+    visibleMotifScenarioEvidenceLimits = {
+      ...visibleMotifScenarioEvidenceLimits,
+      [key]: (visibleMotifScenarioEvidenceLimits[key] ?? scenarioDetailPageSize) + scenarioDetailPageSize
+    };
+  }
+
+  function signedTriadMembershipKey(membership: SignedTriadScenarioMembership): string {
+    return membership.nodeIds.join("\u0000");
+  }
+
+  function visibleSignedTriadWorlds(membership: SignedTriadScenarioMembership): SignedTriadScenarioMembership["worlds"] {
+    const key = signedTriadMembershipKey(membership);
+    return membership.worlds.slice(0, visibleSignedTriadWorldLimits[key] ?? scenarioDetailPageSize);
+  }
+
+  function showMoreSignedTriadWorlds(membership: SignedTriadScenarioMembership) {
+    const key = signedTriadMembershipKey(membership);
+    visibleSignedTriadWorldLimits = {
+      ...visibleSignedTriadWorldLimits,
+      [key]: (visibleSignedTriadWorldLimits[key] ?? scenarioDetailPageSize) + scenarioDetailPageSize
+    };
+  }
+
+  function signedTriadDyadEvidenceKey(nodeIds: readonly string[], scenarioId: string, dyad: SignedTriadDyad): string {
+    return `${[...nodeIds].sort().join("\u0000")}\u0000${scenarioId}\u0000${dyad.sourceNodeId}\u0000${dyad.targetNodeId}`;
+  }
+
+  function visibleSignedTriadEdgeRecords(key: string, records: SignedTriadDyad["edgeRecords"]): SignedTriadDyad["edgeRecords"] {
+    return records.slice(0, visibleSignedTriadEdgeRecordLimits[key] ?? scenarioDetailPageSize);
+  }
+
+  function showMoreSignedTriadEdgeRecords(key: string) {
+    visibleSignedTriadEdgeRecordLimits = {
+      ...visibleSignedTriadEdgeRecordLimits,
+      [key]: (visibleSignedTriadEdgeRecordLimits[key] ?? scenarioDetailPageSize) + scenarioDetailPageSize
+    };
+  }
   $: selectedHasAbsenceConditions = Boolean(selectedTemplate?.absentEdges?.length || selectedInducedEdgeTypes.length);
   $: selectedHasInducedConditions = selectedInducedEdgeTypes.length > 0;
   $: selectedAbsenceSemanticsUnsupported = selectedHasAbsenceConditions && selectedIsTemporal;
@@ -134,7 +250,7 @@
   $: selectedRequirementReasons = !requirementsAvailable
     ? requirementReasons
     : selectedAbsenceSemanticsUnsupported
-      ? ["I vincoli di assenza sono disponibili solo per template statici; i template temporali richiedono una semantica esplicita di assenza nel tempo."]
+      ? ["I vincoli di assenza sono disponibili solo per motivi senza tempo; i motivi temporali richiedono una condizione che specifichi quando la relazione deve mancare."]
     : selectedIsTemporal && !temporalRequirementsAvailable
       ? temporalRequirementReasons
       : [];
@@ -152,6 +268,14 @@
 
   function provenanceForEdges(edgeIds: string[]): string {
     return summarizeEdgeProvenance(edgeIds, edgeProvenanceBySourceId);
+  }
+
+  function provenanceForEdge(edgeId: string): string {
+    return getOwnRecordValue<string>(edgeProvenanceBySourceId, edgeId) ?? "";
+  }
+
+  function provenanceReferencesForEdge(edgeId: string): string[] {
+    return getOwnRecordValue<string[]>(edgeProvenanceReferencesBySourceId, edgeId) ?? [];
   }
 
   function structuredEdgeEvidence(edgeIds: string[]) {
@@ -200,6 +324,7 @@
 
   function run() {
     visibleLimit = 100;
+    expandedResultEvidence = null;
     dispatch("run", {
       templateIndex: Number(selectedTemplateIndex),
       group: selectedGroup
@@ -208,6 +333,7 @@
 
   function compareScenarios() {
     visibleScenarioMembershipLimit = 100;
+    pendingScenarioComparison = "motif";
     dispatch("compareScenarios", {
       templateIndex: Number(selectedTemplateIndex),
       group: selectedGroup
@@ -232,6 +358,7 @@
 
   function compareSignedTriadScenarios() {
     visibleSignedTriadScenarioLimit = 100;
+    pendingScenarioComparison = "signedTriads";
     dispatch("compareSignedTriadScenarios", { group: signedTriadGroup });
   }
 
@@ -288,6 +415,7 @@
 
   function diagnose() {
     visibleLimit = 100;
+    expandedResultEvidence = null;
     dispatch("diagnose", {
       templateIndex: Number(selectedTemplateIndex),
       group: selectedGroup
@@ -295,7 +423,8 @@
   }
 
   function proposeCounterfactual() {
-    visibleLimit = 100;
+    visibleCounterfactualLimit = 100;
+    expandedResultEvidence = null;
     dispatch("counterfactual", {
       templateIndex: Number(selectedTemplateIndex),
       group: selectedGroup
@@ -303,7 +432,17 @@
   }
 
   function clearResults() {
+    expandedResultEvidence = null;
     dispatch("clear");
+  }
+
+  function resultEvidenceIsOpen(kind: "counterfactual" | "match" | "nearMatch", index: number): boolean {
+    return expandedResultEvidence?.kind === kind && expandedResultEvidence.index === index;
+  }
+
+  function setResultEvidenceOpen(kind: "counterfactual" | "match" | "nearMatch", index: number, open: boolean) {
+    if (open) expandedResultEvidence = { kind, index };
+    else if (resultEvidenceIsOpen(kind, index)) expandedResultEvidence = null;
   }
 
   function exportResults() {
@@ -466,33 +605,47 @@
 </script>
 
 {#if open}
-  <section class="motif-panel" aria-label="Analisi di motivi e triadi ASP">
+  <section class="motif-panel" aria-labelledby="motif-analysis-heading">
     <header>
       <div>
-        <h3>{templates.length > 0 ? signedTriadsEnabled ? "Motivi e triadi · ASP" : "Motivi relazionali · ASP" : "Triadi firmate · ASP"}</h3>
+        <h3 id="motif-analysis-heading">{panelHeading}</h3>
         {#if templates.length > 0}
           <p>
             {selectedHasInducedConditions
-            ? `Le relazioni richieste devono esistere; il motivo è indotto rispetto ai tipi ${selectedInducedEdgeTypes.join(", ")} sulla proiezione filtrata. Il focus grafico non restringe i dati analizzati.`
+            ? `Le relazioni richieste devono esistere; il controllo del motivo considera ${selectedInducedEdgeTypes.length} ${selectedInducedEdgeTypes.length === 1 ? "tipo di arco" : "tipi di arco"} nella proiezione filtrata. Il focus grafico non restringe i dati analizzati.`
             : selectedHasAbsenceConditions
-            ? "Le relazioni richieste devono esistere e quelle elencate come assenti si valutano sotto mondo chiuso sulla proiezione filtrata. Il focus grafico non restringe i dati analizzati."
+            ? "Le relazioni richieste devono esistere; quelle indicate come assenti non devono comparire nella proiezione filtrata. Il focus grafico non restringe i dati analizzati."
             : selectedTemporalSemantics === "coValid"
-            ? "Gli archi testimoni condividono un istante di validità."
+            ? "Le relazioni che sostengono l'istanza condividono un istante di validità."
             : selectedTemporalSemantics === "orderedByStart"
               ? `Confronta gli inizi di validità nell’ordine degli archi dichiarato${selectedStrictTemporalOrder ? ", in modo stretto" : ", consentendo parità"}.`
-              : "Assegnamenti dei ruoli e archi testimoni sulla proiezione filtrata corrente; il focus grafico modifica solo la vista."}
+              : "Assegnazioni dei ruoli e relazioni presenti nella proiezione filtrata corrente; il focus grafico modifica solo la vista."}
           </p>
+          {#if selectedHasInducedConditions}
+            <details class="induced-edge-types">
+              <summary>Tipi di arco controllati · {selectedInducedEdgeTypes.length}</summary>
+              <ProgressiveList items={selectedInducedEdgeTypes} label="tipi di arco" let:item>
+                <span class="induced-edge-type"><code>{item}</code></span>
+              </ProgressiveList>
+            </details>
+          {/if}
         {/if}
       </div>
       <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
     </header>
 
-    <WorkerMemoryReadout stats={workerWasmMemoryStats} {clingoTiming} showClingoTiming={showClingoTiming} {clingoStats} showClingoStats={showClingoStats} />
+    <SolverDiagnosticsDetails
+      {workerWasmMemoryStats}
+      {clingoTiming}
+      {showClingoTiming}
+      {clingoStats}
+      {showClingoStats}
+    />
 
     {#if templates.length > 0}
     <div class="controls">
       <label>
-        Template
+        Motivo
         <select bind:value={selectedTemplateIndex} disabled={running || templates.length === 0} on:change={clearResults}>
           {#each templates as template, index (`${index}-${template.id}`)}
             <option value={String(index)}>{template.label ?? template.id}</option>
@@ -501,23 +654,33 @@
       </label>
       <label>
         Gruppo
-        <select bind:value={selectedGroup} disabled={running} on:change={clearResults}>
-          <option value="">Tutti i nodi</option>
-          {#each availableGroups as group}
-            <option value={group}>{group}</option>
-          {/each}
-        </select>
+        <SearchableNodeSelect
+          id="motif-analysis-group"
+          bind:value={selectedGroup}
+          options={searchableGroupOptions}
+          ariaLabel="Cerca un gruppo per l'analisi dei motivi"
+          placeholder="Tutti i nodi"
+          disabled={running}
+          on:change={clearResults}
+        />
       </label>
       <button type="button" class="run" on:click={run} disabled={running || !selectedTemplate || !selectedRequirementsAvailable}>
-        {running ? "Solver in esecuzione…" : "Esegui motivo"}
+        {running && activeAnalysisKind === "typedMotif" ? "Ricerca in corso…" : "Esegui motivo"}
       </button>
       <button type="button" on:click={count} disabled={running || !selectedTemplate || !selectedRequirementsAvailable}>
-        {motifCountPartitionSize ? "Conta in partizioni" : "Conta istanze"}
+        {running && activeAnalysisKind === "motifCount" ? "Conteggio in corso…" : "Conta istanze"}
       </button>
-      {#if scenarioComparisonAvailable}
-        <button type="button" on:click={compareScenarios} disabled={running || !selectedTemplate || !selectedRequirementsAvailable}>
-          Confronta istanze sui mondi
+      {#if provenanceScenarioCount > 0}
+        <button type="button" class="scenario-run" class:running={pendingScenarioComparison === "motif"} on:click={compareScenarios} disabled={running || !scenarioComparisonAvailable || !selectedTemplate || !selectedRequirementsAvailable}>
+          {pendingScenarioComparison === "motif" ? "Confronto in corso…" : "Confronta istanze tra scenari"}
         </button>
+        {#if !scenarioComparisonAvailable}
+          <small class="field-note scenario-readiness-note">{scenarioComparisonRequirementReason}</small>
+          <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e configurazione scenari</button>
+        {/if}
+      {:else}
+        <small class="field-note scenario-readiness-note">Definisci almeno uno scenario per confrontare le istanze.</small>
+        <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Configura scenari</button>
       {/if}
     </div>
 
@@ -526,6 +689,9 @@
       <span>{graphNodesCount} nodi · {graphEdgesCount} archi visibili</span>
       {#if selectedRequirementReasons.length > 0}
         <ul>{#each selectedRequirementReasons as reason}<li>{reason}</li>{/each}</ul>
+        {#if !requirementsAvailable || (selectedIsTemporal && !temporalRequirementsAvailable)}
+          <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
+        {/if}
       {/if}
       {#if selectedTemplate?.edges.some((edge) => edge.attributes)}
         <span>Filtri esatti sugli attributi mappati degli archi:</span>
@@ -547,9 +713,9 @@
 
     {#if selectedHasAbsenceConditions}
       <div class="readiness" role="note">
-        <strong>Ipotesi di mondo chiuso dichiarata nel template</strong>
+        <strong>Relazioni che devono essere assenti</strong>
         <span>
-          Le assenze si riferiscono solo alla proiezione filtrata corrente. Il template dichiara completi i dati per queste relazioni tipizzate; i filtri attivi possono quindi cambiare il risultato. Il focus grafico non restringe i dati analizzati.
+          Una relazione indicata come assente non deve comparire nella proiezione filtrata corrente. Il motivo presume completi i dati per quei tipi di relazione; i filtri attivi possono quindi cambiare il risultato. Il focus grafico non restringe i dati analizzati.
           {#if selectedHasInducedConditions} Per i tipi indotti ogni coppia di ruoli viene controllata nella direzione del grafo (incluse le relazioni verso sé stessi); tipi non elencati sono ignorati, salvo gli archi positivi esplicitamente richiesti.{/if}
         </span>
       </div>
@@ -558,24 +724,19 @@
     {#if !hasRun && !error}
       <small>
         {selectedTemporalSemantics === "orderedByStart"
-          ? "Il task restituisce ogni sequenza valida di archi testimoni; la stessa assegnazione dei ruoli può produrre più sequenze se esistono archi paralleli."
+          ? "Sono mostrate tutte le sequenze valide di relazioni; la stessa assegnazione dei ruoli può comparire più volte se esistono archi paralleli."
           : "Il task cerca tutte le assegnazioni compatibili."}
-        Template e gruppi provengono dalla configurazione; su grafi grandi il numero di modelli può crescere rapidamente.
+        Motivi e gruppi disponibili dipendono dalla configurazione; su grafi grandi possono emergere molti risultati.
       </small>
     {/if}
 
     <small>
-      Il conteggio aggregato restituisce il numero esatto senza materializzare i singoli testimoni; non produce elementi da evidenziare. Anche il conteggio può richiedere molte risorse su grafi densi.
+      Il conteggio aggregato restituisce il numero esatto senza mostrare i singoli nodi e archi delle istanze. I conteggi su grafi densi possono richiedere più tempo.
     </small>
 
-    {#if motifCountPartitionSize}
+    {#if motifCountMaxDurationMs !== undefined}
       <small>
-        {#if selectedCountPartitionDomain === "firstPatternEdge"}
-          La configurazione divide il conteggio in blocchi da {motifCountPartitionSize} record del primo arco. Il conteggio distingue le sequenze temporali di record; il risultato appare solo dopo la verifica di tutte le partizioni.
-        {:else}
-          La configurazione divide il conteggio in blocchi da {motifCountPartitionSize} nodi assegnabili al primo ruolo. Così i diversi record di supporto della stessa assegnazione restano nella stessa partizione.
-        {/if}
-        Il budget totale è {motifCountMaxDurationMs?.toLocaleString("it-IT")} ms.
+        Budget complessivo del conteggio: {motifCountMaxDurationMs?.toLocaleString("it-IT")} ms.
       </small>
     {/if}
 
@@ -583,13 +744,7 @@
       <div class="readiness">
         <div role="progressbar" aria-label="Avanzamento del conteggio dei motivi"
           aria-valuemin="0" aria-valuemax={motifCountProgress.total} aria-valuenow={motifCountProgress.completed}>
-          <strong>{motifCountProgress.completed}/{motifCountProgress.total} partizioni completate</strong>
-          {#if motifCountProgress.completed < motifCountProgress.total}
-            <span>
-              {motifCountProgress.partitionDomain === "firstPatternEdge" ? "Record ASP del primo arco" : "Nodi ASP del primo ruolo"}:
-              {motifCountProgress.indexRange[0]}–{motifCountProgress.indexRange[1]}
-            </span>
-          {/if}
+          <strong>{motifCountProgress.completed}/{motifCountProgress.total} passaggi completati</strong>
         </div>
         {#if motifCountProgress.completed < motifCountProgress.total}
           <button type="button" on:click={() => dispatch("cancelCount")} disabled={!running || motifCountNotice.startsWith("Annullamento")}>
@@ -604,7 +759,7 @@
     {/if}
 
     {#if motifCountError}
-      <div class="error" role="alert">{motifCountError}</div>
+      <AnalysisErrorMessage message={motifCountError} />
     {/if}
 
     {#if motifCountHasRun && motifCount !== undefined}
@@ -612,77 +767,91 @@
         <strong>{motifCount}</strong>
         {selectedTemporalSemantics === "orderedByStart"
           ? motifCount === "1" ? " sequenza temporale valida" : " sequenze temporali valide"
-          : motifCount === "1" ? " istanza del template" : " istanze del template"}
-        {#if motifCountPartitionCount !== undefined}
-          {motifCountPartitionCount === 0 ? " · nessun record da partizionare" : ` · ${motifCountPartitionCount} partizioni ASP complete`}
-        {/if}
-        {#if motifCountTimeMs !== undefined}<span> · {motifCountTimeMs.toFixed(1)} ms</span>{/if}
-        <p>Conteggio esatto per il template e la proiezione visibile correnti. I singoli assegnamenti e archi testimoni non sono stati restituiti; i totali di partizioni incomplete non vengono mostrati.</p>
+          : motifCount === "1" ? " istanza del motivo" : " istanze del motivo"}
+        {#if motifCountTimeMs !== undefined}<span> · {formatItalianNumber(motifCountTimeMs, 1)} ms</span>{/if}
+        <p>Conteggio esatto per il motivo e la proiezione visibile correnti. Non vengono mostrati i singoli nodi e archi di ogni istanza; se il calcolo si interrompe, non compare un totale parziale.</p>
       </div>
     {/if}
 
     {#if error}
-      <div class="error" role="alert">{error}</div>
+      <AnalysisErrorMessage message={error} />
     {/if}
 
     {#if scenarioComparisonProgress}
       <div class="readiness" role="status">{scenarioComparisonProgress}</div>
     {/if}
     {#if scenarioComparisonError}
-      <div class="error" role="alert">{scenarioComparisonError}</div>
+      <AnalysisErrorMessage message={scenarioComparisonError} />
     {/if}
     {#if scenarioComparison}
-      <div class="summary" role="status" aria-label="Confronto di membership dei motivi sui mondi finiti">
+      <div class="summary" role="status" aria-label="Confronto della presenza dei motivi tra scenari">
         <strong>{scenarioComparison.memberships.length}</strong>
-        {scenarioComparison.memberships.length === 1 ? " assegnamento di ruoli distinto" : " assegnamenti di ruoli distinti"}
-        · {scenarioComparisonCautiousCount} brave-and-cautious · {scenarioComparisonBraveOnlyCount} brave-only
-        {#if scenarioComparisonTimeMs !== undefined}<span> · {scenarioComparisonTimeMs.toFixed(1)} ms di solving complessivi</span>{/if}
+        {scenarioComparison.memberships.length === 1 ? " assegnazione di ruoli distinta" : " assegnazioni di ruoli distinte"}
+        · {scenarioComparisonCautiousCount} presenti in tutti gli scenari · {scenarioComparisonBraveOnlyCount} presenti in alcuni scenari
+        {#if scenarioComparisonTimeMs !== undefined}<span> · {formatItalianNumber(scenarioComparisonTimeMs, 1)} ms complessivi</span>{/if}
         <div class="results-heading">
-          <strong>Membership per assegnamento dei ruoli</strong>
+          <strong>Presenza per assegnazione dei ruoli</strong>
           <button type="button" on:click={exportScenarioComparison}>Esporta CSV</button>
         </div>
         <div class="readiness">
-          {#each scenarioComparison.scenarios as scenario}
-            <span>{scenario.scenarioLabel}: {scenario.distinctRoleAssignments} {scenario.distinctRoleAssignments === 1 ? "assegnamento" : "assegnamenti"} · {scenario.nodesCount} nodi · {scenario.linksCount} {scenario.linksCount === 1 ? "arco" : "archi"} · enumerazione completa · {scenario.timeMs.toFixed(1)} ms</span>
+          {#each visibleMotifScenarioSummaries as scenario (scenario.scenarioId)}
+            <span>{scenario.scenarioLabel}: {scenario.distinctRoleAssignments} {scenario.distinctRoleAssignments === 1 ? "assegnamento" : "assegnamenti"} · {scenario.nodesCount} nodi · {scenario.linksCount} {scenario.linksCount === 1 ? "arco" : "archi"} · enumerazione completa · {formatItalianNumber(scenario.timeMs, 1)} ms</span>
           {/each}
         </div>
+        <ResultListPager
+          total={scenarioComparison.scenarios.length}
+          visible={visibleMotifScenarioSummaries.length}
+          pageSize={scenarioDetailPageSize}
+          label="scenari del motivo"
+          showMore={() => visibleMotifScenarioLimit += scenarioDetailPageSize}
+        />
         <div class="readiness">
-          <strong>Contesto della query</strong>
-          <span>Gruppo ASP: {scenarioComparison.queryScope.selectedGroup || "tutti i nodi"} · direzione: {scenarioComparison.queryScope.graphDirection}</span>
+          <strong>Ambito del confronto</strong>
+          <span>Gruppo: {scenarioComparison.queryScope.selectedGroup || "tutti i nodi"} · direzione: {scenarioComparison.queryScope.graphDirection}</span>
           <span>Finestra: {scenarioComparison.queryScope.timelineWindow || "non attiva"} · confidenza minima: {scenarioComparison.queryScope.minimumEdgeConfidence ?? "non applicata"}</span>
-          <span>Filtri vista — tipi: {scenarioComparison.queryScope.viewFilters.types.join(", ") || "tutti"} · gruppi: {scenarioComparison.queryScope.viewFilters.groups.join(", ") || "tutti"}</span>
+          <GraphFilterSummary types={scenarioComparison.queryScope.viewFilters.types} groups={scenarioComparison.queryScope.viewFilters.groups} />
         </div>
         {#if scenarioComparison.memberships.length > 0}
           <ul class="results">
             {#each scenarioComparison.memberships.slice(0, visibleScenarioMembershipLimit) as membership, index}
+              {@const visibleEvidence = visibleMotifScenarioEvidence(membership)}
               <li class="match scenario-membership">
-                <strong>{index + 1}. {membership.status === "brave-and-cautious" ? "Brave e cautious" : "Brave-only"}</strong>
+                <strong>{index + 1}. {membership.status === "brave-and-cautious" ? "Presente in tutti gli scenari" : "Presente in alcuni scenari"}</strong>
                 {#each scenarioComparison.roleNames as role}
                   <span>{role}: {membership.roleAssignments[role]}</span>
                 {/each}
-                <span>Presente in {membership.scenariosPresent}/{membership.totalScenarios} mondi: {membership.scenarioIds.join(", ")}</span>
+                <span>Presente in {membership.scenariosPresent}/{membership.totalScenarios} scenari</span>
                 <div class="world-witnesses">
-                  {#each membership.evidenceByScenario as evidence}
-                    <button type="button" on:click={() => inspectScenarioMatch(evidence.scenarioId, evidence.match)}>
-                      Mostra un testimone in {evidence.scenarioLabel}
+                  {#each visibleEvidence as evidence (evidence.scenarioId)}
+                    <button type="button" disabled={running} on:click={() => inspectScenarioMatch(evidence.scenarioId, evidence.match)}>
+                      Mostra un'istanza in {evidence.scenarioLabel}
                     </button>
                   {/each}
                 </div>
+                <ResultListPager
+                  total={membership.evidenceByScenario.length}
+                  visible={visibleEvidence.length}
+                  pageSize={scenarioDetailPageSize}
+                  label="scenari con un'istanza"
+                  showMore={() => showMoreMotifScenarioEvidence(membership)}
+                />
               </li>
             {/each}
           </ul>
-          {#if scenarioComparison.memberships.length > visibleScenarioMembershipLimit}
-            <button type="button" class="show-more" on:click={() => visibleScenarioMembershipLimit += 100}>
-              Mostra altri 100 ({scenarioComparison.memberships.length - visibleScenarioMembershipLimit} restanti)
-            </button>
-          {/if}
+          <ResultListPager
+            total={scenarioComparison.memberships.length}
+            visible={Math.min(scenarioComparison.memberships.length, visibleScenarioMembershipLimit)}
+            pageSize={100}
+            label="assegnamenti"
+            showMore={() => visibleScenarioMembershipLimit += 100}
+          />
         {:else}
-          <p>Nessuna assegnazione di ruoli soddisfa il template in alcuno degli scenari dichiarati.</p>
+          <p>Nessuna assegnazione di ruoli realizza il motivo in alcuno degli scenari dichiarati.</p>
         {/if}
         <small>
-          L’identità dell’istanza è l’assegnamento ordinato di tutti i ruoli, inclusi quelli di contesto, agli ID sorgente dei nodi. Archi testimoni o tempi diversi possono sostenere la stessa istanza nei diversi mondi; il confronto non afferma che persista lo stesso arco o lo stesso istante. I pulsanti aprono la proiezione del mondo e mostrano un suo testimone ASP.
-          {#if selectedHasAbsenceConditions} I vincoli di assenza e di indotto sono rivalutati separatamente sulla proiezione chiusa di ciascun mondo.{/if}
-          Brave significa presente in almeno un mondo, cautious in tutti quelli dichiarati. L’aggregato appare solo dopo che clingo ha completato l’enumerazione in ciascun mondo; un timeout elimina l’intero confronto. Questa lettura assume che la lista finita sia esaustiva e non assegna probabilità ai mondi. Ogni motivo viene valutato sulla propria proiezione, mantenendo gruppo, filtri, soglia di confidenza e finestra correnti.
+          L’identità dell’istanza è l’assegnazione ordinata di tutti i ruoli, inclusi quelli di contesto, agli ID sorgente dei nodi. Archi o tempi diversi possono sostenere la stessa istanza nei diversi scenari; il confronto non afferma che persista lo stesso arco o lo stesso istante. I pulsanti aprono lo scenario e mostrano un esempio grafico dell'istanza.
+          {#if selectedHasAbsenceConditions} I vincoli di assenza e di indotto sono rivalutati separatamente sulla proiezione chiusa di ciascuno scenario.{/if}
+          “Presente in alcuni scenari” significa almeno uno, “presente in tutti” richiede ogni scenario elencato. Il confronto appare solo quando il calcolo termina per tutti gli scenari; se si interrompe, non viene mostrato un risultato parziale. Questa lettura assume che la lista sia esaustiva e non assegna probabilità agli scenari. Ogni motivo viene valutato sulla propria proiezione, mantenendo gruppo, filtri, soglia di confidenza e finestra correnti.
         </small>
       </div>
     {/if}
@@ -690,11 +859,11 @@
     {#if hasRun && matches.length === 0 && !error}
       <div class="near-match-controls">
         <button type="button" on:click={diagnose} disabled={running || !selectedRequirementsAvailable}>
-          {running ? "Solver in esecuzione…" : selectedIsTemporal ? "Analizza la struttura più vicina" : "Spiega il mancato match"}
+          {running && activeAnalysisKind === "motifNearMatch" ? "Ricerca in corso…" : selectedIsTemporal ? "Analizza la struttura più vicina" : "Spiega il mancato match"}
         </button>
         <small>
           Cerca un assegnamento che riempie il maggior numero di ruoli e poi minimizza i vincoli strutturali violati.
-          È una query combinatoria separata e può richiedere tempo su grafi grandi.
+          È una verifica aggiuntiva e può richiedere tempo sui grafi grandi.
           {#if selectedIsTemporal}
             {#if selectedTemporalSemantics === "coValid"}
               A parità strutturale sceglie l’istante che rende temporalmente attivi più pattern; distingue pattern senza intervalli validi da quelli inattivi all’istante scelto.
@@ -702,7 +871,7 @@
               A parità strutturale sceglie i record con meno inversioni tra inizi consecutivi; distingue pattern senza intervalli validi.
             {/if}
           {:else}
-            A parità di ruoli assegnati minimizza insieme le relazioni richieste senza testimone e gli archi presenti che violano un vincolo di assenza.
+            A parità di ruoli assegnati, minimizza sia le relazioni richieste mancanti sia gli archi presenti che violano un vincolo di assenza.
           {/if}
         </small>
       </div>
@@ -711,7 +880,7 @@
     {#if hasRun && matches.length === 0 && !error && counterfactualEnabled}
       <div class="counterfactual-controls">
         <button type="button" on:click={proposeCounterfactual} disabled={running || !selectedRequirementsAvailable}>
-          {running ? "Solver in esecuzione…" : "Cerca aggiunte ipotetiche minime"}
+          {running && activeAnalysisKind === "motifCounterfactual" ? "Ricerca in corso…" : "Cerca aggiunte ipotetiche minime"}
         </button>
         <small>
           Valuta solo i {counterfactualCandidateCount} archi esplicitamente configurati con costo positivo.
@@ -721,8 +890,16 @@
       </div>
     {/if}
 
+    {#if hasRun && matches.length === 0 && !error && !counterfactualEnabled}
+      <CounterfactualConfigHint
+        description="Puoi cercare una completazione ipotetica aggiungendo archi candidati e i relativi costi alla configurazione del grafo."
+        actionLabel="Configura candidati"
+        on:openData={() => dispatch("openData")}
+      />
+    {/if}
+
     {#if counterfactualError}
-      <div class="error" role="alert">{counterfactualError}</div>
+      <AnalysisErrorMessage message={counterfactualError} />
     {/if}
 
     {#if counterfactualHasRun}
@@ -732,7 +909,7 @@
         {:else}
           Nessuna combinazione dei candidati configurati completa il motivo.
         {/if}
-        {#if counterfactualTimeMs !== undefined}<span> · {counterfactualTimeMs.toFixed(1)} ms</span>{/if}
+        {#if counterfactualTimeMs !== undefined}<span> · {formatItalianNumber(counterfactualTimeMs, 1)} ms</span>{/if}
         {#if counterfactualExcludedCandidateCount > 0}
           <p>{counterfactualExcludedCandidateCount} candidati esclusi perché fuori dalla proiezione visibile o dal gruppo selezionato.</p>
         {/if}
@@ -745,59 +922,96 @@
         <button type="button" on:click={exportCounterfactuals}>Esporta CSV</button>
       </div>
       <ul class="results">
-        {#each counterfactuals as proposal, index}
+        {#each visibleCounterfactuals as proposal, index}
           <li>
             <button type="button" class="match" on:click={() => dispatch("highlightCounterfactual", proposal)}>
               <strong>{index + 1}. {proposal.label} · costo {proposal.totalCost}</strong>
-              {#each Object.entries(proposal.match.roles) as [role, node]}
-                <span>{role}: {node.sourceId}</span>
-                {#if node.requiredAttributes}<span>Attributi richiesti per {role}: {formatAttributeConstraints(node.requiredAttributes)}</span>{/if}
-              {/each}
-              {#each proposal.addedEdges as edge}
-                <span>
-                  {#if formatAttributeConstraints(edge.attributes)}Attributi ipotizzati: {formatAttributeConstraints(edge.attributes)} · {/if}
-                  Aggiunta ipotetica {edge.id}: {edge.sourceNodeId} —{edge.edgeType}→ {edge.targetNodeId} · costo {edge.cost} · relazioni {edge.patternIndexes.join(", ")}
-                  {#if edge.validity} · validità {displayMappedTime(edge.validity.from)}–{displayMappedTime(edge.validity.to)}{/if}
-                </span>
-              {/each}
-              {#each proposal.match.supportingEdges.filter((edge) => edge.edgeIds.length > 0) as edge}
-                <span>
-                  {#if formatAttributeConstraints(edge.attributes)}Attributi richiesti: {formatAttributeConstraints(edge.attributes)} · {/if}
-                  Supporto osservato {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}: {edge.edgeIds.join(", ")}
-                  {#if provenanceForEdges(edge.edgeIds)} · fonte dichiarata: {provenanceForEdges(edge.edgeIds)}{/if}
-                </span>
-              {/each}
-              {#each proposal.match.absenceConditions ?? [] as edge}
-                <span>Assenza verificata sotto mondo chiuso sulla proiezione visibile: {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}</span>
-              {/each}
+              <span>{Object.keys(proposal.match.roles).length} ruoli · {proposal.addedEdges.length} archi ipotetici · {proposal.match.supportingEdges.length} relazioni osservate</span>
             </button>
+            <details
+              class="result-evidence"
+              open={resultEvidenceIsOpen("counterfactual", index)}
+              on:toggle={(event) => setResultEvidenceOpen("counterfactual", index, event.currentTarget.open)}
+            >
+              <summary>Dettagli della proposta</summary>
+              {#if resultEvidenceIsOpen("counterfactual", index)}
+                <div class="result-evidence-content">
+                  <ProgressiveList items={Object.entries(proposal.match.roles)} resetKey={proposal} label="ruoli" let:item>
+                    <span>{item[0]}: {item[1].sourceId}</span>
+                    {#if item[1].requiredAttributes}<span>Attributi richiesti per {item[0]}: {formatAttributeConstraints(item[1].requiredAttributes)}</span>{/if}
+                  </ProgressiveList>
+                  <ProgressiveList items={proposal.addedEdges} resetKey={proposal} label="archi ipotetici" let:item>
+                    <span>
+                      {#if formatAttributeConstraints(item.attributes)}Attributi ipotizzati: {formatAttributeConstraints(item.attributes)} · {/if}
+                      Aggiunta ipotetica {item.id}: {item.sourceNodeId} —{item.edgeType}→ {item.targetNodeId} · costo {item.cost} · {item.patternIndexes.length} relazioni del motivo
+                      {#if item.validity} · validità {displayMappedTime(item.validity.from)}–{displayMappedTime(item.validity.to)}{/if}
+                    </span>
+                    <details class="edge-record-evidence">
+                      <summary>Relazioni del motivo associate · {item.patternIndexes.length}</summary>
+                      <ProgressiveList items={item.patternIndexes} resetKey={item} label="relazioni del motivo" let:item={patternIndex}>
+                        <span>Relazione {patternIndex + 1}</span>
+                      </ProgressiveList>
+                    </details>
+                  </ProgressiveList>
+                  <ProgressiveList items={proposal.match.supportingEdges} resetKey={proposal} label="relazioni osservate" let:item>
+                    {#if item.edgeIds.length > 0}
+                    <span>
+                      {#if formatAttributeConstraints(item.attributes)}Attributi richiesti: {formatAttributeConstraints(item.attributes)} · {/if}
+                      Supporto osservato {item.sourceRole} —{item.edgeType}→ {item.targetRole} · {item.edgeIds.length} record d'arco
+                    </span>
+                    <details class="edge-record-evidence">
+                      <summary>Mostra ID e fonti dei record</summary>
+                      <ProgressiveList items={item.edgeIds} resetKey={item} label="record d'arco" let:item={edgeId}>
+                        <span><code>{edgeId}</code></span>
+                        <ProvenanceReferences
+                          references={provenanceReferencesForEdge(edgeId)}
+                          fallback={provenanceForEdge(edgeId)}
+                          resetKey={edgeId}
+                        />
+                      </ProgressiveList>
+                    </details>
+                    {/if}
+                  </ProgressiveList>
+                  <ProgressiveList items={proposal.match.absenceConditions ?? []} resetKey={proposal} label="assenze richieste" let:item>
+                    <span>Relazione assente nella proiezione visibile: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+                  </ProgressiveList>
+                </div>
+              {/if}
+            </details>
           </li>
         {/each}
       </ul>
+      <ResultListPager
+        total={counterfactuals.length}
+        visible={visibleCounterfactuals.length}
+        pageSize={100}
+        label="proposte"
+        showMore={() => visibleCounterfactualLimit += 100}
+      />
       <small>
         L'evidenziazione mostra nodi e archi osservati che sostengono il motivo; gli archi ipotetici restano separati e non entrano nella vista del grafo.
-        L'ottimalità vale solo rispetto ai candidati, ai costi, al template e alla proiezione corrente.
+        L'ottimalità dipende dai candidati, dai costi, dal motivo e dalla proiezione corrente.
       </small>
     {/if}
 
     {#if nearMatchError}
-      <div class="error" role="alert">{nearMatchError}</div>
+      <AnalysisErrorMessage message={nearMatchError} />
     {/if}
 
     {#if hasRun && !error}
       <div class="summary" role="status">
         <strong>{matches.length}</strong>
         {selectedTemporalSemantics === "orderedByStart"
-          ? matches.length === 1 ? " sequenza testimone" : " sequenze testimone"
-          : matches.length === 1 ? " istanza del template" : " istanze del template"}
-        {#if timeMs !== undefined}<span> · {timeMs.toFixed(1)} ms</span>{/if}
+          ? matches.length === 1 ? " sequenza valida" : " sequenze valide"
+          : matches.length === 1 ? " istanza del motivo" : " istanze del motivo"}
+        {#if timeMs !== undefined}<span> · {formatItalianNumber(timeMs, 1)} ms</span>{/if}
         {#if matches.length === 0}
           <p>
             {selectedTemporalSemantics === "orderedByStart"
-              ? "Nessuna sequenza di archi testimoni rispetta l’ordine degli inizi di validità richiesto."
+              ? "Nessuna sequenza di relazioni osservate rispetta l’ordine degli inizi di validità richiesto."
               : selectedTemporalSemantics === "coValid"
-                ? "Nessuna assegnazione ha tutti gli archi testimoni attivi nello stesso istante."
-                : "Nessuna assegnazione soddisfa tipi e relazioni del template."}
+                ? "Nessuna assegnazione presenta tutte le relazioni richieste nello stesso istante."
+                : "Nessuna assegnazione realizza il motivo con i tipi e le relazioni richiesti."}
           </p>
         {/if}
       </div>
@@ -805,7 +1019,7 @@
 
     {#if matches.length > 0}
       <div class="results-heading">
-        <strong>Ruoli e archi testimoni</strong>
+        <strong>Ruoli e relazioni presenti</strong>
         <button type="button" on:click={exportResults}>Esporta CSV</button>
       </div>
       <ul class="results">
@@ -815,92 +1029,149 @@
               <strong>{index + 1}. {match.label}</strong>
               {#if match.timeValue !== undefined}<span>Istante comune di validità: {displayMappedTime(match.timeValue)}</span>{/if}
               {#if match.maximumSpan}<span>Durata massima fra il primo e l'ultimo inizio: {match.maximumSpan.value} {match.maximumSpan.unit}</span>{/if}
-              {#each Object.entries(match.roles) as [role, node]}
-                <span>{role}: {node.sourceId}</span>
-                {#if node.requiredAttributes}<span>Attributi richiesti per {role}: {formatAttributeConstraints(node.requiredAttributes)}</span>{/if}
-              {/each}
-              {#each match.supportingEdges as edge}
-                <span>
-                  {#if formatAttributeConstraints(edge.attributes)}Attributi richiesti: {formatAttributeConstraints(edge.attributes)} · {/if}
-                  {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}: {edge.edgeIds.join(", ")}
-                  {#if provenanceForEdges(edge.edgeIds)} · fonte dichiarata: {provenanceForEdges(edge.edgeIds)}{/if}
-                  {#if edge.startTimeValue !== undefined} · inizio {displayMappedTime(edge.startTimeValue)}{/if}
-                </span>
-              {/each}
-              {#each match.absenceConditions ?? [] as edge}
-                <span>Assenza verificata sotto mondo chiuso sulla proiezione visibile: {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}</span>
-              {/each}
+              <span>{Object.keys(match.roles).length} ruoli · {match.supportingEdges.length} relazioni · {match.nodeIds.length} nodi</span>
             </button>
+            <details
+              class="result-evidence"
+              open={resultEvidenceIsOpen("match", index)}
+              on:toggle={(event) => setResultEvidenceOpen("match", index, event.currentTarget.open)}
+            >
+              <summary>Dettagli dell'istanza</summary>
+              {#if resultEvidenceIsOpen("match", index)}
+                <div class="result-evidence-content">
+                  <ProgressiveList items={Object.entries(match.roles)} resetKey={match} label="ruoli" let:item>
+                    <span>{item[0]}: {item[1].sourceId}</span>
+                    {#if item[1].requiredAttributes}<span>Attributi richiesti per {item[0]}: {formatAttributeConstraints(item[1].requiredAttributes)}</span>{/if}
+                  </ProgressiveList>
+                  <ProgressiveList items={match.supportingEdges} resetKey={match} label="relazioni" let:item>
+                    <span>
+                      {#if formatAttributeConstraints(item.attributes)}Attributi richiesti: {formatAttributeConstraints(item.attributes)} · {/if}
+                      {item.sourceRole} —{item.edgeType}→ {item.targetRole} · {item.edgeIds.length} record d'arco
+                      {#if item.startTimeValue !== undefined} · inizio {displayMappedTime(item.startTimeValue)}{/if}
+                    </span>
+                    {#if item.edgeIds.length > 0}
+                      <details class="edge-record-evidence">
+                        <summary>Mostra ID e fonti dei record</summary>
+                        <ProgressiveList items={item.edgeIds} resetKey={item} label="record d'arco" let:item={edgeId}>
+                          <span><code>{edgeId}</code></span>
+                          <ProvenanceReferences
+                            references={provenanceReferencesForEdge(edgeId)}
+                            fallback={provenanceForEdge(edgeId)}
+                            resetKey={edgeId}
+                          />
+                        </ProgressiveList>
+                      </details>
+                    {/if}
+                  </ProgressiveList>
+                  <ProgressiveList items={match.absenceConditions ?? []} resetKey={match} label="assenze richieste" let:item>
+                    <span>Relazione assente nella proiezione visibile: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+                  </ProgressiveList>
+                </div>
+              {/if}
+            </details>
           </li>
         {/each}
       </ul>
-      {#if matches.length > visibleMatches.length}
-        <button type="button" class="show-more" on:click={() => visibleLimit += 100}>
-          Mostra altri 100 ({matches.length - visibleMatches.length} restanti)
-        </button>
-      {/if}
+      <ResultListPager
+        total={matches.length}
+        visible={visibleMatches.length}
+        pageSize={100}
+        label="istanze"
+        showMore={() => visibleLimit += 100}
+      />
       <small>
-        Il testimone è verificabile: assegna nodi distinti ai ruoli e mostra almeno un record d’arco per ogni relazione richiesta.
-        {#if selectedHasAbsenceConditions} Le assenze dichiarate valgono sotto mondo chiuso sulla proiezione visibile e presuppongono dati completi per i tipi indicati.{/if}
+        Ogni istanza assegna nodi distinti ai ruoli e mostra almeno un record d’arco per ogni relazione richiesta.
+        {#if selectedHasAbsenceConditions} Le assenze dichiarate valgono nella proiezione visibile e presuppongono dati completi per i tipi indicati.{/if}
         Per co-validità mostra anche l’istante comune; per l’ordine temporale mostra il record e l’inizio di validità usati per ogni passo.
-        Tipi e intervalli seguono il mapping/template: il certificato prova compatibilità strutturale, non causalità o verità storica.
+        Tipi e intervalli seguono il mapping e lo schema del motivo; la verifica prova compatibilità strutturale, non causalità o verità storica.
       </small>
     {/if}
 
     {#if nearMatchHasRun && nearMatches.length > 0}
       <div class="summary" role="status">
-        <strong>{nearMatches.length}</strong> near-match {nearMatches[0].temporalEvidence ? "temporale" : "strutturale"} {nearMatches.length === 1 ? "ottimo" : "ottimi"}
-        {#if nearMatchTimeMs !== undefined}<span> · {nearMatchTimeMs.toFixed(1)} ms</span>{/if}
+        <strong>{nearMatches.length}</strong> {nearMatches.length === 1 ? "configurazione più vicina" : "configurazioni più vicine"} {nearMatches[0].temporalEvidence ? "temporale" : "strutturale"}
+        {#if nearMatchTimeMs !== undefined}<span> · {formatItalianNumber(nearMatchTimeMs, 1)} ms</span>{/if}
         {#if nearMatches[0].temporalEvidence}
-          <p>Prima si massimizzano i ruoli assegnati, poi le relazioni esistenti; infine si riducono le incompatibilità temporali. In caso di pari merito il solver mostra un risultato ottimo.</p>
+          <p>Prima si massimizzano i ruoli assegnati, poi le relazioni esistenti; infine si riducono le incompatibilità temporali. In caso di pari merito viene mostrata una delle soluzioni migliori.</p>
         {:else}
-          <p>Prima si massimizza il numero di ruoli assegnati; poi si minimizza il numero totale di relazioni richieste mancanti e di vincoli di assenza violati. In caso di pari merito il solver mostra un risultato ottimo.</p>
+          <p>Prima si massimizza il numero di ruoli assegnati; poi si minimizza il numero totale di relazioni richieste mancanti e di vincoli di assenza violati. In caso di pari merito viene mostrata una delle soluzioni migliori.</p>
         {/if}
       </div>
       <div class="results-heading">
-        <strong>{nearMatches[0].temporalEvidence ? "Diagnostica why-not temporale" : "Diagnostica why-not strutturale"}</strong>
+        <strong>{nearMatches[0].temporalEvidence ? "Corrispondenze temporali più vicine" : "Corrispondenze strutturali più vicine"}</strong>
         <button type="button" on:click={exportNearMatches}>Esporta CSV</button>
       </div>
       <ul class="near-matches">
-        {#each nearMatches as nearMatch, index}
+        {#each visibleNearMatches as nearMatch, index}
           <li class="near-match">
             <button type="button" class="match" on:click={() => dispatch("highlightNearMatch", nearMatch)}>
               <strong>{index + 1}. {nearMatch.label}</strong>
               <span>Ruoli assegnati: {Object.keys(nearMatch.roles).length} / {Object.keys(selectedTemplate?.roles ?? {}).length} · relazioni mancanti: {nearMatch.missingPatterns.length} · assenze violate: {nearMatch.violatedAbsencePatterns.length}</span>
-              {#each Object.entries(nearMatch.roles) as [role, node]}
-                <span>{role}: {node.sourceId}</span>
-                {#if node.requiredAttributes}<span>Attributi richiesti per {role}: {formatAttributeConstraints(node.requiredAttributes)}</span>{/if}
-              {/each}
-              {#each nearMatch.missingRoles as role}
-                <span>Nessun candidato per il ruolo nella proiezione visibile corrente: {role}</span>
-                {#if selectedTemplate?.roles[role]?.attributes}
-                  <span>Filtri richiesti per {role}: {formatAttributeConstraints(selectedTemplate.roles[role].attributes)}</span>
+            </button>
+            <details
+              class="result-evidence"
+              open={resultEvidenceIsOpen("nearMatch", index)}
+              on:toggle={(event) => setResultEvidenceOpen("nearMatch", index, event.currentTarget.open)}
+            >
+              <summary>Dettagli della diagnosi</summary>
+              {#if resultEvidenceIsOpen("nearMatch", index)}
+                <div class="result-evidence-content">
+              <ProgressiveList items={Object.entries(nearMatch.roles)} resetKey={nearMatch} label="ruoli assegnati" let:item>
+                <span>{item[0]}: {item[1].sourceId}</span>
+                {#if item[1].requiredAttributes}<span>Attributi richiesti per {item[0]}: {formatAttributeConstraints(item[1].requiredAttributes)}</span>{/if}
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.missingRoles} resetKey={nearMatch} label="ruoli senza candidato" let:item>
+                <span>Nessun candidato per il ruolo nella proiezione visibile corrente: {item}</span>
+                {#if selectedTemplate?.roles[item]?.attributes}
+                  <span>Filtri richiesti per {item}: {formatAttributeConstraints(selectedTemplate.roles[item].attributes)}</span>
                 {/if}
-              {/each}
-              {#each nearMatch.missingPatterns as pattern}
-                {#if formatAttributeConstraints(pattern.attributes)}<span>Filtri richiesti: {formatAttributeConstraints(pattern.attributes)}</span>{/if}
-                <span>Relazione non trovata nella proiezione visibile corrente: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}</span>
-              {/each}
-              {#each nearMatch.unresolvedPatterns as pattern}
-                {#if formatAttributeConstraints(pattern.attributes)}<span>Filtri richiesti: {formatAttributeConstraints(pattern.attributes)}</span>{/if}
-                <span>Relazione non valutabile perché manca un ruolo: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}</span>
-              {/each}
-              {#each nearMatch.violatedAbsencePatterns as pattern}
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.missingPatterns} resetKey={nearMatch} label="relazioni mancanti" let:item>
+                {#if formatAttributeConstraints(item.attributes)}<span>Filtri richiesti: {formatAttributeConstraints(item.attributes)}</span>{/if}
+                <span>Relazione non trovata nella proiezione visibile corrente: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.unresolvedPatterns} resetKey={nearMatch} label="relazioni non valutabili" let:item>
+                {#if formatAttributeConstraints(item.attributes)}<span>Filtri richiesti: {formatAttributeConstraints(item.attributes)}</span>{/if}
+                <span>Relazione non valutabile perché manca un ruolo: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.violatedAbsencePatterns} resetKey={nearMatch} label="assenze violate" let:item>
                 <span>
-                  Relazione presente ma dichiarata assente: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}: {pattern.edgeIds.join(", ")}
-                  {#if provenanceForEdges(pattern.edgeIds)} · fonte dichiarata: {provenanceForEdges(pattern.edgeIds)}{/if}
+                  Relazione presente ma dichiarata assente: {item.sourceRole} —{item.edgeType}→ {item.targetRole} · {item.edgeIds.length} record d'arco
                 </span>
-              {/each}
-              {#each nearMatch.unresolvedAbsencePatterns as pattern}
-                <span>Assenza non valutabile perché manca un ruolo: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}</span>
-              {/each}
-              {#each nearMatch.supportingEdges.filter((edge) => edge.edgeIds.length > 0) as edge}
+                <details class="edge-record-evidence">
+                  <summary>Mostra ID e fonti dei record</summary>
+                  <ProgressiveList items={item.edgeIds} resetKey={item} label="record d'arco" let:item={edgeId}>
+                    <span><code>{edgeId}</code></span>
+                    <ProvenanceReferences
+                      references={provenanceReferencesForEdge(edgeId)}
+                      fallback={provenanceForEdge(edgeId)}
+                      resetKey={edgeId}
+                    />
+                  </ProgressiveList>
+                </details>
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.unresolvedAbsencePatterns} resetKey={nearMatch} label="assenze non valutabili" let:item>
+                <span>Assenza non valutabile perché manca un ruolo: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+              </ProgressiveList>
+              <ProgressiveList items={nearMatch.supportingEdges} resetKey={nearMatch} label="relazioni presenti" let:item>
+                {#if item.edgeIds.length > 0}
                 <span>
-                  {#if formatAttributeConstraints(edge.attributes)}Attributi richiesti: {formatAttributeConstraints(edge.attributes)} · {/if}
-                  Relazione presente: {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}: {edge.edgeIds.join(", ")}
-                  {#if provenanceForEdges(edge.edgeIds)} · fonte dichiarata: {provenanceForEdges(edge.edgeIds)}{/if}
+                  {#if formatAttributeConstraints(item.attributes)}Attributi richiesti: {formatAttributeConstraints(item.attributes)} · {/if}
+                  Relazione presente: {item.sourceRole} —{item.edgeType}→ {item.targetRole} · {item.edgeIds.length} record d'arco
                 </span>
-              {/each}
+                <details class="edge-record-evidence">
+                  <summary>Mostra ID e fonti dei record</summary>
+                  <ProgressiveList items={item.edgeIds} resetKey={item} label="record d'arco" let:item={edgeId}>
+                    <span><code>{edgeId}</code></span>
+                    <ProvenanceReferences
+                      references={provenanceReferencesForEdge(edgeId)}
+                      fallback={provenanceForEdge(edgeId)}
+                      resetKey={edgeId}
+                    />
+                  </ProgressiveList>
+                </details>
+                {/if}
+              </ProgressiveList>
               {#if nearMatch.temporalEvidence}
                 {#if nearMatch.temporalEvidence.maximumSpan}
                   <span>
@@ -911,31 +1182,52 @@
                 {#if nearMatch.temporalEvidence.timeValue !== undefined}
                   <span>Istante scelto che massimizza i pattern co-validi: {displayMappedTime(nearMatch.temporalEvidence.timeValue)}</span>
                 {/if}
-                {#each nearMatch.temporalEvidence.unavailablePatterns as pattern}
-                  <span>Intervallo temporale assente o non valido: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}</span>
-                {/each}
-                {#each nearMatch.temporalEvidence.inactivePatterns as pattern}
-                  <span>Nessun record attivo all’istante scelto: {pattern.sourceRole} —{pattern.edgeType}→ {pattern.targetRole}</span>
-                {/each}
-                {#each nearMatch.temporalEvidence.orderViolations as pair}
-                  <span>Ordine invertito tra pattern {pair.firstIndex} e {pair.secondIndex}</span>
-                {/each}
-                {#each nearMatch.temporalEvidence.supportingEdges.filter((edge) => edge.edgeIds.length > 0) as edge}
+                <ProgressiveList items={nearMatch.temporalEvidence.unavailablePatterns} resetKey={nearMatch} label="intervalli non disponibili" let:item>
+                  <span>Intervallo temporale assente o non valido: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+                </ProgressiveList>
+                <ProgressiveList items={nearMatch.temporalEvidence.inactivePatterns} resetKey={nearMatch} label="relazioni inattive" let:item>
+                  <span>Nessun record attivo all'istante scelto: {item.sourceRole} —{item.edgeType}→ {item.targetRole}</span>
+                </ProgressiveList>
+                <ProgressiveList items={nearMatch.temporalEvidence.orderViolations} resetKey={nearMatch} label="inversioni temporali" let:item>
+                  <span>Ordine invertito tra pattern {item.firstIndex} e {item.secondIndex}</span>
+                </ProgressiveList>
+                <ProgressiveList items={nearMatch.temporalEvidence.supportingEdges} resetKey={nearMatch} label="relazioni temporali" let:item>
+                  {#if item.edgeIds.length > 0}
                   <span>
-                    Supporto temporale {edge.sourceRole} —{edge.edgeType}→ {edge.targetRole}: {edge.edgeIds.join(", ")}
-                    {#if provenanceForEdges(edge.edgeIds)} · fonte dichiarata: {provenanceForEdges(edge.edgeIds)}{/if}
-                    {#if edge.startTimeValue !== undefined} · inizio {displayMappedTime(edge.startTimeValue)}{/if}
+                    Supporto temporale {item.sourceRole} —{item.edgeType}→ {item.targetRole} · {item.edgeIds.length} record d'arco
+                    {#if item.startTimeValue !== undefined} · inizio {displayMappedTime(item.startTimeValue)}{/if}
                   </span>
-                {/each}
+                  <details class="edge-record-evidence">
+                    <summary>Mostra ID e fonti dei record</summary>
+                    <ProgressiveList items={item.edgeIds} resetKey={item} label="record d'arco" let:item={edgeId}>
+                      <span><code>{edgeId}</code></span>
+                      <ProvenanceReferences
+                        references={provenanceReferencesForEdge(edgeId)}
+                        fallback={provenanceForEdge(edgeId)}
+                        resetKey={edgeId}
+                      />
+                    </ProgressiveList>
+                  </details>
+                  {/if}
+                </ProgressiveList>
               {/if}
-            </button>
+                </div>
+              {/if}
+            </details>
           </li>
         {/each}
       </ul>
+      <ResultListPager
+        total={nearMatches.length}
+        visible={visibleNearMatches.length}
+        pageSize={100}
+        label="diagnosi"
+        showMore={() => visibleNearMatchLimit += 100}
+      />
       <small>
         È una spiegazione strutturale ordinata dal criterio dichiarato: non propone di aggiungere archi e non attribuisce loro significato causale.
         {#if nearMatches[0].temporalEvidence}
-          Per co-validità il tempo è scelto fra gli estremi degli intervalli mappati; per l’ordine i testimoni riducono le inversioni consecutive. L’ottimo temporale è una spiegazione del template, non un intervento causale.
+          Per co-validità il tempo è scelto fra gli estremi degli intervalli mappati; per l’ordine le sequenze individuate riducono le inversioni consecutive. L’ottimo temporale descrive una realizzazione del motivo, non un intervento causale.
         {/if}
       </small>
     {/if}
@@ -959,7 +1251,9 @@
         {nodeLabelById}
         on:run={(event) => dispatch("runContextualClique", event.detail)}
         on:clear={() => dispatch("clearContextualClique")}
+        on:criteriaChange={() => dispatch("clearContextualClique")}
         on:highlight={(event) => dispatch("highlightContextualClique", event.detail)}
+        on:openData={() => dispatch("openData")}
       />
     {/if}
 
@@ -975,7 +1269,7 @@
         </div>
         {#if signedTriadContract}
           <details class="signed-triad-contract">
-            <summary>Semantica e witness ASP</summary>
+            <summary>Regole di classificazione</summary>
             <p>{signedTriadContract.querySemantics}</p>
             <small>
               {getTaskEnumerationDescription("signedTriads")} · encoding: {signedTriadContract.aspEncoding} v{signedTriadContract.encodingVersion} ·
@@ -987,20 +1281,30 @@
         <div class="controls">
           <label>
             Gruppo
-            <select bind:value={signedTriadGroup} disabled={running} on:change={clearSignedTriadResults}>
-              <option value="">Tutti i nodi</option>
-              {#each availableGroups as group}
-                <option value={group}>{group}</option>
-              {/each}
-            </select>
+            <SearchableNodeSelect
+              id="signed-triad-group"
+              bind:value={signedTriadGroup}
+              options={searchableGroupOptions}
+              ariaLabel="Cerca un gruppo per le triadi firmate"
+              placeholder="Tutti i nodi"
+              disabled={running}
+              on:change={clearSignedTriadResults}
+            />
           </label>
           <button type="button" class="run" on:click={runSignedTriads} disabled={running || !signedTriadRequirementsAvailable}>
-            {running ? "Solver in esecuzione…" : "Classifica le triadi"}
+            {running && activeAnalysisKind === "signedTriads" ? "Classificazione in corso…" : "Classifica le triadi"}
           </button>
-          {#if signedTriadScenarioComparisonAvailable}
-            <button type="button" class="run scenario-run" on:click={compareSignedTriadScenarios} disabled={running}>
-              Confronta gli scenari dichiarati esaustivi
+          {#if provenanceScenarioCount > 0}
+            <button type="button" class="run scenario-run" class:running={pendingScenarioComparison === "signedTriads"} on:click={compareSignedTriadScenarios} disabled={running || !signedTriadScenarioComparisonAvailable}>
+              {pendingScenarioComparison === "signedTriads" ? "Confronto in corso…" : "Confronta le triadi tra scenari"}
             </button>
+            {#if !signedTriadScenarioComparisonAvailable}
+              <small class="field-note scenario-readiness-note">{signedTriadScenarioComparisonRequirementReason}</small>
+              <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e configurazione scenari</button>
+            {/if}
+          {:else}
+            <small class="field-note scenario-readiness-note">Definisci almeno due scenari per confrontare le triadi.</small>
+            <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Configura scenari</button>
           {/if}
         </div>
         <div class="readiness" role="status">
@@ -1008,14 +1312,15 @@
           <span>{graphNodesCount} nodi · {graphEdgesCount} archi visibili</span>
           {#if signedTriadRequirementReasons.length > 0}
             <ul>{#each signedTriadRequirementReasons as reason}<li>{reason}</li>{/each}</ul>
+            <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
           {/if}
         </div>
         <small>
-          I record paralleli concordi sono una sola dyade con tutti gli ID sorgente nel testimone. Record paralleli discordanti o segni mancanti bloccano l’analisi. I cappi sono esclusi dai triangoli; i filtri correnti definiscono il grafo esaminato.
+          I record paralleli concordi formano una sola dyade, conservando tutti gli ID sorgente. Record paralleli discordanti o segni mancanti bloccano l’analisi. I cappi sono esclusi dai triangoli; i filtri correnti definiscono il grafo esaminato.
         </small>
 
         {#if signedTriadError}
-          <div class="error" role="alert">{signedTriadError}</div>
+          <AnalysisErrorMessage message={signedTriadError} />
         {/if}
         {#if signedTriadHasRun}
           <div class="summary" role="status">
@@ -1023,21 +1328,21 @@
             {#if signedTriadSummary.balancedShare === null}
               n/d
             {:else}
-              {(signedTriadSummary.balancedShare * 100).toFixed(1)}%
+              {formatItalianNumber(signedTriadSummary.balancedShare * 100, 1)}%
             {/if}
             <small>La quota è calcolata solo sui triangoli completi classificati nella proiezione corrente.</small>
-            {#if signedTriadTimeMs !== undefined}<span> · {signedTriadTimeMs.toFixed(1)} ms</span>{/if}
+            {#if signedTriadTimeMs !== undefined}<span> · {formatItalianNumber(signedTriadTimeMs, 1)} ms</span>{/if}
             {#if signedTriadResults.length === 0}<p>La proiezione corrente non contiene triangoli completi.</p>{/if}
           </div>
         {/if}
         {#if signedTriadResults.length > 0}
           <div class="results-heading">
-            <strong>Triadi e polarità testimoni</strong>
+            <strong>Triadi classificate per polarità</strong>
             <button type="button" on:click={exportSignedTriads}>Esporta CSV</button>
           </div>
           {#if signedTriadFocusedKey}
             <div class="signed-triad-focus-status" role="status">
-              Focus 3D attivo: nodi e collegamenti fuori dal testimone sono nascosti solo nella vista; dati e risultati restano invariati.
+              Focus 3D attivo: nodi e collegamenti fuori dalla triade selezionata sono nascosti solo nella vista; dati e risultati restano invariati.
               <button type="button" on:click={clearSignedTriadFocus}>Mostra rete completa</button>
             </div>
           {/if}
@@ -1048,7 +1353,9 @@
                   <strong>{index + 1}. {triad.balanced ? "Bilanciata" : "Non bilanciata"} · {triad.negativeDyadCount} dyadi negative</strong>
                   <span>{triad.nodeIds.map(signedTriadNodeDisplay).join(" · ")}</span>
                   {#each triad.dyads as dyad}
-                    <span>{sourceIdByNodeId[dyad.sourceNodeId] ?? dyad.sourceNodeId} — {dyad.polarity} — {sourceIdByNodeId[dyad.targetNodeId] ?? dyad.targetNodeId}: {dyad.edgeRecords.map((record) => record.id).join(", ")}</span>
+                    {@const evidenceKey = signedTriadDyadEvidenceKey(triad.nodeIds, "current", dyad)}
+                    {@const visibleEdgeRecords = visibleSignedTriadEdgeRecords(evidenceKey, dyad.edgeRecords)}
+                    <span>{sourceIdByNodeId[dyad.sourceNodeId] ?? dyad.sourceNodeId} — {dyad.polarity} — {sourceIdByNodeId[dyad.targetNodeId] ?? dyad.targetNodeId}: {visibleEdgeRecords.map((record) => record.id).join(", ")}</span>
                   {/each}
                 </button>
                 <button
@@ -1062,16 +1369,29 @@
                 >
                   {signedTriadFocusedKey !== "" && signedTriadFocusedKey === triad.nodeIds.join("\u0000")
                     ? "Ripristina rete in 3D"
-                    : "Isola testimone in 3D"}
+                    : "Isola triade in 3D"}
                 </button>
+                {#each triad.dyads as dyad}
+                  {@const evidenceKey = signedTriadDyadEvidenceKey(triad.nodeIds, "current", dyad)}
+                  {@const visibleEdgeRecords = visibleSignedTriadEdgeRecords(evidenceKey, dyad.edgeRecords)}
+                  <ResultListPager
+                    total={dyad.edgeRecords.length}
+                    visible={visibleEdgeRecords.length}
+                    pageSize={scenarioDetailPageSize}
+                    label="record d'arco della relazione"
+                    showMore={() => showMoreSignedTriadEdgeRecords(evidenceKey)}
+                  />
+                {/each}
               </li>
             {/each}
           </ul>
-          {#if signedTriadResults.length > visibleSignedTriads.length}
-            <button type="button" class="show-more" on:click={() => visibleSignedTriadLimit += 100}>
-              Mostra altre 100 ({signedTriadResults.length - visibleSignedTriads.length} restanti)
-            </button>
-          {/if}
+          <ResultListPager
+            total={signedTriadResults.length}
+            visible={visibleSignedTriads.length}
+            pageSize={100}
+            label="triadi"
+            showMore={() => visibleSignedTriadLimit += 100}
+          />
           <small>Seleziona una triade per evidenziare i suoi tre nodi e i record che sostengono ciascuna dyade. L’esportazione include tutti i risultati, anche quelli oltre l’elenco visibile.</small>
         {/if}
 
@@ -1079,24 +1399,24 @@
           <div class="status" role="status">{signedTriadScenarioComparisonProgress}</div>
         {/if}
         {#if signedTriadScenarioComparisonError}
-          <div class="error" role="alert">{signedTriadScenarioComparisonError}</div>
+          <AnalysisErrorMessage message={signedTriadScenarioComparisonError} />
         {/if}
         {#if signedTriadScenarioComparison}
           <section class="signed-triad-scenario-comparison" aria-label="Stabilità delle triadi firmate tra scenari">
             <div class="summary" role="status">
-              <strong>{stableBalancedScenarioTriadCount}</strong> bilanciate in tutti i mondi ·
-              <strong>{stableUnbalancedScenarioTriadCount}</strong> non bilanciate in tutti i mondi ·
+              <strong>{stableBalancedScenarioTriadCount}</strong> bilanciate in tutti gli scenari ·
+              <strong>{stableUnbalancedScenarioTriadCount}</strong> non bilanciate in tutti gli scenari ·
               <strong>{variableScenarioTriadCount}</strong> con esito variabile<br />
-              {signedTriadScenarioComparison.scenarios.length} mondi finiti esaustivi ·
-              {signedTriadScenarioComparison.memberships.length} triadi classificate in almeno un mondo
-              {#if signedTriadScenarioComparisonTimeMs !== undefined}<span> · {signedTriadScenarioComparisonTimeMs.toFixed(1)} ms di solver</span>{/if}
+              {signedTriadScenarioComparison.scenarios.length} scenari confrontati ·
+              {signedTriadScenarioComparison.memberships.length} triadi classificate in almeno uno scenario
+              {#if signedTriadScenarioComparisonTimeMs !== undefined}<span> · {formatItalianNumber(signedTriadScenarioComparisonTimeMs, 1)} ms</span>{/if}
             </div>
             <div class="results-heading">
-              <strong>Stabilità e classificazioni per mondo</strong>
+              <strong>Stabilità e classificazioni per scenario</strong>
               <button type="button" on:click={exportSignedTriadScenarioComparison}>Esporta CSV</button>
             </div>
-            <div class="signed-triad-world-summaries" aria-label="Riepilogo bilanciamento per mondo">
-              {#each signedTriadScenarioComparison.scenarios as scenario (scenario.scenarioId)}
+            <div class="signed-triad-world-summaries" aria-label="Riepilogo bilanciamento per scenario">
+              {#each visibleSignedTriadScenarioSummaries as scenario (scenario.scenarioId)}
                 <div class="signed-triad-world-summary">
                   <strong>{scenario.scenarioLabel}</strong>
                   <span>{scenario.classifiedTriads} triangoli completi · {scenario.balancedTriads} bilanciati · {scenario.unbalancedTriads} non bilanciati</span>
@@ -1104,67 +1424,94 @@
                     {#if scenario.balancedShare === null}
                       n/d
                     {:else}
-                      {(scenario.balancedShare * 100).toFixed(1)}%
+                      {formatItalianNumber(scenario.balancedShare * 100, 1)}%
                     {/if}
                   </span>
-                  <span>{scenario.commonTriads} triangoli classificati in tutti i mondi · quota bilanciata sul nucleo comune:
+                  <span>{scenario.commonTriads} triangoli classificati in tutti gli scenari · quota bilanciata sul nucleo comune:
                     {#if scenario.balancedCommonShare === null}
                       n/d
                     {:else}
-                      {(scenario.balancedCommonShare * 100).toFixed(1)}%
+                      {formatItalianNumber(scenario.balancedCommonShare * 100, 1)}%
                     {/if}
                   </span>
                 </div>
               {/each}
             </div>
+            <ResultListPager
+              total={signedTriadScenarioComparison.scenarios.length}
+              visible={visibleSignedTriadScenarioSummaries.length}
+              pageSize={scenarioDetailPageSize}
+              label="riepiloghi di scenario"
+              showMore={() => visibleSignedTriadScenarioSummaryLimit += scenarioDetailPageSize}
+            />
             <small>
-              La prima quota usa i triangoli completi classificati in quel mondo. La quota sul nucleo comune usa soltanto gli stessi ID di triade, classificati in tutti i mondi; n/d indica un'intersezione vuota. Le triadi assenti dall'unione osservata restano non classificate, non sbilanciate.
+              La prima quota usa i triangoli completi classificati nello scenario. La quota sul nucleo comune usa soltanto gli stessi ID di triade, classificati in tutti gli scenari; n/d indica un'intersezione vuota. Le triadi assenti dall'unione osservata restano non classificate, non sbilanciate.
             </small>
             {#if signedTriadScenarioComparison.memberships.length === 0}
               <p>Nessuna triade completa è stata classificata in alcuno scenario.</p>
             {:else}
               <ul class="results signed-triad-scenario-results">
                 {#each visibleSignedTriadScenarioMemberships as membership (membership.nodeIds.join("\u0000"))}
+                  {@const visibleWorlds = visibleSignedTriadWorlds(membership)}
                   <li class="signed-triad-scenario-item">
                     <strong>{signedTriadStabilityLabel(membership.stability)}</strong>
                     <span>{membership.nodeIds.map(signedTriadNodeDisplay).join(" · ")}</span>
                     <details>
-                      <summary>Esito e testimoni per scenario</summary>
+                      <summary>Esito e relazioni presenti per scenario</summary>
                       <ul>
-                        {#each membership.worlds as world (world.scenarioId)}
+                        {#each visibleWorlds as world (world.scenarioId)}
                           <li>
                             <strong>{world.scenarioLabel}: {signedTriadWorldStatusLabel(world.classification)}</strong>
                             {#if world.evidence}
-                              <small>
-                                {#each world.evidence.dyads as dyad, dyadIndex}
-                                  {#if dyadIndex > 0} · {/if}
-                                  {sourceIdByNodeId[dyad.sourceNodeId] ?? dyad.sourceNodeId} — {dyad.polarity} — {sourceIdByNodeId[dyad.targetNodeId] ?? dyad.targetNodeId}
-                                  [{dyad.edgeRecords.map((record) => record.id).join(", ")}]
+                              <div class="signed-triad-world-evidence">
+                                {#each world.evidence.dyads as dyad}
+                                  {@const evidenceKey = signedTriadDyadEvidenceKey(membership.nodeIds, world.scenarioId, dyad)}
+                                  {@const visibleEdgeRecords = visibleSignedTriadEdgeRecords(evidenceKey, dyad.edgeRecords)}
+                                  <div class="signed-triad-dyad-evidence">
+                                    <span>{sourceIdByNodeId[dyad.sourceNodeId] ?? dyad.sourceNodeId} — {dyad.polarity} — {sourceIdByNodeId[dyad.targetNodeId] ?? dyad.targetNodeId}: {visibleEdgeRecords.map((record) => record.id).join(", ")}</span>
+                                    <ResultListPager
+                                      total={dyad.edgeRecords.length}
+                                      visible={visibleEdgeRecords.length}
+                                      pageSize={scenarioDetailPageSize}
+                                      label="record d'arco della relazione"
+                                      showMore={() => showMoreSignedTriadEdgeRecords(evidenceKey)}
+                                    />
+                                  </div>
                                 {/each}
-                              </small>
+                              </div>
                               <button
                                 type="button"
                                 class="inspect-signed-triad-scenario"
+                                disabled={running}
                                 on:click={() => inspectSignedTriadScenarioWitness(world.scenarioId, world.evidence)}
                               >
-                                Mostra questa triade nel mondo
+                                Mostra questa triade nello scenario
                               </button>
                             {/if}
                           </li>
                         {/each}
                       </ul>
+                      <ResultListPager
+                        total={membership.worlds.length}
+                        visible={visibleWorlds.length}
+                        pageSize={scenarioDetailPageSize}
+                        label="scenari per questa triade"
+                        showMore={() => showMoreSignedTriadWorlds(membership)}
+                      />
                     </details>
                   </li>
                 {/each}
               </ul>
-              {#if signedTriadScenarioComparison.memberships.length > visibleSignedTriadScenarioMemberships.length}
-                <button type="button" class="show-more" on:click={() => visibleSignedTriadScenarioLimit += 100}>
-                  Mostra altre 100 ({signedTriadScenarioComparison.memberships.length - visibleSignedTriadScenarioMemberships.length} restanti)
-                </button>
-              {/if}
+              <ResultListPager
+                total={signedTriadScenarioComparison.memberships.length}
+                visible={visibleSignedTriadScenarioMemberships.length}
+                pageSize={100}
+                label="triadi"
+                showMore={() => visibleSignedTriadScenarioLimit += 100}
+              />
             {/if}
             <small>
-              Una triade è confrontata tramite i tre ID sorgente indipendentemente dall'ordine. “Non classificata” indica che lo scenario non ha prodotto una classificazione per quella tripla; non equivale a “non bilanciata”. Sono elencate solo le triadi classificate in almeno uno scenario. L'esito è condizionato all'assunzione configurata che i mondi siano esaustivi; non rappresenta probabilità o affidabilità delle fonti.
+              Una triade è confrontata tramite i tre ID sorgente indipendentemente dall'ordine. “Non classificata” indica che lo scenario non ha prodotto una classificazione per quella tripla; non equivale a “non bilanciata”. Sono elencate solo le triadi classificate in almeno uno scenario. L'esito presuppone che gli scenari configurati includano tutti i casi da considerare; non rappresenta probabilità o affidabilità delle fonti.
             </small>
           </section>
         {/if}
@@ -1208,6 +1555,21 @@
     margin: 0;
   }
 
+  .induced-edge-types {
+    margin-top: 5px;
+    color: #475569;
+  }
+
+  .induced-edge-types summary {
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .induced-edge-type {
+    display: block;
+    margin-top: 4px;
+  }
+
   header p,
   small {
     color: #475569;
@@ -1224,6 +1586,15 @@
   .controls {
     display: grid;
     gap: 8px;
+  }
+
+  .scenario-readiness-note {
+    display: block;
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #fff7e6;
+    color: #75542d;
   }
 
   .signed-triad-section {
@@ -1279,9 +1650,14 @@
     color: #334155;
   }
 
-  .signed-triad-scenario-item details small {
+  .signed-triad-world-evidence {
+    display: grid;
+    gap: 3px;
+    margin-top: 3px;
+  }
+
+  .signed-triad-dyad-evidence > span {
     display: block;
-    margin-top: 2px;
     overflow-wrap: anywhere;
   }
 
@@ -1379,9 +1755,50 @@
     padding: 5px 7px;
   }
 
-  .run,
-  .results-heading button,
-  .show-more {
+  .run {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid #1e645d;
+    border-radius: 8px;
+    background: #1e645d;
+    color: #fff;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .run:hover:not(:disabled) {
+    border-color: #174f49;
+    background: #174f49;
+  }
+
+  .run.scenario-run {
+    border-color: #9abbb5;
+    background: #fff;
+    color: #174d47;
+  }
+
+  .scenario-run {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid #9abbb5;
+    border-radius: 8px;
+    background: #fff;
+    color: #174d47;
+    cursor: pointer;
+  }
+
+  .scenario-run:hover:not(:disabled) {
+    border-color: #1e645d;
+    background: #eff7f5;
+  }
+
+  .scenario-run.running:disabled {
+    background: #e6f1ef;
+    color: #174d47;
+    opacity: 1;
+  }
+
+  .results-heading button {
     padding: 7px 9px;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
@@ -1393,13 +1810,6 @@
   button:disabled {
     cursor: wait;
     opacity: 0.6;
-  }
-
-  .error {
-    padding: 8px;
-    border-radius: 6px;
-    background: #fef2f2;
-    color: #991b1b;
   }
 
   .readiness {
@@ -1418,6 +1828,23 @@
   .readiness ul {
     margin: 2px 0 0;
     padding-left: 18px;
+  }
+
+  .readiness-action {
+    justify-self: start;
+    min-height: 30px;
+    padding: 5px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+    font-weight: 650;
+  }
+
+  .readiness-action:focus-visible {
+    outline: 3px solid #0284c7;
+    outline-offset: 2px;
   }
 
   .summary {
@@ -1468,6 +1895,14 @@
     list-style: none;
   }
 
+  .results > li,
+  .near-match {
+    overflow: hidden;
+    border: 1px solid #dbe3ee;
+    border-radius: 7px;
+    background: #fff;
+  }
+
   .match {
     display: grid;
     gap: 3px;
@@ -1504,6 +1939,48 @@
 
   .match:hover {
     background: #e0e7ff;
+  }
+
+  .result-evidence {
+    margin: 0 8px 7px;
+    color: #334155;
+    font-size: 0.78rem;
+  }
+
+  .result-evidence summary {
+    width: fit-content;
+    color: #334155;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .result-evidence summary:focus-visible {
+    outline: 2px solid #176b80;
+    outline-offset: 2px;
+  }
+
+  .edge-record-evidence {
+    margin: 3px 0 2px 12px;
+    color: #475569;
+  }
+
+  .edge-record-evidence summary {
+    width: fit-content;
+    cursor: pointer;
+  }
+
+  .edge-record-evidence code {
+    overflow-wrap: anywhere;
+  }
+
+  .result-evidence-content {
+    display: grid;
+    gap: 4px;
+    margin-top: 7px;
+    padding: 8px;
+    border-radius: 5px;
+    background: #f8fafc;
+    overflow-wrap: anywhere;
   }
 
   @media (max-width: 1280px) {

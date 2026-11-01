@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"preview": "vite preview",
+		"preview": "node scripts/serve-static-base-path.mjs",
 		"preview:base": "node scripts/serve-static-base-path.mjs",
 		"benchmark:worker-memory:serve": "node scripts/serve-worker-memory-probe.mjs",
 		"benchmark:typed-path": "node --experimental-strip-types scripts/benchmark-typed-path.mjs",

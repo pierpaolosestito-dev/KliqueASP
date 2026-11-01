@@ -12,6 +12,8 @@ export function serializeCsv(rows: ReadonlyArray<ReadonlyArray<unknown>>): strin
   return rows.map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
+export const CSV_DOWNLOAD_REQUESTED_EVENT = "kliqueasp:csv-download-requested";
+
 /** Downloads CSV text and defers object-URL revocation until the browser has handled the click. */
 export function downloadCsvText(filename: string, csv: string): void {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
@@ -21,6 +23,9 @@ export function downloadCsvText(filename: string, csv: string): void {
   document.body.appendChild(link);
   try {
     link.click();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CSV_DOWNLOAD_REQUESTED_EVENT, { detail: { filename } }));
+    }
   } finally {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);

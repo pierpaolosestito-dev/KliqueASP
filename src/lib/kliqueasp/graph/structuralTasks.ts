@@ -3092,7 +3092,7 @@ export function buildCommunityPairMembershipPrograms(
   const [first, second] = pair;
   if (first === second) throw new RangeError("La coppia deve riferirsi a due nodi distinti");
   if (options.enforceConnectedPositiveVolumeCommunities) {
-    throw new RangeError("Le query di co-appartenenza non supportano il vincolo di connettivitÃ  positiva configurato");
+    throw new RangeError("Le query di co-appartenenza non supportano il vincolo di connettività positiva configurato");
   }
 
   const normalizedPair: [number, number] = first < second ? [first, second] : [second, first];
@@ -3165,7 +3165,7 @@ export function buildExperimentalIncrementalModularityProgram(
   validateCommunityCount("minCount", options.minCount);
   validateCommunityCount("maxCount", options.maxCount);
   if (options.minCount !== undefined && options.maxCount !== undefined && options.minCount > options.maxCount) {
-    throw new RangeError("minCount non puÃ² essere maggiore di maxCount");
+    throw new RangeError("minCount non può essere maggiore di maxCount");
   }
   const lines = [
     ...(options.minCount !== undefined ? [`minimum_community_count(${options.minCount}).`] : []),
