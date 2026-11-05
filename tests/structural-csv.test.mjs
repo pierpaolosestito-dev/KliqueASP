@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCompactKCoreWitnessCsv,
+  buildMinimumHopPathMinimalityCsv,
   buildKPlexMaximumMembershipDiagnosisCsv,
   buildKPlexCompletionWhyNotCsv,
   buildKCoreCompletionWhyNotCsv,
@@ -63,6 +64,25 @@ function parseCsv(csv) {
 
 const edgeProvenanceSummary = (edgeIds) => edgeIds.map((id) => `${id}: fonte`).join(" | ");
 const structuredEdgeEvidence = (edgeIds) => edgeIds.map((id) => ({ edge_id: id, provenance_references: [`ref:${id}`] }));
+
+test("minimum-hop path certificate CSV preserves its schema and does not fabricate a node ID for the zero-length base case", () => {
+  const rows = parseCsv(buildMinimumHopPathMinimalityCsv({
+    pathLength: 0,
+    reachableByDepth: []
+  }, {}));
+
+  assert.deepEqual(rows, [
+    ["path_length", "reachable_with_at_most", "node_id"],
+    ["0", "-1", ""]
+  ]);
+  assert.equal(rows[1][2], "", "il certificato del caso base non deve inserire prosa nella colonna degli ID");
+
+  const nonZeroRows = parseCsv(buildMinimumHopPathMinimalityCsv({
+    pathLength: 1,
+    reachableByDepth: [{ depth: 0, nodeIds: ["internal-start"] }]
+  }, { "internal-start": "=unsafe:alice" }));
+  assert.deepEqual(nonZeroRows[1], ["1", "0", "'=unsafe:alice"]);
+});
 
 test("k-plex maximum-membership CSV preserves the target, optimum gap, witness, and missing pairs", () => {
   const rows = parseCsv(buildKPlexMaximumMembershipDiagnosisCsv({
@@ -729,7 +749,7 @@ test("scenario dominating-set why-not CSV preserves scenario and projection cont
   }));
   assert.deepEqual(rows[0], [
     "record_type", "scenario_id", "scenario_label", "scenario_sources", "target_node_id", "target_node_label",
-    "candidate_group", "target_group", "confidence_threshold", "timeline_window", "type_filters", "group_filters", "why_not"
+    "candidate_group", "target_group", "confidence_threshold", "timeline_window", "type_filters", "group_filters", "degree_filters_json", "why_not"
   ]);
   assert.equal(rows[1][1], "only-a");
   assert.equal(rows[1][3], '["source:a","source:b"]');
@@ -741,7 +761,8 @@ test("scenario dominating-set why-not CSV preserves scenario and projection cont
   assert.equal(rows[1][9], "2020–2024");
   assert.equal(rows[1][10], '["person","place"]');
   assert.equal(rows[1][11], '["north"]');
-  assert.equal(rows[1][12], "nessun candidato eleggibile coincide con il target o gli è adiacente nella proiezione dello scenario");
+  assert.equal(rows[1][12], '{"excludeIsolated":false,"excludeWithoutIncoming":false,"excludeWithoutOutgoing":false}');
+  assert.equal(rows[1][13], "nessun candidato eleggibile coincide con il target o gli è adiacente nella proiezione dello scenario");
 });
 
 test("separator certificate CSV varies its evidence columns by removed element type", () => {

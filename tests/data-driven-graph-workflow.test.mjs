@@ -90,16 +90,16 @@ test("un JSON esterno passa da mapping e clingo a un SVG 2D del risultato", asyn
   assert.equal(scene.links.length, 3);
   assert.ok(scene.nodes.every((node) => node.selected));
   const svg = buildGraph2DSvg(scene, {
-    title: "Clique massima",
+    title: "Clique di taglia massima",
     scopeLabel: "Solo risultato selezionato",
-    resultLabel: "Clique massima · 3 nodi",
+    resultLabel: "Clique di taglia massima · 3 nodi",
     completionLabel: "Ottimo provato · enumerazione completa",
     showLabels: true,
     showNodeIds: true,
     showLegend: true
   });
   assert.match(svg, /Solo risultato selezionato/);
-  assert.match(svg, /Clique massima · 3 nodi/);
+  assert.match(svg, /Clique di taglia massima · 3 nodi/);
   assert.match(svg, /Nodo Alfa/);
   assert.match(svg, /legame-ab/);
 });

@@ -537,10 +537,10 @@ test("CSV k-core multi-scenario conserva metadati, membership e neutralizza etic
   );
   const lines = csv.split("\n");
   assert.equal(lines.length, 1 + 2 + 2);
-  assert.equal(lines[0].split(",").length, 22);
+  assert.equal(lines[0].split(",").length, 23);
   assert.match(lines[1], /^"scenario","archive-a","Archivio, A","1","undirected"/);
   assert.ok(lines[1].includes('"gruppo ""A""","0.7","2019–2020","[""person""]","[""italian""]"'));
-  assert.ok(lines[0].includes('"view_type_filters_json","view_group_filters_json"'));
+  assert.ok(lines[0].includes('"view_type_filters_json","view_group_filters_json","view_degree_filters_json"'));
   assert.ok(lines[3].includes('"a","\'=Alice"'));
   assert.ok(lines[3].endsWith('"universal"'));
   assert.ok(lines[4].endsWith('"non-universal"'));

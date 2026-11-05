@@ -83,7 +83,8 @@ export function buildIntegrityRepairVisualization(
     nodeIdByReference.set(String(node.sourceId ?? node.analysis?.id ?? node.id), nodeId);
   }
   const selectedNodeIds = new Set<string>();
-  const nodeAnnotations: Record<string, string> = {};
+  // Graph IDs come from uploaded JSON and may equal inherited object keys.
+  const nodeAnnotations: Record<string, string> = Object.create(null);
   let visibleNodeActionCount = 0;
   for (const [reference, actions] of nodeActions) {
     const nodeId = nodeIdByReference.get(reference);
@@ -138,7 +139,7 @@ export function buildIntegrityRepairVisualization(
     resultLabel: hasWitness
       ? `Proposta minima di riparazione · ${visibleActionLabel}${actionsOutsideProjection > 0 ? ` · ${actionsOutsideProjection} fuori proiezione` : ""}`
       : "Proposta di riparazione · nessun target visibile nella proiezione corrente",
-    completionLabel: `Ottimo di costo provato · costo ${proposal.cost} · dati invariati`,
+    completionLabel: `Ottimo di costo provato · una proposta tra eventuali pari merito · costo ${proposal.cost} · dati invariati`,
     hasWitness
   };
 }

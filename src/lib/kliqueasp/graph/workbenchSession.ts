@@ -1,4 +1,4 @@
-import { validateGraphDataset } from "./projectFile.ts";
+import { normalizeKliqueAspProjectName, validateGraphDataset } from "./projectFile.ts";
 
 export type WorkbenchSessionSnapshot = {
   version: 3;
@@ -6,6 +6,7 @@ export type WorkbenchSessionSnapshot = {
   draftDatasetText: string;
   appliedConfigText?: string;
   appliedDatasetText?: string;
+  projectName?: string;
   projectDirty: boolean;
   nodeLabelsVisible: boolean;
   history: WorkbenchHistoryEntry[];
@@ -43,6 +44,45 @@ export function filterWorkbenchHistoryForNodeIds(
   return history
     .filter((entry) => nodeIds.has(entry.id))
     .slice(-MAX_WORKBENCH_HISTORY_ENTRIES);
+}
+
+/** Reports whether a saved analysis state contains a result, outcome, or error worth keeping. */
+export function analysisStateHasResult(state: Record<string, unknown>): boolean {
+  const panel = state.resultPanel ?? state.panel;
+  if (panel === "clique") {
+    const clique = isRecord(state.clique) ? state.clique : {};
+    const stats = isRecord(clique.stats) ? clique.stats : {};
+    return (Array.isArray(clique.maximumCliques) && clique.maximumCliques.length > 0) ||
+      Number.isFinite(stats.timeMs) || Boolean(clique.error);
+  }
+  if (panel === "structural") {
+    const structural = isRecord(state.structural) ? state.structural : {};
+    return (Array.isArray(structural.results) && structural.results.length > 0) ||
+      Boolean(structural.stats) || Boolean(structural.error);
+  }
+  if (panel === "integrity") {
+    const integrity = isRecord(state.integrity) ? state.integrity : {};
+    return integrity.hasRun === true || Boolean(integrity.error) || Boolean(integrity.repairProposal) ||
+      Boolean(integrity.repairError) || Boolean(integrity.repairOutcomeMessage);
+  }
+  if (panel === "motif") {
+    const motif = isRecord(state.motif) ? state.motif : {};
+    return [
+      motif.hasRun, motif.countHasRun, motif.nearMatchHasRun, motif.counterfactualHasRun,
+      motif.signedTriadHasRun, motif.contextualCliqueHasRun
+    ].some(Boolean) || Boolean(
+      motif.error || motif.countError || motif.nearMatchError || motif.counterfactualError ||
+      motif.signedTriadError || motif.contextualCliqueError
+    );
+  }
+  if (panel === "provenance") {
+    const provenance = isRecord(state.provenance) ? state.provenance : {};
+    return Object.entries(provenance).some(([key, value]) =>
+      /(comparison|error|counterfactual|whynot)/i.test(key) && value !== null && value !== undefined &&
+      value !== "" && (!Array.isArray(value) || value.length > 0)
+    );
+  }
+  return false;
 }
 
 const DATABASE_NAME = "kliqueasp-workbench";
@@ -192,6 +232,7 @@ export function parseWorkbenchSession(input: unknown): WorkbenchSessionSnapshot 
     draftDatasetText,
     ...(appliedConfigText !== draftConfigText ? { appliedConfigText } : {}),
     ...(appliedDatasetText !== draftDatasetText ? { appliedDatasetText } : {}),
+    ...(typeof input.projectName === "string" ? { projectName: normalizeKliqueAspProjectName(input.projectName) } : {}),
     projectDirty: input.projectDirty === true,
     nodeLabelsVisible: input.nodeLabelsVisible !== false,
     history,

@@ -15,7 +15,10 @@ test("Sandbox defers GraphApp until the workspace route has started", () => {
 test("Sandbox announces preparation and offers an accessible retry when loading fails", () => {
   assert.match(sandbox, /role="status" aria-live="polite"/);
   assert.match(sandbox, /role="alert"/);
-  assert.match(sandbox, /onclick=\{loadGraphApp\}/);
+  assert.match(sandbox, /onclick=\{loadGraphApp\}>Riprova<\/button>/);
+  assert.doesNotMatch(sandbox, /onclick=\{loadGraphApp\} disabled=/,
+    "the retry action leaves the error branch as soon as the announced loading state begins");
+  assert.match(sandbox, /graphAppLoadError = "";[\s\S]*?\{:else\}\s*<div class="session-loading" role="status" aria-live="polite">/);
   assert.match(sandbox, /Preparazione|Caricamento dell’area di lavoro/);
   assert.match(sandbox, /Non è stato possibile caricare l’area di lavoro/);
 });

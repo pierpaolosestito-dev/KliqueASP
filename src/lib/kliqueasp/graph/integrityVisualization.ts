@@ -84,7 +84,7 @@ export function buildIntegrityViolationVisualization(
     edgeAnnotations,
     resultLabel: hasWitness
       ? `Violazione · ${label}`
-      : `Vincolo globale · ${label} (nessun witness grafico)`,
+      : `Vincolo globale · ${label} (nessun testimone nel grafo)`,
     hasWitness
   };
 }

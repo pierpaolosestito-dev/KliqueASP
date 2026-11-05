@@ -1,13 +1,25 @@
 <script lang="ts">
+  import type { GraphViewFilterSnapshot } from "../graph/graphViewFilters.ts";
   import { createEventDispatcher } from "svelte";
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import { displayNodeResultLabel } from "../graph/nodeResultLabel.ts";
   import { csvCell, downloadCsvText } from "../csvExport";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import StructuralCompletionCounterfactualPanel from "./StructuralCompletionCounterfactualPanel.svelte";
   import CounterfactualConfigHint from "./CounterfactualConfigHint.svelte";
   import TypedPathCounterfactualPanel from "./TypedPathCounterfactualPanel.svelte";
-  import { buildCompactKCoreWitnessCsv, buildDominatingSetInfeasibilityCsv, buildDominatingSetWitnessCsv, buildKCoreWitnessCsv, buildKPlexMaximumMembershipDiagnosisCsv, buildKPlexWitnessCsv, buildModularityCertificateCsv, buildProvenanceScenarioDominatingSetInfeasibilityCsv, buildSeparatorCertificateCsv, buildTypedPathTemporalNoRouteCsv } from "../graph/structuralCsvExport.ts";
+  import { buildCompactKCoreWitnessCsv, buildDominatingSetInfeasibilityCsv, buildDominatingSetWitnessCsv, buildKCoreWitnessCsv, buildKPlexMaximumMembershipDiagnosisCsv, buildKPlexWitnessCsv, buildMinimumHopPathMinimalityCsv, buildModularityCertificateCsv, buildProvenanceScenarioDominatingSetInfeasibilityCsv, buildSeparatorCertificateCsv, buildTypedPathTemporalNoRouteCsv } from "../graph/structuralCsvExport.ts";
   import { buildCommunityCoassignmentCsv, buildCommunityPairMembershipCsv, getCommunityPairObjectiveLosses, summarizeCommunityCoassignment, type CommunityCoassignmentSummary, type CommunityPairOptimumMembership } from "../graph/communityOptimumStability.ts";
+  import {
+    describeCommunityPairActionBlocker,
+    describeCommunityCountBlocker,
+    describeDirectedKCoreModeBlocker,
+    describeKPlexMembershipBlocker,
+    describeStructuralEndpointBlocker,
+    describeStructuralParameterBlocker,
+    describeTypedPathStepAdditionBlocker
+  } from "../graph/analysisReadiness.ts";
   import { buildCommunityConstraintDiagnosisCsv, type CommunityConstraintDiagnosis, type CommunityConstraintRelaxationSpec } from "../graph/communityConstraintDiagnosis.ts";
   import { buildCommunityTopologyCounterfactualCsv, type CommunityTopologyCounterfactualResult, type CommunityTopologyEdgeEdit } from "../graph/communityTopologyCounterfactual.ts";
   import {
@@ -16,6 +28,7 @@
     type KPlexMaximumMembershipOptimaSummary
   } from "../graph/kplexMembershipDiagnosis.ts";
   import { describeKPlexMissingTieAllowance } from "../graph/kplexMissingTieSummary.ts";
+  import { describeNonAdjacencyScope } from "../graph/nonAdjacencyScope.ts";
   import {
     MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES,
     buildKPlexMaximumMembershipCounterfactualCsv,
@@ -26,8 +39,12 @@
   import ResultListPager from "./ResultListPager.svelte";
   import ProgressiveList from "./ProgressiveList.svelte";
   import SearchableNodeSelect from "./SearchableNodeSelect.svelte";
+  import AnalysisProjectionScopeSummary from "./AnalysisProjectionScopeSummary.svelte";
+  import { DEFAULT_ANALYSIS_PROJECTION_SCOPE, type AnalysisProjectionScope } from "../graph/analysisProjectionScope.ts";
   import { getOwnRecordValue } from "../graph/recordUtils";
   import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
+  import { buildGraph2DTemporalNoRouteDiagnosticSummary } from "../graph/graph2DAnalysisOutcome.ts";
+  import { getStructuralTaskQuestion } from "../graph/structuralTaskQuestion.ts";
   import { getStructuralResultPressedState } from "../graph/structuralResultSelection";
   import {
     buildProvenanceScenarioComponentsCsv,
@@ -45,9 +62,12 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   import type { MaximalKPlexWitnessExplanation } from "../graph/structuralTasks";
 
   export let open = false;
+  export let compactModal = false;
   export let running = false;
+  export let analysisScope: AnalysisProjectionScope = DEFAULT_ANALYSIS_PROJECTION_SCOPE;
   export let error = "";
   export let outcomeMessage = "";
+  export let completionLabel = "";
   export let task: StructuralTask = "kPlex";
   export let directedGraph = false;
   export let kCoreMode: DirectedKCoreMode | "" = "";
@@ -164,6 +184,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   export let startNodeId = "";
   export let goalNodeId = "";
   export let resultSets: string[][] = [];
+  export let highlightedNodeIds: string[] = [];
   const resultSetPageSize = 50;
   let visibleResultSetLimit = resultSetPageSize;
   let previousResultSets = resultSets;
@@ -268,7 +289,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   export let provenanceKCoreSelectedGroup = "";
   export let provenanceKCoreConfidenceThreshold: number | null = null;
   export let provenanceKCoreTimelineWindow = "";
-  export let provenanceKCoreViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let provenanceKCoreViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   export let provenanceKPlexComparison: ProvenanceScenarioKPlexComparison | null = null;
   export let provenanceKPlexComparisonRunning = false;
   export let provenanceKPlexComparisonProgress = "";
@@ -276,7 +297,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   export let provenanceKPlexSelectedGroup = "";
   export let provenanceKPlexConfidenceThreshold: number | null = null;
   export let provenanceKPlexTimelineWindow = "";
-  export let provenanceKPlexViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let provenanceKPlexViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   export let componentScenarioNodes: Array<{ id: string; label: string }> = [];
   export let componentScenarioTargetNodeId = "";
   export let connectedComponentsAvailable = false;
@@ -287,7 +308,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   export let provenanceComponentSelectedGroup = "";
   export let provenanceComponentConfidenceThreshold: number | null = null;
   export let provenanceComponentTimelineWindow = "";
-  export let provenanceComponentViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let provenanceComponentViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   export let provenanceDominatingSetComparison: ProvenanceScenarioDominatingSetComparison | null = null;
   export let provenanceDominatingSetComparisonRunning = false;
   export let provenanceDominatingSetComparisonProgress = "";
@@ -296,7 +317,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   export let provenanceDominatingSetTargetGroup = "";
   export let provenanceDominatingSetConfidenceThreshold: number | null = null;
   export let provenanceDominatingSetTimelineWindow = "";
-  export let provenanceDominatingSetViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let provenanceDominatingSetViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   const scenarioSummaryPageSize = 20;
   const scenarioMembershipPageSize = 100;
   let visibleKCoreScenarioLimit = scenarioSummaryPageSize;
@@ -375,7 +396,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     targetGroup: string;
     confidenceThreshold: number | null;
     timelineWindow: string;
-    viewFilters: { types: string[]; groups: string[] };
+    viewFilters: GraphViewFilterSnapshot;
   } | null = null;
   let visibleScenarioUncoverableTargetLimit = certificatePageSize;
   let previousScenarioWhyNot = provenanceDominatingSetScenarioWhyNot;
@@ -403,6 +424,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   let selectedCommunityTopologyTarget: "always" | "sometimes" | "never" = "always";
   let communityStabilityError = "";
   let communityPairAnalysisRunning = false;
+  let communityPairAnalysisDescriptionIds: string | undefined;
   let kPlexMembershipAnalysisRunning = false;
   let communityCoassignmentSummary: CommunityCoassignmentSummary | null = null;
   let communityCoassignmentVisibleLimit = 50;
@@ -417,7 +439,17 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   let previousKCoreMembershipCandidateDomain = "";
 
   $: communityPairAnalysisRunning = communityPairMembershipRunning || communityTopologyCounterfactualRunning;
+  $: communityPairAnalysisDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    communityPairMembershipRunning ? "community-pair-membership-in-progress" : "",
+    communityTopologyCounterfactualRunning ? "community-topology-counterfactual-in-progress" : ""
+  ].filter(Boolean).join(" ") || undefined;
   $: kPlexMembershipAnalysisRunning = kPlexMembershipDiagnosisRunning || kPlexMembershipCounterfactualRunning;
+  $: kPlexMembershipAnalysisDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    kPlexMembershipDiagnosisRunning ? "kplex-membership-diagnosis-in-progress" : "",
+    kPlexMembershipCounterfactualRunning ? "kplex-membership-counterfactual-in-progress" : ""
+  ].filter(Boolean).join(" ") || undefined;
 
   $: if (componentScenarioTargetNodeId &&
     !componentScenarioNodes.some((node) => node.id === componentScenarioTargetNodeId)) {
@@ -595,23 +627,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 : task === "typedPath"
                   ? "cammino con sequenza tipizzata"
                 : "cammino minimo";
-  $: taskQuestion = task === "kPlex"
-    ? "Trova il gruppo più grande in cui ogni nodo può mancare fino a s−1 collegamenti."
-    : task === "maximalKPlex"
-      ? "Elenca i k-plex che non possono essere estesi aggiungendo altri nodi."
-      : task === "kCore"
-        ? "Individua i nodi che restano dopo aver rimosso quelli con grado inferiore alla soglia."
-        : task === "components" || task === "weakComponents" || task === "strongComponents"
-          ? "Raggruppa i nodi che sono raggiungibili secondo la direzione scelta."
-          : task === "path" || task === "typedPath"
-            ? "Trova un percorso semplice tra i due nodi rispettando il limite e i tipi configurati."
-            : task === "dominatingSet"
-              ? "Sceglie il minor numero di candidati che copre tutti i nodi obiettivo."
-              : task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator"
-                ? "Trova i nodi da rimuovere per separare i due terminali."
-                : task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator"
-                  ? "Trova gli archi da rimuovere per separare i due terminali."
-                  : "Partiziona la rete secondo la modularità e i vincoli configurati.";
+  $: taskQuestion = getStructuralTaskQuestion({
+    task,
+    parameter,
+    directedGraph,
+    kCoreMode,
+    pathTemporalSemantics,
+    strictTemporalOrder: pathStrictTemporalOrder
+  });
   $: taskContract = getGraphTaskContract(task, {
     direction: directedGraph ? "directed" : "undirected",
     temporalSemantics: pathTemporalSemantics,
@@ -672,22 +695,56 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     level.nodeIds.slice(0, visibleKCoreProfileLimits[String(level.coreNumber)] ?? certificatePageSize)
   ]));
   $: parameterizedTask = task === "kPlex" || task === "maximalKPlex" || task === "kCore" || task === "path";
-  $: invalidParameter = parameterizedTask &&
-    (!Number.isInteger(Number(parameter)) || Number(parameter) < (task === "kPlex" || task === "maximalKPlex" ? 1 : 0) || (task === "path" && Number(parameter) > 100));
-  $: invalidKCoreMode = task === "kCore" && directedGraph &&
-    kCoreMode !== "in" && kCoreMode !== "out" && kCoreMode !== "mutual";
-  $: invalidCommunityCounts = task === "communities" && (
-    !Number.isInteger(Number(minimumCommunityCount)) ||
-    !Number.isInteger(Number(maximumCommunityCount)) ||
-    Number(minimumCommunityCount) < 0 || Number(maximumCommunityCount) < 0 ||
-    (Number(minimumCommunityCount) > 0 && Number(maximumCommunityCount) > 0 && Number(minimumCommunityCount) > Number(maximumCommunityCount))
-  );
+  $: parameterBlocker = describeStructuralParameterBlocker({ task, parameter });
+  $: kPlexMembershipBlocker = describeKPlexMembershipBlocker({
+    maximumAvailable: resultSets.length > 0,
+    targetNodeId: kPlexMembershipTargetNodeId
+  });
+  $: invalidParameter = Boolean(parameterBlocker);
+  $: kCoreModeBlocker = task === "kCore"
+    ? describeDirectedKCoreModeBlocker({ directed: directedGraph, mode: kCoreMode })
+    : "";
+  $: invalidKCoreMode = Boolean(kCoreModeBlocker);
+  $: communityCountBlocker = task === "communities"
+    ? describeCommunityCountBlocker({ minimum: minimumCommunityCount, maximum: maximumCommunityCount })
+    : "";
+  $: invalidCommunityCounts = Boolean(communityCountBlocker);
   $: invalidTypedPath = task === "typedPath" && (
     !typedPathRequirementsAvailable ||
     (pathTemporalSemantics !== "static" && !typedPathTemporalRequirementsAvailable) ||
     pathEdgeTypeSequence.length === 0 ||
     pathEdgeTypeSequence.some((edgeType) => !availableEdgeTypes.includes(edgeType))
   );
+  $: structuralEndpointBlocker = describeStructuralEndpointBlocker({ task, startNodeId, goalNodeId });
+  $: typedPathStepAdditionBlocker = describeTypedPathStepAdditionBlocker({
+    availableTypeCount: availableEdgeTypes.length,
+    stepCount: pathEdgeTypeSequence.length
+  });
+  $: structuralTaskSelectionDescriptionIds = [
+    directedGraph && !weakComponentsAvailable ? "weak-component-scenario-readiness" : "",
+    directedGraph && !strongComponentsAvailable ? "strong-component-scenario-readiness" : ""
+  ].filter(Boolean).join(" ") || undefined;
+  $: structuralRunDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    !taskRequirementsAvailable ? "structural-task-readiness" : "",
+    structuralEndpointBlocker && !running && taskRequirementsAvailable ? "structural-endpoint-blocker" : "",
+    parameterBlocker && !running ? "structural-parameter-blocker" : "",
+    kCoreModeBlocker && !running ? "k-core-mode-blocker" : "",
+    communityCountBlocker && !running ? "community-count-blocker" : ""
+  ].filter(Boolean).join(" ") || undefined;
+  $: structuralScenarioComparisonDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    !taskRequirementsAvailable ? "structural-task-readiness" : "",
+    parameterBlocker && !running ? "structural-parameter-blocker" : "",
+    kCoreModeBlocker && !running ? "k-core-mode-blocker" : "",
+    task === "kPlex" && !enumerateAllOptima ? "kplex-scenario-optima-readiness" : "",
+    task === "dominatingSet" && !enumerateAllOptima ? "dominating-set-scenario-optima-readiness" : "",
+    (task === "components" || task === "weakComponents" || task === "strongComponents") && !componentScenarioTargetNodeId
+      ? "component-scenario-reference-readiness"
+      : "",
+    task === "weakComponents" && !weakComponentsAvailable ? "weak-component-scenario-readiness" : "",
+    task === "strongComponents" && !strongComponentsAvailable ? "strong-component-scenario-readiness" : ""
+  ].filter(Boolean).join(" ") || undefined;
   $: if (task === "typedPath" && pathEdgeTypeSequence.length === 0) {
     pathEdgeTypeSequence = [""];
   }
@@ -723,6 +780,18 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   }
   $: communityStabilityNodeIds = [...new Set(communityPartitions.flatMap((partition) => partition.communities.flat()))]
     .sort((left, right) => left.localeCompare(right));
+  $: communityPairMembershipBlocker = describeCommunityPairActionBlocker({
+    analysisAvailable: communityPairMembershipEnabled,
+    action: "membership",
+    leftNodeId: selectedCommunityPairLeftNodeId,
+    rightNodeId: selectedCommunityPairRightNodeId
+  });
+  $: communityTopologyCounterfactualBlocker = describeCommunityPairActionBlocker({
+    analysisAvailable: communityTopologyCounterfactualEnabled,
+    action: "topologyCounterfactual",
+    leftNodeId: selectedCommunityPairLeftNodeId,
+    rightNodeId: selectedCommunityPairRightNodeId
+  });
   $: communityPairObjectiveLosses = communityPairMembershipResult
     ? getCommunityPairObjectiveLosses(communityPairMembershipResult)
     : null;
@@ -832,28 +901,34 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   $: visibleMembershipMissingPairs = kPlexMembershipDiagnosis?.missingPairs.slice(0, visibleMembershipMissingPairLimit) ?? [];
   $: availableNodeSearchOptions = availableNodes.map((node) => ({ value: node.id, label: node.label }));
   $: availableGroupSearchOptions = availableGroups.map((group) => ({ value: group, label: group }));
+  $: availableEdgeTypeSearchOptions = availableEdgeTypes.map((edgeType) => ({ value: edgeType, label: edgeType }));
   $: componentScenarioSearchOptions = componentScenarioNodes.map((node) => ({ value: node.id, label: `${node.label} · ${node.id}` }));
   $: kPlexMembershipSearchOptions = kPlexMembershipNodes.map((node) => ({
     value: node.id,
-    label: `${node.label} (${sourceIdByNodeId[node.id] ?? node.id})`
+    label: resultNodeLabel(node.id)
   }));
   $: communityStabilitySearchOptions = communityStabilityNodeIds.map((nodeId) => ({
     value: nodeId,
-    label: `${nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId} (${sourceIdByNodeId[nodeId] ?? nodeId})`
+    label: resultNodeLabel(nodeId)
   }));
   $: communityPairRightSearchOptions = communityStabilitySearchOptions.map((option) => ({
     ...option,
     disabled: option.value === selectedCommunityPairLeftNodeId
   }));
   $: selectedKcoreSearchOptions = (resultSets.find((set) => nodeSetSignature(set) === selectedKcoreSignature) ?? [])
-    .map((nodeId) => ({ value: nodeId, label: sourceIdByNodeId[nodeId] ?? nodeId }));
+    .map((nodeId) => ({ value: nodeId, label: resultNodeLabel(nodeId) }));
   $: selectedDominatingTargetSearchOptions = selectedDominatingTargetIds.map((targetId) => ({
     value: targetId,
-    label: sourceIdByNodeId[targetId] ?? targetId
+    label: resultNodeLabel(targetId)
   }));
 
   function nodeSetSignature(nodeIds: string[]): string {
     return [...nodeIds].sort().join("\u0000");
+  }
+
+  function isCurrentHighlightedWitness(nodeIds: string[]): boolean {
+    return nodeIds.length > 0 && highlightedNodeIds.length === nodeIds.length &&
+      nodeSetSignature(nodeIds) === nodeSetSignature(highlightedNodeIds);
   }
 
   function showMoreRelaxedConstraints(diagnosisIndex: number) {
@@ -898,6 +973,15 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         pair.supportingRecords.map((record) => record.edgeIdentity)
       );
       dispatch("highlightKCore", { nodeIds, edgeIds: supportingEdgeIds });
+      return;
+    }
+    if (task === "kPlex" || task === "maximalKPlex") {
+      dispatch("highlightKPlexWitness", {
+        nodeIds,
+        missingTiePairs: kPlexMissingPairsBySet[nextKplexSignature] ?? [],
+        parameter: Number(parameter),
+        task
+      });
       return;
     }
     dispatch("highlight", nodeIds);
@@ -1358,10 +1442,8 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     }));
   }
 
-  function communityConstraintNodeLabel(nodeId: string): string {
-    const label = nodeLabelById[nodeId] ?? nodeId;
-    const sourceId = sourceIdByNodeId[nodeId] ?? nodeId;
-    return label === sourceId ? sourceId : `${label} (${sourceId})`;
+  function resultNodeLabel(nodeId: string): string {
+    return displayNodeResultLabel(nodeId, nodeLabelById, sourceIdByNodeId);
   }
 
   function communityConstraintLabel(constraint: CommunityConstraintRelaxationSpec): string {
@@ -1370,7 +1452,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     if (constraint.kind === "mustLink" || constraint.kind === "cannotLink") {
       const pair = constraint.nodeIds ?? [];
       const relationship = constraint.kind === "mustLink" ? "Insieme obbligatorio" : "Separazione obbligatoria";
-      return `${relationship}: ${pair.map(communityConstraintNodeLabel).join(" ↔ ") || constraint.pair.join(" ↔ ")}`;
+      return `${relationship}: ${pair.map(resultNodeLabel).join(" ↔ ") || constraint.pair.join(" ↔ ")}`;
     }
     if (constraint.kind !== "attributeBound") return "Vincolo di comunità";
     return `Composizione per ${constraint.attributeName ?? "attributo"}=${JSON.stringify(constraint.attributeValue)}${constraint.minPerCommunity !== undefined ? `, minimo ${constraint.minPerCommunity}` : ""}${constraint.maxPerCommunity !== undefined ? `, massimo ${constraint.maxPerCommunity}` : ""} nodi per comunità`;
@@ -1431,18 +1513,10 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
 
   function exportPathMinimalityCSV() {
     if (!pathMinimality) return;
-    const rows = [["path_length", "reachable_with_at_most", "node_id"].map(csvCell).join(",")];
-    for (const layer of pathMinimality.reachableByDepth) {
-      for (const nodeId of layer.nodeIds) {
-        rows.push([
-          pathMinimality.pathLength,
-          layer.depth,
-          sourceIdByNodeId[nodeId] ?? nodeId
-        ].map(csvCell).join(","));
-      }
-    }
-    if (pathMinimality.pathLength === 0) rows.push([0, -1, "no shorter nonnegative path"].map(csvCell).join(","));
-    downloadCsvText("shortest_path_minimality_certificate.csv", rows.join("\n"));
+    downloadCsvText(
+      "shortest_path_minimality_certificate.csv",
+      buildMinimumHopPathMinimalityCsv(pathMinimality, sourceIdByNodeId)
+    );
   }
 
   function exportPathNoRouteCSV() {
@@ -1491,9 +1565,15 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
 
   function highlightTypedPathNoRouteWitness() {
     if (!typedPathNoRouteCertificate || !("temporalSemantics" in typedPathNoRouteCertificate)) return;
+    const summary = buildGraph2DTemporalNoRouteDiagnosticSummary(
+      typedPathNoRouteCertificate.goalReachableAsWalk
+    );
     dispatch("highlightTypedPath", {
       nodeIds: typedPathNoRouteCertificate.walk.nodeIds,
-      edgeIds: typedPathNoRouteCertificate.walk.edgeIdsByStep.flat()
+      edgeIds: typedPathNoRouteCertificate.walk.edgeIdsByStep.flat(),
+      edgeIdsByStep: typedPathNoRouteCertificate.walk.edgeIdsByStep,
+      resultLabel: summary.resultLabel,
+      completionLabel: summary.completionLabel
     });
   }
 
@@ -1656,8 +1736,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     pathEdgeTypeSequence = [...pathEdgeTypeSequence, ""];
   }
 
-  function updatePathTypeStep(index: number, event: Event) {
-    const value = (event.currentTarget as HTMLSelectElement).value;
+  function updatePathTypeStep(index: number, value: string) {
     pathEdgeTypeSequence = pathEdgeTypeSequence.map((edgeType, step) => step === index ? value : edgeType);
   }
 
@@ -1674,7 +1753,13 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
 </script>
 
 {#if open}
-  <section class="structural-panel" aria-labelledby="structural-panel-title">
+  <section
+    class="structural-panel"
+    role={compactModal ? "dialog" : undefined}
+    aria-modal={compactModal ? "true" : undefined}
+    aria-labelledby="structural-panel-title"
+    tabindex="-1"
+  >
     <header>
       <div>
         <h3 id="structural-panel-title">Analisi strutturale</h3>
@@ -1682,19 +1767,20 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         {#if graphNodesCount !== undefined && graphLinksCount !== undefined}
           <div class="panel-context">
             <span>{graphNodesCount} nodi · {graphLinksCount} archi nella proiezione</span>
-            <span>{directedGraph ? "Grafo orientato" : "Grafo non orientato"}</span>
             {#if selectedGroup && selectedGroupAppliesToTask}<span>Gruppo: {selectedGroup}</span>{/if}
             {#if task === "dominatingSet" && selectedTargetGroup}<span>Obiettivo: {selectedTargetGroup}</span>{/if}
           </div>
         {/if}
       </div>
-      <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
+      <button type="button" class="close" aria-label="Chiudi analisi strutturale" title="Chiudi analisi strutturale" on:click={() => dispatch("close")}>×</button>
     </header>
 
-    <fieldset class="task-controls" disabled={running}>
+    <AnalysisProjectionScopeSummary scope={analysisScope} />
+
+    <fieldset class="task-controls" aria-describedby={running ? "analysis-in-progress-status" : undefined} disabled={running}>
       <label class="analysis-task-label">
         Domanda
-        <select bind:value={task}>
+        <select bind:value={task} aria-describedby={structuralTaskSelectionDescriptionIds}>
           <optgroup label="Gruppi densi">
             <option value="kPlex">k-plex di cardinalità massima</option>
             <option value="maximalKPlex">k-plex massimali per inclusione</option>
@@ -1726,7 +1812,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           <summary>Semantica e contratto del risultato</summary>
           <p>{taskContract.querySemantics}</p>
           <p><strong>Enumerazione:</strong> {taskEnumerationDescription}.</p>
-          <p><strong>Predicati ASP di input:</strong> {taskContract.inputPredicates.join(", ")} (unione delle modalità; alcuni sono condizionali).</p>
+          <p><strong>Predicati ASP di ingresso:</strong> {taskContract.inputPredicates.join(", ")} (unione delle modalità; alcuni sono condizionali).</p>
           <p><strong>Atomi del testimone ASP:</strong> {taskContract.witnessPredicates.join(", ")}.</p>
           <p><strong>Campi interpretati:</strong> {taskContract.resultFields.join(", ")}.</p>
           <small>Encoding ASP `{taskContract.aspEncoding}` v{taskContract.encodingVersion}; parser `{taskContract.parser}`.</small>
@@ -1735,7 +1821,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             <p><strong>Query ausiliaria ASP: {supportingQuery.id}</strong></p>
             <p>{supportingQuery.querySemantics}</p>
             <p><strong>Enumerazione:</strong> {supportingQuery.supportedEnumeration.join(" / ")}.</p>
-            <p><strong>Input:</strong> {supportingQuery.inputPredicates.join(", ")}.</p>
+            <p><strong>Dati di ingresso:</strong> {supportingQuery.inputPredicates.join(", ")}.</p>
             <p><strong>Testimone:</strong> {supportingQuery.witnessPredicates.join(", ")}.</p>
             <p><strong>Campi interpretati:</strong> {supportingQuery.resultFields.join(", ")}.</p>
             <small>Encoding ASP `{supportingQuery.aspEncoding}` v{supportingQuery.encodingVersion}; parser `{supportingQuery.parser}`. {supportingQuery.visualization}</small>
@@ -1743,24 +1829,26 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         </details>
       {/if}
       {#if !taskRequirementsAvailable}
-        <div class="task-readiness-card" role="status" aria-live="polite">
+        <div id="structural-task-readiness" class="task-readiness-card" role="status" aria-live="polite">
           <strong>Questa analisi richiede altri campi</strong>
-          <ul>
-            {#each taskRequirementReasons as reason}<li>{reason}</li>{/each}
-          </ul>
-          <button type="button" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
+          <div class="task-requirement-reasons">
+            <ProgressiveList items={taskRequirementReasons} label="requisiti mancanti per questa analisi" let:item>
+              <div>{item}</div>
+            </ProgressiveList>
+          </div>
+          <button type="button" on:click={() => dispatch("openData")}>Apri Dati e mappatura</button>
         </div>
       {/if}
       {#if directedGraph && (!weakComponentsAvailable || !strongComponentsAvailable)}
         <div class="task-readiness-card" role="status">
           <strong>Componenti orientate</strong>
           {#if !weakComponentsAvailable}
-            <p><b>Debolmente connesse:</b> {weakComponentsRequirementReasons.join(" ")}</p>
+            <p id="weak-component-scenario-readiness"><b>Debolmente connesse:</b> {weakComponentsRequirementReasons.join(" ")}</p>
           {/if}
           {#if !strongComponentsAvailable}
-            <p><b>Fortemente connesse:</b> {strongComponentsRequirementReasons.join(" ")}</p>
+            <p id="strong-component-scenario-readiness"><b>Fortemente connesse:</b> {strongComponentsRequirementReasons.join(" ")}</p>
           {/if}
-          <button type="button" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
+          <button type="button" on:click={() => dispatch("openData")}>Apri Dati e mappatura</button>
         </div>
       {/if}
       {#if parameterizedTask}
@@ -1773,8 +1861,13 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             max={task === "path" ? 100 : undefined}
             step="1"
             required
+            aria-invalid={parameterBlocker ? "true" : undefined}
+            aria-describedby={parameterBlocker && !running ? "structural-parameter-blocker" : undefined}
           />
         </label>
+        {#if parameterBlocker && !running}
+          <small id="structural-parameter-blocker" class="field-note field-error" role="status" aria-live="polite">{parameterBlocker}</small>
+        {/if}
       {/if}
       {#if task === "path" || task === "typedPath" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator"}
         <label>
@@ -1800,6 +1893,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           />
         </label>
       {/if}
+      {#if structuralEndpointBlocker && !running && taskRequirementsAvailable}
+        <small id="structural-endpoint-blocker" class="field-note" role="status" aria-live="polite">{structuralEndpointBlocker}</small>
+      {/if}
       {#if task === "typedPath"}
         <div class="path-type-sequence">
           <strong>Sequenza ordinata dei tipi d'arco</strong>
@@ -1807,19 +1903,30 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             <div class="path-type-step">
               <label>
                 Passo {index + 1}
-                <select value={edgeType} on:change={(event) => updatePathTypeStep(index, event)}>
-                  <option value="">Scegli un tipo</option>
-                  {#each availableEdgeTypes as availableType}
-                    <option value={availableType}>{availableType}</option>
-                  {/each}
-                </select>
+                <SearchableNodeSelect
+                  id={`typed-path-edge-type-${index}`}
+                  value={edgeType}
+                  options={availableEdgeTypeSearchOptions}
+                  ariaLabel={`Cerca il tipo d'arco per il passo ${index + 1}`}
+                  placeholder="Scegli o cerca un tipo d'arco..."
+                  includeEmptyOption
+                  emptyOptionLabel="Scegli un tipo"
+                  emptyMessage="Nessun tipo d'arco disponibile."
+                  noResultsMessage="Nessun tipo d'arco corrisponde alla ricerca."
+                  singularResultLabel="tipo d'arco trovato"
+                  pluralResultLabel="tipi d'arco trovati"
+                  on:change={(event) => updatePathTypeStep(index, event.detail.value)}
+                />
               </label>
               {#if pathEdgeTypeSequence.length > 1}
-                <button type="button" on:click={() => removePathTypeStep(index)}>Rimuovi</button>
+                <button type="button" aria-label={`Rimuovi passo ${index + 1}`} title={`Rimuovi passo ${index + 1}`} on:click={() => removePathTypeStep(index)}>Rimuovi passo</button>
               {/if}
             </div>
           {/each}
-          <button type="button" on:click={addPathTypeStep} disabled={availableEdgeTypes.length === 0 || pathEdgeTypeSequence.length >= 100}>Aggiungi passo</button>
+          <button type="button" on:click={addPathTypeStep} aria-describedby={typedPathStepAdditionBlocker ? "typed-path-add-step-blocker" : undefined} disabled={Boolean(typedPathStepAdditionBlocker)}>Aggiungi passo</button>
+          {#if typedPathStepAdditionBlocker}
+            <small id="typed-path-add-step-blocker" class="field-note scenario-readiness-note" role="status" aria-live="polite">{typedPathStepAdditionBlocker}</small>
+          {/if}
           <small>Ogni passo usa esattamente il tipo scelto nell'ordine indicato. Il cammino è semplice e limitato a 100 archi; sui grafi diretti si rispetta il verso.</small>
           <label>
             Semantica temporale
@@ -1841,17 +1948,22 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         </div>
       {/if}
       {#if task === "path"}
-        <label class="checkbox-label">
-          <span>Spiegazioni</span>
+        <details class="optional-task-options">
+          <summary>Altre opzioni {#if explainPathMinimality} · certificato attivo{/if}</summary>
+          <label class="checkbox-label">
+          <span>Certificazione</span>
           <span><input type="checkbox" bind:checked={explainPathMinimality} /> Certifica minimalità e assenza entro il limite</span>
         </label>
         {#if explainPathMinimality}
           <small class="field-note">Se non trova un cammino entro L−1 archi, verifica la raggiungibilità fino al limite scelto. Questo controllo aggiuntivo può aumentare tempo e memoria.</small>
         {/if}
+        </details>
       {/if}
       {#if task === "typedPath"}
-        <label class="checkbox-label">
-          <span>Spiegazioni</span>
+        <details class="optional-task-options">
+          <summary>Altre opzioni {#if explainTypedPathNoRoute} · diagnosi attiva{/if}</summary>
+          <label class="checkbox-label">
+          <span>Diagnosi</span>
           <span><input type="checkbox" bind:checked={explainTypedPathNoRoute} /> Mostra perché non c'è un cammino tipizzato</span>
         </label>
         {#if explainTypedPathNoRoute}
@@ -1861,6 +1973,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             <small class="field-note">Se non trova un cammino semplice, cerca il cammino temporale più lungo compatibile e mostra il vincolo che ne blocca l'estensione oppure le visite ripetute che impediscono un cammino semplice. Usa lo stesso limite di calcolo.</small>
           {/if}
         {/if}
+        </details>
         {#if pathTemporalSemantics === "static"}
           <TypedPathCounterfactualPanel
             running={running}
@@ -1947,7 +2060,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           />
         </label>
         {#if !componentScenarioTargetNodeId}
-          <small class="field-note scenario-readiness-note">Scegli il nodo di riferimento per abilitare il confronto delle componenti.</small>
+          <small id="component-scenario-reference-readiness" class="field-note scenario-readiness-note">Scegli il nodo di riferimento per abilitare il confronto delle componenti.</small>
         {/if}
       {/if}
       {#if task === "dominatingSet"}
@@ -1966,28 +2079,41 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         <small class="field-note">Il gruppo selezionato limita i nodi rimovibili; i due terminali restano protetti. {directedGraph ? "I cammini seguono gli archi nel verso dichiarato." : "I legami sono non orientati."}</small>
       {/if}
       {#if task === "minimumCostNodeSeparator"}
-        <small class="field-note">Minimizza la somma dei costi di rimozione: il campo deve contenere un intero positivo per ogni nodo candidato che può essere rimosso. I terminali protetti non richiedono un costo e la somma deve restare entro il limite sicuro; il costo è distinto dagli attributi descrittivi. {directedGraph ? "I cammini seguono gli archi nel verso dichiarato." : "I legami sono non orientati."}</small>
+        <small class="field-note">Assegna in Dati → Mappatura avanzata un costo intero positivo a ogni nodo rimovibile; i terminali restano protetti.</small>
+        <details class="field-note separator-configuration-details">
+          <summary>Dettagli sui costi</summary>
+          <p>Il risultato minimizza la somma dei costi, entro il limite numerico sicuro. Il costo non sostituisce gli attributi descrittivi. {directedGraph ? "I cammini seguono gli archi nel verso dichiarato." : "I legami sono non orientati."}</p>
+        </details>
       {/if}
       {#if task === "minimumEdgeSeparator"}
         <small class="field-note">Il task rimuove il minor numero di record d'arco. {directedGraph ? "I cammini seguono il verso dichiarato." : "Ogni record non orientato si può attraversare in entrambi i versi."} Gli archi paralleli contano come record distinti; il peso non viene interpretato come costo di rimozione.</small>
       {/if}
       {#if task === "minimumCostEdgeSeparator"}
-        <small class="field-note">Minimizza la somma di graphMapping.edge.removalCostField, che deve mappare un intero positivo per ogni arco. Il campo resta distinto dal peso relazionale. {directedGraph ? "I cammini seguono il verso dichiarato." : "Ogni record non orientato si può attraversare in entrambi i versi."}</small>
+        <small class="field-note">Minimizza la somma dei costi di rimozione degli archi. In Dati, apri Mappatura avanzata e associa "Costo rimozione arco" a un campo con un intero positivo per ogni arco. Il costo resta distinto dal peso della relazione. {directedGraph ? "I cammini seguono il verso dichiarato." : "Ogni record non orientato si può attraversare in entrambi i versi."}</small>
       {/if}
       {#if task === "communities"}
         <label class="community-count-field">
           Numero minimo di comunità
-          <input type="number" min="0" step="1" bind:value={minimumCommunityCount} />
+          <input type="number" min="0" step="1" bind:value={minimumCommunityCount}
+            aria-invalid={communityCountBlocker ? "true" : undefined}
+            aria-describedby={communityCountBlocker && !running ? "community-count-blocker" : undefined} />
         </label>
         <label class="community-count-field">
           Numero massimo di comunità
-          <input type="number" min="0" step="1" bind:value={maximumCommunityCount} />
+          <input type="number" min="0" step="1" bind:value={maximumCommunityCount}
+            aria-invalid={communityCountBlocker ? "true" : undefined}
+            aria-describedby={communityCountBlocker && !running ? "community-count-blocker" : undefined} />
         </label>
+        {#if communityCountBlocker && !running}
+          <small id="community-count-blocker" class="field-note field-error" role="status" aria-live="polite">{communityCountBlocker}</small>
+        {/if}
         <small class="field-note">0 significa nessun limite. Vincoli di coppia configurati (insieme o separate): {configuredCommunityPairCount}. {communityUsesEdgeWeights ? "Modularità pesata con i valori mappati sugli archi." : "Modularità non pesata."} Gli archi devono essere non orientati.</small>
         {#if configuredCommunityAttributeBoundCount > 0}
           <small class="field-note">Limiti di composizione attivi per attributo: {configuredCommunityAttributeBoundCount}. Ogni vincolo conta il valore mappato nella singola comunità; i valori mancanti non contano.</small>
         {/if}
-        <label class="checkbox-label">
+        <details class="optional-task-options">
+          <summary>Altre opzioni {#if explainCommunityContributions && explainCommunityInfeasibility} · 2 attive{:else if explainCommunityContributions || explainCommunityInfeasibility} · 1 attiva{/if}</summary>
+          <label class="checkbox-label">
           <span>Spiegazioni</span>
           <span><input type="checkbox" bind:checked={explainCommunityContributions} /> Scomponi il contributo di ogni comunità</span>
         </label>
@@ -2001,23 +2127,31 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         {#if explainCommunityInfeasibility}
           <small class="field-note">Solo se i vincoli non ammettono partizioni, una seconda ricerca individua il minor numero di regole da sospendere. Mantiene fissi grafo e dati; ogni alternativa è una proposta non applicata. “Tutti gli ottimi” mostra anche le diagnosi equivalenti.</small>
         {/if}
+        </details>
       {/if}
       {#if task === "kCore"}
         {#if directedGraph}
           <label>
             Semantica del k-core diretto
-            <select bind:value={kCoreMode} required>
+            <select bind:value={kCoreMode} required
+              aria-invalid={kCoreModeBlocker ? "true" : undefined}
+              aria-describedby={kCoreModeBlocker && !running ? "k-core-mode-blocker" : undefined}>
               <option value="" disabled>Scegli la semantica</option>
               <option value="in">Grado entrante</option>
               <option value="out">Grado uscente</option>
               <option value="mutual">Vicini reciproci</option>
             </select>
           </label>
+          {#if kCoreModeBlocker && !running}
+            <small id="k-core-mode-blocker" class="field-note field-error" role="status" aria-live="polite">{kCoreModeBlocker}</small>
+          {/if}
           <small class="field-note">
             Entrante conta i predecessori, uscente i successori; reciproco conta un vicino solo se esistono entrambi gli archi.
           </small>
         {/if}
-        <label class="checkbox-label">
+        <details class="optional-task-options">
+          <summary>Altre opzioni {#if includeKCoreNumbers && explainKCoreExclusions} · 2 attive{:else if includeKCoreNumbers || explainKCoreExclusions} · 1 attiva{/if}</summary>
+          <label class="checkbox-label">
           <span>Profilo</span>
           <span><input type="checkbox" bind:checked={includeKCoreNumbers} /> Numero di core per nodo</span>
         </label>
@@ -2031,6 +2165,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         {#if explainKCoreExclusions}
           <small class="field-note">Mostra per ogni nodo rimosso il turno e i vicini rimasti nel sottografo. Il costo cresce con il numero di turni.</small>
         {/if}
+        </details>
       {/if}
       {#if task === "kPlex" || task === "dominatingSet" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" || task === "communities"}
         <label class="checkbox-label">
@@ -2045,7 +2180,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         </label>
         <small class="field-note">Ogni k-plex soddisfa il vincolo e non si può estendere aggiungendo un altro nodo candidato. La cardinalità non viene massimizzata.</small>
       {/if}
-      <button type="button" class="run" on:click={requestRun} disabled={running || !taskRequirementsAvailable || invalidParameter || invalidKCoreMode || invalidCommunityCounts || invalidTypedPath || (task === "minimumCostNodeSeparator" && !costNodeSeparatorRequirementsAvailable) || (task === "minimumCostEdgeSeparator" && !costEdgeSeparatorRequirementsAvailable) || (task === "communities" && Boolean(communityConfigurationError)) || ((task === "path" || task === "typedPath" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator") && (!startNodeId || !goalNodeId || ((task === "typedPath" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator") && startNodeId === goalNodeId)))}>
+      <button type="button" class="run" on:click={requestRun} aria-describedby={structuralRunDescriptionIds} disabled={running || !taskRequirementsAvailable || invalidParameter || invalidKCoreMode || invalidCommunityCounts || invalidTypedPath || (task === "minimumCostNodeSeparator" && !costNodeSeparatorRequirementsAvailable) || (task === "minimumCostEdgeSeparator" && !costEdgeSeparatorRequirementsAvailable) || (task === "communities" && Boolean(communityConfigurationError)) || ((task === "path" || task === "typedPath" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator") && (!startNodeId || !goalNodeId || ((task === "typedPath" || task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator") && startNodeId === goalNodeId)))}>
         {running ? "Calcolo in corso…" : `Esegui ${taskLabel}`}
       </button>
       {#if provenanceScenarioCount < 2 && ["kCore", "kPlex", "components", "weakComponents", "strongComponents", "dominatingSet"].includes(task)}
@@ -2060,6 +2195,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           class="run scenario-run"
           class:running={pendingScenarioComparison === "kCore"}
           on:click={requestScenarioKCoreComparison}
+          aria-describedby={structuralScenarioComparisonDescriptionIds}
           disabled={running || !taskRequirementsAvailable || invalidParameter || invalidKCoreMode}
         >
           {pendingScenarioComparison === "kCore" ? "Confronto in corso…" : "Confronta il k-core su tutti gli scenari"}
@@ -2072,11 +2208,16 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           class="run scenario-run"
           class:running={pendingScenarioComparison === "kPlex"}
           on:click={requestScenarioKPlexComparison}
+          aria-describedby={structuralScenarioComparisonDescriptionIds}
           disabled={running || !taskRequirementsAvailable || invalidParameter || !enumerateAllOptima}
         >
           {pendingScenarioComparison === "kPlex" ? "Confronto in corso…" : "Confronta i k-plex massimi su tutti gli scenari"}
         </button>
-        <small class="field-note">{#if !enumerateAllOptima}Attiva “Tutti gli ottimi” per abilitare il confronto. {/if}Mostra e confronta tutti i k-plex di cardinalità massima per scenario, con gli stessi s, gruppo, filtri, timeline e soglia di confidenza. Può essere costoso; il budget totale è condiviso.</small>
+        <small id="kplex-scenario-optima-readiness" class="field-note">{#if !enumerateAllOptima}Attiva “Tutti gli ottimi” per abilitare il confronto. {/if}Confronta i k-plex di cardinalità massima in ogni scenario, con gli stessi parametri.</small>
+        <details class="field-note scenario-comparison-details">
+          <summary>Dettagli del confronto</summary>
+          <p>Usa lo stesso k, gruppo, direzione, filtri, intervallo temporale e soglia di confidenza. Il limite di calcolo è condiviso e il confronto può richiedere tempo.</p>
+        </details>
       {/if}
       {#if provenanceScenarioCount > 1 && (task === "components" || task === "weakComponents" || task === "strongComponents")}
         <button
@@ -2084,6 +2225,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           class="run scenario-run"
           class:running={pendingScenarioComparison === "components"}
           on:click={requestScenarioComponentComparison}
+          aria-describedby={structuralScenarioComparisonDescriptionIds}
           disabled={running || !taskRequirementsAvailable || !componentScenarioTargetNodeId ||
             (task === "components" && !connectedComponentsAvailable) ||
             (task === "weakComponents" && !weakComponentsAvailable) ||
@@ -2099,11 +2241,16 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           class="run scenario-run"
           class:running={pendingScenarioComparison === "dominatingSet"}
           on:click={requestScenarioDominatingSetComparison}
+          aria-describedby={structuralScenarioComparisonDescriptionIds}
           disabled={running || !taskRequirementsAvailable || !enumerateAllOptima}
         >
           {pendingScenarioComparison === "dominatingSet" ? "Confronto in corso…" : "Confronta le coperture minime su tutti gli scenari"}
         </button>
-        <small class="field-note">{#if !enumerateAllOptima}Attiva “Tutti gli ottimi” per abilitare il confronto. {/if}Mostra e confronta tutti gli insiemi dominanti minimi per scenario, con gli stessi gruppi candidati e obiettivo, filtri, timeline e soglia di confidenza. Se manca una copertura in uno scenario o la ricerca non è completa, non mostra confronti parziali. Un gruppo obiettivo vuoto in uno scenario ha copertura vuota di taglia zero.</small>
+        <small id="dominating-set-scenario-optima-readiness" class="field-note">{#if !enumerateAllOptima}Attiva “Tutti gli ottimi” per abilitare il confronto. {/if}Confronta gli insiemi dominanti minimi in tutti gli scenari, con gli stessi parametri.</small>
+        <details class="field-note scenario-comparison-details">
+          <summary>Dettagli del confronto</summary>
+          <p>Usa gli stessi gruppi candidati e obiettivo, filtri, intervallo temporale e soglia di confidenza. Se uno scenario non ha una copertura o la ricerca non è completa, non mostra confronti parziali. Un gruppo obiettivo vuoto ha copertura minima di taglia zero.</p>
+        </details>
       {/if}
     </fieldset>
 
@@ -2133,6 +2280,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         excludedCandidateCount={kCoreMembershipCounterfactualExcludedCandidateCount}
         cohortNodeIds={kCoreMembershipCandidateNodeIds}
         sourceIdByNodeId={sourceIdByNodeId}
+        nodeLabelById={nodeLabelById}
         showEnumeration={true}
         on:criteriaChange={() => dispatch("kCoreMembershipCriteriaChange")}
         on:openData={() => dispatch("openData")}
@@ -2164,7 +2312,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           {#each visibleUncoverableTargetIds as nodeId (nodeId)}
             <li>
               <button type="button" on:click={() => dispatch("highlight", [nodeId])}>
-                {nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId}
+                {resultNodeLabel(nodeId)}
               </button>
             </li>
           {/each}
@@ -2223,19 +2371,20 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           Gruppo: {provenanceKCoreSelectedGroup || "tutti"} · confidenza minima: {provenanceKCoreConfidenceThreshold ?? "non attiva"}
           {#if provenanceKCoreTimelineWindow} · finestra: {provenanceKCoreTimelineWindow}{/if}
         </small>
-        <GraphFilterSummary types={provenanceKCoreViewFilters.types} groups={provenanceKCoreViewFilters.groups} />
+        <GraphFilterSummary types={provenanceKCoreViewFilters.types} groups={provenanceKCoreViewFilters.groups} degreeFilters={provenanceKCoreViewFilters.degreeFilters} />
         <div class="scenario-membership-heading">
           <strong>Nodi nei k-core</strong>
           <button type="button" on:click={exportScenarioKCoreComparison}>Esporta CSV</button>
         </div>
         {#if provenanceKCoreComparison.memberships.length === 0}
           <p class="empty">Nessun nodo compare nel k-core di uno scenario.</p>
+          <small class="empty-next-step">Se te lo aspettavi, riduci k o rivedi gruppo, filtri e finestra temporale, poi ripeti il confronto.</small>
         {:else}
           <ul class="scenario-memberships">
             {#each visibleProvenanceKCoreMemberships as membership (membership.nodeId)}
               <li>
-                <button type="button" class:stable={membership.stableAcrossEveryScenario} on:click={() => dispatch("highlight", [membership.nodeId])}>
-                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                <button type="button" class:stable={membership.stableAcrossEveryScenario} on:click={() => dispatch("highlightScenarioMembership", { kind: "kCore", nodeId: membership.nodeId })}>
+                  <span>{resultNodeLabel(membership.nodeId)}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Candidato in {membership.candidateScenarioSupportCount}/{provenanceKCoreComparison.scenarioCount} scenari · nel k-core in {membership.scenarioSupportCount}/{provenanceKCoreComparison.scenarioCount}</span>
                   <strong>{provenanceKCoreComparison.worldAssumption === "finite-exhaustive-worlds"
@@ -2308,13 +2457,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           Gruppo: {provenanceKPlexSelectedGroup || "tutti"} · confidenza minima: {provenanceKPlexConfidenceThreshold ?? "non attiva"}
           {#if provenanceKPlexTimelineWindow} · finestra: {provenanceKPlexTimelineWindow}{/if}
         </small>
-        <GraphFilterSummary types={provenanceKPlexViewFilters.types} groups={provenanceKPlexViewFilters.groups} />
+        <GraphFilterSummary types={provenanceKPlexViewFilters.types} groups={provenanceKPlexViewFilters.groups} degreeFilters={provenanceKPlexViewFilters.degreeFilters} />
         <div class="scenario-membership-heading">
           <strong>Nodi nei k-plex massimi</strong>
           <button type="button" on:click={exportScenarioKPlexComparison}>Esporta CSV</button>
         </div>
         {#if provenanceKPlexComparison.memberships.length === 0}
           <p class="empty">Nessun nodo candidato negli scenari confrontati.</p>
+          <small class="empty-next-step">Se ti aspettavi nodi confrontabili, allarga il gruppo candidato o rivedi filtri e soglia s, poi ripeti il confronto.</small>
         {:else}
           <ul class="scenario-memberships">
             {#each visibleProvenanceKPlexMemberships as membership (membership.nodeId)}
@@ -2322,9 +2472,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <button
                   type="button"
                   class:stable={membership.stableAcrossEveryOptimalAnswerSet}
-                  on:click={() => dispatch("highlight", [membership.nodeId])}
+                  on:click={() => dispatch("highlightScenarioMembership", { kind: "kPlex", nodeId: membership.nodeId })}
                 >
-                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                  <span>{resultNodeLabel(membership.nodeId)}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Candidato in {membership.candidateScenarioSupportCount}/{provenanceKPlexComparison.scenarioCount} scenari · presente in {membership.scenarioSupportCount}/{provenanceKPlexComparison.scenarioCount} · in {membership.optimalAnswerSetCount}/{membership.totalOptimalAnswerSetCount} k-plex massimi calcolati</span>
                   <strong>{provenanceKPlexComparison.worldAssumption === "finite-exhaustive-worlds"
@@ -2362,7 +2512,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     {#if provenanceComponentComparison}
       <section class="scenario-comparison" aria-label="Stabilità della componente tra scenari di provenienza">
         <div class="scenario-summary" role="status">
-          Nodo di riferimento: <strong>{nodeLabelById[provenanceComponentComparison.targetNodeId] ?? provenanceComponentComparison.targetNodeId}</strong> ·
+          Nodo di riferimento: <strong>{resultNodeLabel(provenanceComponentComparison.targetNodeId)}</strong> ·
           eleggibile in <strong>{provenanceComponentComparison.targetEligibleScenarioCount}/{provenanceComponentComparison.scenarioCount}</strong> scenari ·
           {#if provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds"}
             stessa componente in tutti gli scenari: <strong>{provenanceComponentComparison.universallySameComponentNodeIds.length}</strong> · in alcuni scenari: <strong>{provenanceComponentBraveOnlyCount}</strong> · mai nella stessa componente: <strong>{provenanceComponentNotBraveCount}</strong> · non definita: <strong>{provenanceComponentUndefinedCount}</strong>
@@ -2393,13 +2543,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           gruppo: {provenanceComponentSelectedGroup || "tutti"} · confidenza minima: {provenanceComponentConfidenceThreshold ?? "non attiva"}
           {#if provenanceComponentTimelineWindow} · finestra: {provenanceComponentTimelineWindow}{/if}
         </small>
-        <GraphFilterSummary types={provenanceComponentViewFilters.types} groups={provenanceComponentViewFilters.groups} />
+        <GraphFilterSummary types={provenanceComponentViewFilters.types} groups={provenanceComponentViewFilters.groups} degreeFilters={provenanceComponentViewFilters.degreeFilters} />
         <div class="scenario-membership-heading">
           <strong>Nodi nella componente di riferimento</strong>
           <button type="button" on:click={exportScenarioComponentComparison}>Esporta CSV</button>
         </div>
         {#if provenanceComponentComparison.memberships.length === 0}
           <p class="empty">Non ci sono altri nodi candidati negli scenari confrontati.</p>
+          <small class="empty-next-step">Se ti aspettavi altri nodi, rivedi riferimento, gruppo candidato e filtri degli scenari, poi ripeti il confronto.</small>
         {:else}
           <ul class="scenario-memberships">
             {#each visibleProvenanceComponentMemberships as membership (membership.nodeId)}
@@ -2407,9 +2558,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <button
                   type="button"
                   class:stable={membership.sameComponentInEveryDeclaredScenario}
-                  on:click={() => dispatch("highlight", [membership.nodeId])}
+                  on:click={() => dispatch("highlightScenarioMembership", { kind: "component", nodeId: membership.nodeId })}
                 >
-                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                  <span>{resultNodeLabel(membership.nodeId)}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Nel dominio: {membership.candidateScenarioCount}/{provenanceComponentComparison.scenarioCount} · confrontabile: {membership.comparableScenarioCount}/{provenanceComponentComparison.scenarioCount} · stessa componente: {membership.sameComponentScenarioCount}/{membership.comparableScenarioCount}</span>
                   <strong>{provenanceComponentComparison.worldAssumption === "finite-exhaustive-worlds"
@@ -2468,7 +2619,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           {#each visibleScenarioUncoverableTargetIds as nodeId (nodeId)}
             <li>
               <button type="button" on:click={() => dispatch("highlight", [nodeId])}>
-                {nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId}
+                {resultNodeLabel(nodeId)}
               </button>
             </li>
           {/each}
@@ -2481,10 +2632,15 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           showMore={() => visibleScenarioUncoverableTargetLimit += certificatePageSize}
         />
         <small>
-          Scenario ID: {provenanceDominatingSetScenarioWhyNot.scenarioId} · fonti dichiarate: {provenanceDominatingSetScenarioWhyNot.scenarioSources.length || "nessuna"} · candidati: {provenanceDominatingSetScenarioWhyNot.candidateGroup || "tutti"} · obiettivi: {provenanceDominatingSetScenarioWhyNot.targetGroup || "tutti"}
+          ID scenario: {provenanceDominatingSetScenarioWhyNot.scenarioId} · fonti dichiarate: {provenanceDominatingSetScenarioWhyNot.scenarioSources.length || "nessuna"} · candidati: {provenanceDominatingSetScenarioWhyNot.candidateGroup || "tutti"} · obiettivi: {provenanceDominatingSetScenarioWhyNot.targetGroup || "tutti"}
           {#if provenanceDominatingSetScenarioWhyNot.confidenceThreshold !== null} · confidenza minima: {provenanceDominatingSetScenarioWhyNot.confidenceThreshold}{/if}
           {#if provenanceDominatingSetScenarioWhyNot.timelineWindow} · finestra: {provenanceDominatingSetScenarioWhyNot.timelineWindow}{/if}
         </small>
+        <GraphFilterSummary
+          types={provenanceDominatingSetScenarioWhyNot.viewFilters.types}
+          groups={provenanceDominatingSetScenarioWhyNot.viewFilters.groups}
+          degreeFilters={provenanceDominatingSetScenarioWhyNot.viewFilters.degreeFilters}
+        />
         {#if provenanceDominatingSetScenarioWhyNot.scenarioSources.length > 0}
           <details class="scenario-source-evidence">
             <summary>Fonti dello scenario</summary>
@@ -2531,13 +2687,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           Gruppo candidati: {provenanceDominatingSetCandidateGroup || "tutti"} · gruppo obiettivo: {provenanceDominatingSetTargetGroup || "tutti"} · confidenza minima: {provenanceDominatingSetConfidenceThreshold ?? "non attiva"}
           {#if provenanceDominatingSetTimelineWindow} · finestra: {provenanceDominatingSetTimelineWindow}{/if}
         </small>
-        <GraphFilterSummary types={provenanceDominatingSetViewFilters.types} groups={provenanceDominatingSetViewFilters.groups} />
+        <GraphFilterSummary types={provenanceDominatingSetViewFilters.types} groups={provenanceDominatingSetViewFilters.groups} degreeFilters={provenanceDominatingSetViewFilters.degreeFilters} />
         <div class="scenario-membership-heading">
           <strong>Nodi nelle coperture minime</strong>
           <button type="button" on:click={exportScenarioDominatingSetComparison}>Esporta CSV</button>
         </div>
         {#if provenanceDominatingSetComparison.memberships.length === 0}
           <p class="empty">Non ci sono nodi eleggibili come candidati in almeno uno scenario.</p>
+          <small class="empty-next-step">Rivedi gruppo candidato, gruppo obiettivo e filtri degli scenari, poi ripeti il confronto.</small>
         {:else}
           <ul class="scenario-memberships">
             {#each visibleProvenanceDominatingMemberships as membership (membership.nodeId)}
@@ -2545,9 +2702,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <button
                   type="button"
                   class:stable={membership.selectedInEveryScenarioMinimumSet}
-                  on:click={() => dispatch("highlight", [membership.nodeId])}
+                  on:click={() => dispatch("highlightScenarioMembership", { kind: "dominatingSet", nodeId: membership.nodeId })}
                 >
-                  <span>{nodeLabelById[membership.nodeId] ?? membership.nodeId}</span>
+                  <span>{resultNodeLabel(membership.nodeId)}</span>
                   <small>ID: {membership.nodeId}</small>
                   <span>Candidato in {membership.candidateScenarioCount}/{provenanceDominatingSetComparison.scenarioCount} scenari · selezionato in {membership.selectedMinimumSetCount}/{membership.totalComparableMinimumSetCount} coperture minime confrontabili</span>
                   <strong>{provenanceDominatingSetComparison.worldAssumption === "finite-exhaustive-worlds"
@@ -2599,7 +2756,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <li>
                 <strong>≤ {layer.depth} · {layer.nodeIds.length} nodi raggiungibili</strong>
                 <ProgressiveList items={layer.nodeIds} resetKey={layer} label={`nodi raggiungibili entro ${layer.depth} archi`} let:item>
-                  <span>{sourceIdByNodeId[item] ?? item}</span>
+                  <span>{resultNodeLabel(item)}</span>
                 </ProgressiveList>
               </li>
             {/each}
@@ -2619,14 +2776,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <div class="path-sequence">
                 <strong>Nodi rivisitati · {typedPathNoRouteCertificate.repeatedNodeIds.length}</strong>
                 <ProgressiveList items={typedPathNoRouteCertificate.repeatedNodeIds} resetKey={typedPathNoRouteCertificate} label="nodi rivisitati" let:item>
-                  <span>{sourceIdByNodeId[item] ?? item}</span>
+                  <span>{resultNodeLabel(item)}</span>
                 </ProgressiveList>
               </div>
             {/if}
           {:else if typedPathNoRouteCertificate.firstBlockedStep !== undefined}
             <p>Il cammino temporale con ripetizioni più lungo copre {typedPathNoRouteCertificate.maximumPrefixLength} {typedPathNoRouteCertificate.maximumPrefixLength === 1 ? "passo" : "passi"}; il passo {typedPathNoRouteCertificate.firstBlockedStep} ({typedPathNoRouteCertificate.edgeTypeSequence[typedPathNoRouteCertificate.firstBlockedStep - 1]}) non si estende sotto i vincoli temporali selezionati.</p>
           {:else}
-            <p>La sequenza completa è percorribile come cammino temporale con ripetizioni, ma non raggiunge il terminale finale {sourceIdByNodeId[goalNodeId] ?? goalNodeId}.</p>
+            <p>La sequenza completa è percorribile come cammino temporale con ripetizioni, ma non raggiunge il terminale finale {resultNodeLabel(goalNodeId)}.</p>
           {/if}
           {#if typedPathNoRouteCertificate.temporalSemantics === "coValid" && typedPathNoRouteCertificate.commonTimeValue !== undefined}
             <p>Istante comune del testimone: {displayMappedTime(typedPathNoRouteCertificate.commonTimeValue)}.</p>
@@ -2646,7 +2803,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           <ol>
             {#each typedPathNoRouteCertificate.walk.edgeIdsByStep as edgeIds, step}
               <li>
-                <strong>{nodeLabelById[typedPathNoRouteCertificate.walk.nodeIds[step]] ?? sourceIdByNodeId[typedPathNoRouteCertificate.walk.nodeIds[step]] ?? typedPathNoRouteCertificate.walk.nodeIds[step]} → {nodeLabelById[typedPathNoRouteCertificate.walk.nodeIds[step + 1]] ?? sourceIdByNodeId[typedPathNoRouteCertificate.walk.nodeIds[step + 1]] ?? typedPathNoRouteCertificate.walk.nodeIds[step + 1]} · {typedPathNoRouteCertificate.edgeTypeSequence[step]}</strong>
+                <strong>{resultNodeLabel(typedPathNoRouteCertificate.walk.nodeIds[step])} → {resultNodeLabel(typedPathNoRouteCertificate.walk.nodeIds[step + 1])} · {typedPathNoRouteCertificate.edgeTypeSequence[step]}</strong>
                 <ProgressiveList items={edgeIds} resetKey={typedPathNoRouteCertificate} label={`record d'arco del passo ${step + 1}`} let:item>
                   <span>{sourceIdByEdgeId[item] ?? item}</span>
                 </ProgressiveList>
@@ -2672,7 +2829,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                   <strong>{layer.step === 0 ? "Inizio" : `Dopo il passo ${layer.step} (${typedPathNoRouteCertificate.edgeTypeSequence[layer.step - 1]})`} · {layer.nodeIds.length} nodi</strong>
                   {#if layer.nodeIds.length > 0}
                     <ProgressiveList items={layer.nodeIds} resetKey={typedPathNoRouteCertificate} label={`nodi raggiungibili dopo il passo ${layer.step}`} let:item>
-                      <span>{sourceIdByNodeId[item] ?? item}</span>
+                      <span>{resultNodeLabel(item)}</span>
                     </ProgressiveList>
                   {:else}
                     <span>nessun nodo</span>
@@ -2692,7 +2849,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     {#if task === "communities" && (communityConstraintDiagnoses.length > 0 || communityConstraintDiagnosisError)}
       <section class="community-constraint-diagnosis" aria-labelledby="community-diagnosis-title">
         <h3 id="community-diagnosis-title">Diagnosi dei vincoli di comunità</h3>
-        <p>Grafo, proiezione e attributi restano invariati. Ogni elemento elencato è una regola che si potrebbe sospendere; la proposta usa il costo totale minimo dichiarato per categoria (1 se non configurato) e non applica modifiche né stabilisce quale regola sia errata.</p>
+        <p>Elenca le sospensioni di costo totale minimo per categoria (peso predefinito 1). Non modifica i dati e non stabilisce quali vincoli siano errati.</p>
         {#if communityConstraintDiagnosisError}
           <AnalysisErrorMessage message={"Diagnosi non disponibile: " + communityConstraintDiagnosisError} />
         {/if}
@@ -2730,7 +2887,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                       <details>
                         <summary>Elenco dei nodi</summary>
                         <ProgressiveList items={community} resetKey={diagnosis} label="nodi della partizione proposta" let:item>
-                          <span>{communityConstraintNodeLabel(item)}</span>
+                          <span>{resultNodeLabel(item)}</span>
                         </ProgressiveList>
                       </details>
                     </li>
@@ -2826,9 +2983,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           {#if timeMs !== undefined}<span> · {formatItalianNumber(timeMs, 1)} ms</span>{/if}
           {#if task === "kPlex"}
             <small>{describeKPlexMissingTieAllowance(Number(parameter))}</small>
+            <small>Le non adiacenze valgono per la proiezione corrente. {describeNonAdjacencyScope()}</small>
             <small>{enumerateAllOptima ? "Sono mostrate tutte le soluzioni di cardinalità massima." : "È mostrata una soluzione di cardinalità massima."}</small>
           {:else if task === "maximalKPlex"}
             <small>{describeKPlexMissingTieAllowance(Number(parameter))}</small>
+            <small>Le non adiacenze valgono per la proiezione corrente. {describeNonAdjacencyScope()}</small>
             <small>Il testimone è massimale per inclusione: nessun altro nodo candidato può essere aggiunto mantenendo la proprietà. Questo non garantisce la cardinalità massima.</small>
             {#if enumerateAllMaximalKPlex}
               <small>Sono mostrati tutti i k-plex massimali per inclusione.</small>
@@ -2839,6 +2998,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             <small>Ogni membro ha almeno {parameter} {countForm(parameter, kCoreNeighborSingularLabel, kCoreNeighborLabel)} {countForm(parameter, "interno", "interni")}; il k-core è il sottografo indotto massimo che soddisfa il vincolo.</small>
           {/if}
         {/if}
+        <AnalysisCompletionStatus label={completionLabel} />
         {#if graphNodesCount !== undefined && graphLinksCount !== undefined}
           <div>Proiezione: {graphNodesCount} {countForm(graphNodesCount, "nodo", "nodi")}, {graphLinksCount} {countForm(graphLinksCount, "arco", "archi")}</div>
         {/if}
@@ -2853,11 +3013,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <div class="kcore-profile-level">
                 <div class="kcore-profile-level-heading">
                   <strong>Numero di core {level.coreNumber} · {level.nodeIds.length} {countForm(level.nodeIds.length, "nodo", "nodi")}</strong>
-                  <button type="button" on:click={() => highlightKCoreProfile(level.coreNumber)}>
+                  <button type="button" aria-pressed={isCurrentHighlightedWitness(getKCoreNodeIdsAtThreshold(level.coreNumber))} on:click={() => highlightKCoreProfile(level.coreNumber)}>
                     Evidenzia {level.coreNumber}-core ({getKCoreNodeIdsAtThreshold(level.coreNumber).length} {countForm(getKCoreNodeIdsAtThreshold(level.coreNumber).length, "nodo", "nodi")})
                   </button>
                 </div>
-                <span>{(visibleKCoreProfileNodesByNumber[String(level.coreNumber)] ?? []).map((nodeId: string) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ") || "nessun nodo"}</span>
+                <span>{(visibleKCoreProfileNodesByNumber[String(level.coreNumber)] ?? []).map((nodeId: string) => resultNodeLabel(nodeId)).join(", ") || "nessun nodo"}</span>
                 <ResultListPager
                   total={level.nodeIds.length}
                   visible={(visibleKCoreProfileNodesByNumber[String(level.coreNumber)] ?? []).length}
@@ -2877,7 +3037,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               label="livelli di core"
               showMore={() => visibleKCoreProfileLevelLimit += certificatePageSize}
             />
-            <button type="button" on:click={exportKCoreNumbers}>Esporta core number CSV</button>
+            <button type="button" on:click={exportKCoreNumbers}>Esporta numeri di core (CSV)</button>
           </details>
         {/if}
         <SolverDiagnosticsDetails
@@ -2897,8 +3057,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         >
           <summary id="kplex-membership-diagnosis-title">Appartenenza e aggiunte possibili</summary>
           <p>Confronta la taglia del miglior k-plex che contiene il nodo con quella del massimo nella rete. Un gap pari a zero indica che il nodo compare in almeno un gruppo massimo; un gap positivo indica che resta fuori da tutti gli ottimi. Il confronto mantiene gli stessi parametri, filtri e gruppo. Se scegli «Tutti gli ottimi», l'appartenenza viene verificata sull'elenco completo.</p>
-          {#if kPlexMembershipNodes.length > 0 && resultSets.length === 0}
-            <small class="scenario-readiness-note" role="status">Calcola prima un k-plex massimo con la proiezione e i parametri correnti; poi potrai spiegare l'appartenenza e cercare aggiunte ipotetiche.</small>
+          {#if kPlexMembershipDiagnosisRunning}
+            <small id="kplex-membership-diagnosis-in-progress" class="scenario-status" role="status" aria-live="polite">Verifica dell'appartenenza in corso; attendi prima di modificare il nodo o avviare un'altra ricerca.</small>
+          {/if}
+          {#if kPlexMembershipCounterfactualRunning}
+            <small id="kplex-membership-counterfactual-in-progress" class="scenario-status" role="status" aria-live="polite">Ricerca delle aggiunte ipotetiche in corso; attendi prima di modificare il nodo o avviare un'altra ricerca.</small>
+          {/if}
+          {#if kPlexMembershipNodes.length > 0 && kPlexMembershipBlocker && !running && !kPlexMembershipAnalysisRunning}
+            <small id="kplex-membership-prerequisite" class="scenario-readiness-note" role="status" aria-live="polite">{kPlexMembershipBlocker}</small>
           {/if}
           {#if kPlexMembershipNodes.length > 0}
             <label>
@@ -2909,6 +3075,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 options={kPlexMembershipSearchOptions}
                 ariaLabel="Cerca il nodo da spiegare"
                 placeholder="Cerca nodo…"
+                disabledDescriptionId={kPlexMembershipAnalysisDescriptionIds}
                 disabled={running || kPlexMembershipAnalysisRunning}
                 on:change={() => dispatch("clearKPlexMembershipDiagnosis")}
               />
@@ -2917,12 +3084,13 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               type="button"
               class="run"
               on:click={() => dispatch("diagnoseKPlexMaximumMembership", kPlexMembershipTargetNodeId)}
+              aria-describedby={kPlexMembershipAnalysisDescriptionIds || (kPlexMembershipBlocker ? "kplex-membership-prerequisite" : undefined)}
               disabled={running || kPlexMembershipAnalysisRunning || resultSets.length === 0 || !kPlexMembershipTargetNodeId}
             >
               {kPlexMembershipDiagnosisRunning ? "Verifica in corso…" : "Spiega l'appartenenza"}
             </button>
           {:else}
-            <small>Nessun nodo appartiene al dominio candidato del gruppo corrente.</small>
+            <small class="empty-next-step" role="status">Nessun nodo appartiene al dominio candidato del gruppo corrente. Se ti aspettavi nodi, rivedi il gruppo e i filtri, poi ricalcola il k-plex massimo.</small>
           {/if}
           {#if kPlexMembershipDiagnosisError}
             <AnalysisErrorMessage message={"Diagnosi non disponibile: " + kPlexMembershipDiagnosisError} />
@@ -2957,14 +3125,14 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <details class="membership-witness">
                   <summary>Elenco dei nodi del testimone</summary>
                   <ProgressiveList items={kPlexMembershipDiagnosis.witnessNodeIds} resetKey={kPlexMembershipDiagnosis} label="nodi del testimone k-plex" let:item>
-                    <span>{sourceIdByNodeId[item] ?? item}</span>
+                    <span>{resultNodeLabel(item)}</span>
                   </ProgressiveList>
                 </details>
                 {#if kPlexMembershipDiagnosis.missingPairs.length > 0}
                   <small>Coppie non adiacenti ammesse nel testimone, con al massimo {Math.max(0, parameter - 1)} mancanti per nodo:</small>
                   <ul>
                     {#each visibleMembershipMissingPairs as [left, right]}
-                      <li>{sourceIdByNodeId[left] ?? left} — {sourceIdByNodeId[right] ?? right}</li>
+                      <li>{resultNodeLabel(left)} — {resultNodeLabel(right)}</li>
                     {/each}
                   </ul>
                   <ResultListPager
@@ -2993,6 +3161,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 type="button"
                 class="run"
                 on:click={() => dispatch("searchKPlexMaximumMembershipCounterfactual", kPlexMembershipTargetNodeId)}
+                aria-describedby={kPlexMembershipAnalysisDescriptionIds || (kPlexMembershipBlocker ? "kplex-membership-prerequisite" : undefined)}
                 disabled={running || kPlexMembershipAnalysisRunning || resultSets.length === 0 || !kPlexMembershipTargetNodeId}
               >
                 {kPlexMembershipCounterfactualRunning ? "Valutazione dei grafi ipotetici…" : "Cerca aggiunte minime"}
@@ -3017,11 +3186,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <span>Ottimo globale e massimo che include il nodo: {counterfactual.globalMaximumSize} e {counterfactual.maximumContainingSize}. Sottoinsiemi candidati valutati: {counterfactual.testedCandidateSets}/{counterfactual.candidateCount === 0 ? 1 : 2 ** counterfactual.candidateCount}{#if kPlexMembershipCounterfactualTimeMs !== undefined} · {formatItalianNumber(kPlexMembershipCounterfactualTimeMs, 1)} ms{/if}</span>
                 {#if counterfactual.selectedEdges.length > 0}
                   <h5>Aggiunte candidate selezionate</h5>
-                  <ul>
-                    {#each counterfactual.selectedEdges as edge (edge.id)}
-                      <li>{sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId} — {sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId} · {edge.edgeType} · costo {edge.cost}</li>
-                    {/each}
-                  </ul>
+                  <div class="selected-edit-list">
+                    <ProgressiveList items={counterfactual.selectedEdges} resetKey={counterfactual} pageSize={certificatePageSize} label="aggiunte candidate selezionate" let:item={edge}>
+                      <div class="selected-edit-item">{resultNodeLabel(edge.sourceNodeId)} — {resultNodeLabel(edge.targetNodeId)} · {edge.edgeType} · costo {edge.cost}</div>
+                    </ProgressiveList>
+                  </div>
                 {/if}
                 <button type="button" on:click={() => visualizeKPlexMembershipCounterfactual(counterfactual)}>
                   Visualizza modifiche in 2D
@@ -3033,6 +3202,8 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <div class="membership-diagnosis-result" role="status" aria-live="polite">
                 <strong>Nessun insieme tra i candidati dichiarati rende il nodo parte di un k-plex massimo.</strong>
                 <span>Combinazioni provate: {kPlexMembershipCounterfactual.testedCandidateSets}; archi eleggibili: {kPlexMembershipCounterfactual.candidateCount}{#if kPlexMembershipCounterfactualTimeMs !== undefined} · {formatItalianNumber(kPlexMembershipCounterfactualTimeMs, 1)} ms{/if}</span>
+                <small>Il risultato vale per gli archi candidati e i costi configurati. Aggiungili o rivedili in Dati, poi ripeti la ricerca.</small>
+                <button type="button" on:click={() => dispatch("openData")}>Rivedi archi candidati in Dati</button>
               </div>
             {/if}
           </section>
@@ -3070,7 +3241,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     <summary>Sempre nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "always").length})</summary>
                     <ul>
                       {#each visibleCommunityCoassignmentEntries.always as entry}
-                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                        <li>{resultNodeLabel(entry.nodeId)} · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
                       {:else}
                         <li>Nessun nodo.</li>
                       {/each}
@@ -3087,7 +3258,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     <summary>Talvolta nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "sometimes").length})</summary>
                     <ul>
                       {#each visibleCommunityCoassignmentEntries.sometimes as entry}
-                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                        <li>{resultNodeLabel(entry.nodeId)} · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
                       {:else}
                         <li>Nessun nodo.</li>
                       {/each}
@@ -3104,7 +3275,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     <summary>Mai nella stessa comunità ({communityCoassignmentSummary.entries.filter((entry) => entry.relation === "never").length})</summary>
                     <ul>
                       {#each visibleCommunityCoassignmentEntries.never as entry}
-                        <li>{nodeLabelById[entry.nodeId] ?? sourceIdByNodeId[entry.nodeId] ?? entry.nodeId} ({sourceIdByNodeId[entry.nodeId] ?? entry.nodeId}) · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
+                        <li>{resultNodeLabel(entry.nodeId)} · {entry.sameCommunityOptima}/{entry.totalOptima}</li>
                       {:else}
                         <li>Nessun nodo.</li>
                       {/each}
@@ -3136,6 +3307,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     options={communityStabilitySearchOptions}
                     ariaLabel="Cerca il primo nodo della coppia"
                     placeholder="Cerca primo nodo…"
+                    disabledDescriptionId={communityPairAnalysisDescriptionIds}
                     disabled={running || communityPairAnalysisRunning}
                     on:change={clearCommunityPairMembershipResult}
                   />
@@ -3148,6 +3320,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     options={communityPairRightSearchOptions}
                     ariaLabel="Cerca il secondo nodo della coppia"
                     placeholder="Cerca secondo nodo…"
+                    disabledDescriptionId={communityPairAnalysisDescriptionIds}
                     disabled={running || communityPairAnalysisRunning}
                     on:change={clearCommunityPairMembershipResult}
                   />
@@ -3155,6 +3328,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 <button
                   type="button"
                   on:click={requestCommunityPairMembership}
+                  aria-describedby={communityPairAnalysisDescriptionIds || (communityPairMembershipBlocker ? "community-pair-membership-blocker" : undefined)}
                   disabled={running || communityPairAnalysisRunning || !communityPairMembershipEnabled ||
                     !selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
                     selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId}
@@ -3162,11 +3336,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                   Verifica la relazione della coppia
                 </button>
               </div>
-              {#if !communityPairMembershipEnabled}
-                <small class="field-note">Ricalcola la modularità sulla proiezione corrente per abilitare la verifica.</small>
+              {#if !running && !communityPairAnalysisRunning && communityPairMembershipBlocker}
+                <small id="community-pair-membership-blocker" class="field-note" role="status" aria-live="polite">{communityPairMembershipBlocker}</small>
               {/if}
               {#if communityPairMembershipRunning}
-                <div class="scenario-status" role="status">Confronta le migliori partizioni con i due nodi insieme e separati entro il limite di calcolo.</div>
+                <div id="community-pair-membership-in-progress" class="scenario-status" role="status">Confronta le migliori partizioni con i due nodi insieme e separati entro il limite di calcolo.</div>
               {/if}
               {#if communityPairMembershipError}
                   <AnalysisErrorMessage message={communityPairMembershipError} />
@@ -3174,11 +3348,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               {#if communityPairMembershipResult}
                 <div class="scenario-summary" role="status">
                   {#if communityPairMembershipResult.relation === "always"}
-                    {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} sono nella stessa comunità in ogni ottimo.
+                    {resultNodeLabel(communityPairMembershipResult.nodeIds[0])} e {resultNodeLabel(communityPairMembershipResult.nodeIds[1])} sono nella stessa comunità in ogni ottimo.
                   {:else if communityPairMembershipResult.relation === "sometimes"}
-                    La coppia {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} è insieme in alcuni ottimi e separata in altri.
+                    La coppia {resultNodeLabel(communityPairMembershipResult.nodeIds[0])} e {resultNodeLabel(communityPairMembershipResult.nodeIds[1])} è insieme in alcuni ottimi e separata in altri.
                   {:else}
-                    La coppia {nodeLabelById[communityPairMembershipResult.nodeIds[0]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[0]] ?? communityPairMembershipResult.nodeIds[0]} e {nodeLabelById[communityPairMembershipResult.nodeIds[1]] ?? sourceIdByNodeId[communityPairMembershipResult.nodeIds[1]] ?? communityPairMembershipResult.nodeIds[1]} è separata in ogni ottimo.
+                    La coppia {resultNodeLabel(communityPairMembershipResult.nodeIds[0])} e {resultNodeLabel(communityPairMembershipResult.nodeIds[1])} è separata in ogni ottimo.
                   {/if}
                   {#if communityPairMembershipTimeMs !== undefined}<span>Tempo di calcolo: {formatItalianNumber(communityPairMembershipTimeMs, 1)} ms</span>{/if}
                 </div>
@@ -3210,13 +3384,12 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <section class="community-topology-counterfactual" aria-labelledby="community-topology-counterfactual-title">
                 <h3 id="community-topology-counterfactual-title">Modifiche topologiche ipotetiche per la coppia</h3>
                 <p>
-                  Valuta le aggiunte o rimozioni di archi candidate definite nel progetto e verifica la relazione richiesta tra i due nodi.
-                  Il costo degli interventi è distinto dal punteggio di modularità; i dati originali non vengono modificati.
+                  Valuta le modifiche agli archi candidate nel progetto per ottenere la relazione richiesta tra i nodi. Il loro costo è distinto dal punteggio di modularità; il grafo originale resta invariato.
                 </p>
                 <div class="community-pair-controls">
                   <label>
                     Relazione obiettivo
-                    <select bind:value={selectedCommunityTopologyTarget} on:change={clearCommunityPairMembershipResult} disabled={running || communityPairAnalysisRunning}>
+                    <select bind:value={selectedCommunityTopologyTarget} on:change={clearCommunityPairMembershipResult} aria-describedby={communityPairAnalysisDescriptionIds} disabled={running || communityPairAnalysisRunning}>
                       <option value="always">Sempre insieme in ogni ottimo</option>
                       <option value="sometimes">Insieme in alcuni ottimi</option>
                       <option value="never">Separati in ogni ottimo</option>
@@ -3225,27 +3398,38 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                   <button
                     type="button"
                     on:click={requestCommunityTopologyCounterfactual}
+                    aria-describedby={communityPairAnalysisDescriptionIds || (communityTopologyCounterfactualBlocker ? "community-topology-counterfactual-blocker" : undefined)}
                     disabled={running || communityPairAnalysisRunning || !communityTopologyCounterfactualEnabled ||
                       !selectedCommunityPairLeftNodeId || !selectedCommunityPairRightNodeId ||
                       selectedCommunityPairLeftNodeId === selectedCommunityPairRightNodeId}
                   >
                     Cerca modifiche a costo minimo
                   </button>
+                  {#if !running && !communityPairAnalysisRunning && communityTopologyCounterfactualBlocker}
+                    <small id="community-topology-counterfactual-blocker" class="field-note" role="status" aria-live="polite">{communityTopologyCounterfactualBlocker}</small>
+                  {/if}
                 </div>
                 {#if communityTopologyCounterfactualRunning}
-                  <div class="scenario-status" role="status">La ricerca valuta le modifiche in ordine di costo. Per ogni grafo ipotetico confronta i migliori punteggi di modularità con i due nodi insieme e separati, entro il limite di calcolo.</div>
+                  <div id="community-topology-counterfactual-in-progress" class="scenario-status" role="status">La ricerca valuta le modifiche in ordine di costo. Per ogni grafo ipotetico confronta i migliori punteggi di modularità con i due nodi insieme e separati, entro il limite di calcolo.</div>
                 {/if}
                 {#if communityTopologyCounterfactualError}
                   <AnalysisErrorMessage message={communityTopologyCounterfactualError} />
                 {/if}
                 {#if communityTopologyCounterfactualResult}
                   {@const result = communityTopologyCounterfactualResult}
-                  <div class="community-topology-result" role="status">
-                    {#if result.selectedEdits.length === 0}
-                      La relazione richiesta vale già nel grafo corrente: non servono modifiche (costo 0).
-                    {:else}
-                      Relazione verificata: <strong>{result.relation === "always" ? "sempre insieme" : result.relation === "sometimes" ? "insieme in alcuni ottimi" : "sempre separati"}</strong> con costo totale {result.totalEditCost}.
-                    {/if}
+                  <div class="community-topology-result">
+                    <AnalysisCompletionStatus
+                      label={result.selectedEdits.length === 0
+                        ? "Relazione già verificata · nessuna modifica necessaria"
+                        : "Costo minimo provato · una proposta tra eventuali pareggi"}
+                    />
+                    <p class="community-topology-relation" role="status" aria-live="polite">
+                      {#if result.selectedEdits.length === 0}
+                        La relazione richiesta vale già nel grafo corrente: non servono modifiche (costo 0).
+                      {:else}
+                        Relazione verificata: <strong>{result.relation === "always" ? "sempre insieme" : result.relation === "sometimes" ? "insieme in alcuni ottimi" : "sempre separati"}</strong> con costo totale {result.totalEditCost}.
+                      {/if}
+                    </p>
                     <small class="field-note">
                       Minimo fra {result.candidateCount} candidati configurati applicabili, dopo {result.testedEditSets} grafi provati.
                       {#if communityTopologyCounterfactualTimeMs !== undefined} · {formatItalianNumber(communityTopologyCounterfactualTimeMs, 1)} ms{/if}
@@ -3259,18 +3443,18 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                       </p>
                     </details>
                     {#if result.selectedEdits.length > 0}
-                      <ul>
-                        {#each result.selectedEdits as edit (edit.id)}
-                          <li>
+                      <div class="selected-edit-list">
+                        <ProgressiveList items={result.selectedEdits} resetKey={result} pageSize={certificatePageSize} label="modifiche selezionate" let:item={edit}>
+                          <div class="selected-edit-item">
                             <strong>{edit.id}</strong> · costo {edit.cost} ·
                             {#if edit.action === "add"}
                               aggiunge {edit.sourceNodeId} — {edit.targetNodeId}{communityUsesEdgeWeights ? ` (peso ${edit.weight})` : ""}
                             {:else}
                               rimuove il record arco {edit.edgeId}
                             {/if}
-                          </li>
-                        {/each}
-                      </ul>
+                          </div>
+                        </ProgressiveList>
+                      </div>
                     {/if}
                     <small class="field-note">Il risultato restituisce una soluzione fra eventuali minimi a pari costo. I candidati sono ipotesi configurate; l’esito non è una raccomandazione relazionale o causale.</small>
                   </div>
@@ -3294,9 +3478,10 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
             <div class="community-partition">
               <strong>Partizione {partitionIndex + 1} · {partition.communities.length} comunità</strong>
               {#each visibleCommunities as community, communityIndex}
+                {@const attributeBounds = communityAttributeBoundsFor(community, partition)}
                 <div class="community-result">
-                  <button type="button" class="result" on:click={() => highlightCommunity(community, partition, partitionIndex, communityIndex)}>
-                    <span>{communityIndex + 1}. {community.length} nodi · {community.slice(0, 5).map((nodeId) => sourceIdByNodeId[nodeId] ?? nodeId).join(", ")}{community.length > 5 ? ` · +${community.length - 5} altri` : ""}</span>
+                    <button type="button" class="result" aria-pressed={isCurrentHighlightedWitness(community)} on:click={() => highlightCommunity(community, partition, partitionIndex, communityIndex)}>
+                    <span>{communityIndex + 1}. {community.length} nodi · {community.slice(0, 5).map((nodeId) => resultNodeLabel(nodeId)).join(", ")}{community.length > 5 ? ` · +${community.length - 5} altri` : ""}</span>
                     <span class="size">{community.length}</span>
                   </button>
                   <details
@@ -3307,15 +3492,19 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     {#if communityDetailsOpen(partitionIndex, communityIndex)}
                       <div class="community-node-list">
                         <ProgressiveList items={community} resetKey={community} label="nodi della comunità" let:item>
-                          <span>{sourceIdByNodeId[item] ?? item}</span>
+                          <span>{resultNodeLabel(item)}</span>
                         </ProgressiveList>
                       </div>
                     {/if}
                   </details>
                 </div>
-                {#each communityAttributeBoundsFor(community, partition) as bound}
-                  <small class="field-note">{bound.attribute}={JSON.stringify(bound.value)}: {bound.count} nodi{bound.minimum !== undefined ? ` (min ${bound.minimum})` : ""}{bound.maximum !== undefined ? ` (max ${bound.maximum})` : ""}</small>
-                {/each}
+                {#if attributeBounds.length > 0}
+                  <div class="community-attribute-bounds">
+                    <ProgressiveList items={attributeBounds} resetKey={`${partitionIndex}:${communityIndex}`} label={`valori degli attributi della comunità ${communityIndex + 1}`} let:item={bound}>
+                      <small class="field-note">{bound.attribute}={JSON.stringify(bound.value)}: {bound.count} nodi{bound.minimum !== undefined ? ` (min ${bound.minimum})` : ""}{bound.maximum !== undefined ? ` (max ${bound.maximum})` : ""}</small>
+                    </ProgressiveList>
+                  </div>
+                {/if}
               {/each}
               <ResultListPager
                 total={partition.communities.length}
@@ -3344,8 +3533,8 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                       )}
                       {@const members = partition.communities.find((community) => community.includes(contribution.communityId)) ?? []}
                       <li>
-                        <button type="button" on:click={() => highlightCommunity(members, partition, partitionIndex, partition.communities.indexOf(members))}>
-                          {sourceIdByNodeId[contribution.communityId] ?? contribution.communityId}: {communityUsesEdgeWeights ? `peso interno scalato=${contribution.internalEdgeWeight}, volume pesato scalato=${contribution.volume}${communityWeightScaleFactor > 1 ? ` (unità 1/${communityWeightScaleFactor})` : ""}` : `l=${contribution.internalEdgeCount}, d=${contribution.volume}`}, contributo={contribution.scaledContribution}
+                        <button type="button" aria-pressed={isCurrentHighlightedWitness(members)} on:click={() => highlightCommunity(members, partition, partitionIndex, partition.communities.indexOf(members))}>
+                          {resultNodeLabel(contribution.communityId)}: {communityUsesEdgeWeights ? `peso interno scalato=${contribution.internalEdgeWeight}, volume pesato scalato=${contribution.volume}${communityWeightScaleFactor > 1 ? ` (unità 1/${communityWeightScaleFactor})` : ""}` : `l=${contribution.internalEdgeCount}, d=${contribution.volume}`}, contributo={contribution.scaledContribution}
                         </button>
                         <details>
                           <summary>{contribution.internalEdgeCount} record d'arco interni</summary>
@@ -3411,6 +3600,17 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         </div>
       {:else if resultSets[0].length === 0}
         <p class="empty">{task === "dominatingSet" ? "Non ci sono nodi selezionati: il dominio obiettivo è vuoto." : task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" ? "I terminali erano già disconnessi: non occorre rimuovere nodi." : task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? "I terminali erano già disconnessi: non occorre rimuovere archi." : task === "kCore" ? "Il k-core è vuoto per questa soglia." : "Nessun nodo è stato restituito nel testimone."}</p>
+        {#if task === "dominatingSet"}
+          <small class="empty-next-step">Se ti aspettavi nodi da coprire, rivedi il gruppo obiettivo e i filtri in Vista, oppure controlla la mappatura dei gruppi in Dati.</small>
+          <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Rivedi i gruppi in Dati</button>
+        {/if}
+        {#if task === "kPlex" || task === "maximalKPlex"}
+          <small class="empty-next-step">Il dominio candidato non contiene nodi. Se ti aspettavi nodi, cambia il gruppo o rimuovi i filtri; se il gruppo atteso non compare, verifica la mappatura in Dati.</small>
+          <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Rivedi i gruppi in Dati</button>
+        {/if}
+        {#if task === "kCore"}
+          <small class="empty-next-step">Rivedi il valore di k, il gruppo e i filtri della proiezione, poi ricalcola.</small>
+        {/if}
         {#if task === "kCore" && explainKCoreExclusions}
           <div class="kcore-peeling" aria-live="polite">
           <strong>Rimozioni successive dei nodi fuori dal {parameter}-core</strong>
@@ -3421,16 +3621,16 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               <ol>
                 {#each visibleEmptyKcorePeeling as step}
                   <li>
-                    <button type="button" on:click={() => highlightKCorePeelingStep(step)}>
-                      Turno {step.round}: {sourceIdByNodeId[step.nodeId] ?? step.nodeId} ({step.survivingNeighborIds.length} &lt; {parameter})
+                    <button type="button" aria-pressed={isCurrentHighlightedWitness([step.nodeId, ...step.survivingNeighborIds])} on:click={() => highlightKCorePeelingStep(step)}>
+                      Turno {step.round}: {resultNodeLabel(step.nodeId)} ({step.survivingNeighborIds.length} &lt; {parameter})
                     </button>
                     {#if step.survivingNeighborIds.length > 0}
-                      <ul>
-                        {#each step.supportingPairs as pair}
+                      <div class="kcore-supporting-pair-list">
+                        <ProgressiveList items={step.supportingPairs} resetKey={step} pageSize={certificatePageSize} label={`vicini nel turno ${step.round}`} let:item={pair}>
                           {@const neighborId = pair.sourceNodeId === step.nodeId ? pair.targetNodeId : pair.sourceNodeId}
                           {@const visibleKcoreRecords = visibleKcoreSupportRecords(pair)}
-                          <li>
-                            {sourceIdByNodeId[neighborId] ?? neighborId}: {#if pair.supportingRecords.length > 0}
+                          <div class="kcore-supporting-pair">
+                            <span>{resultNodeLabel(neighborId)}: </span>{#if pair.supportingRecords.length > 0}
                               {#each visibleKcoreRecords as record, recordIndex}{recordIndex > 0 ? ", " : ""}{edgeRecordDescription(record)}{/each}
                               <ResultListPager
                                 total={pair.supportingRecords.length}
@@ -3442,9 +3642,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                             {:else}
                               adiacenza senza record sorgente risolto
                             {/if}
-                          </li>
-                        {/each}
-                      </ul>
+                          </div>
+                        </ProgressiveList>
+                      </div>
                     {:else}
                       <small>Nessun vicino distinto era ancora attivo.</small>
                     {/if}
@@ -3467,10 +3667,10 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
         {#if separatorTask && selectedSeparatorReachable.length > 0}
           <div class="separator-explanation" aria-live="polite">
             <strong>Lato raggiungibile dal terminale iniziale</strong>
-            <p>{sourceIdByNodeId[startNodeId] ?? startNodeId} raggiunge i nodi elencati; il terminale finale {sourceIdByNodeId[goalNodeId] ?? goalNodeId} resta fuori da questo lato.</p>
+            <p>{resultNodeLabel(startNodeId)} raggiunge i nodi elencati; il terminale finale {resultNodeLabel(goalNodeId)} resta fuori da questo lato.</p>
             <ul>
               {#each visibleSeparatorReachable as nodeId}
-                <li>{sourceIdByNodeId[nodeId] ?? nodeId}</li>
+                <li>{resultNodeLabel(nodeId)}</li>
               {/each}
             </ul>
             <ResultListPager
@@ -3503,31 +3703,38 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               activeSeparatorSignature,
               selectedDominatingSignature,
               selectedKcoreSignature,
-              selectedKplexSignature
+              selectedKplexSignature,
+              selectedResultSignature: nodeSetSignature(highlightedNodeIds)
             })}
             {@const resultProvenanceEntries = edgeProvenanceEntries(nodeSet)}
             <button type="button" class="result" aria-pressed={resultPressed} on:click={() => task === "typedPath" || task === "path"
-              ? dispatch("highlightTypedPath", { nodeIds: nodeSet, edgeIds: pathEdgeIdsByStep.flat() })
+              ? dispatch("highlightTypedPath", {
+                  nodeIds: nodeSet,
+                  edgeIds: pathEdgeIdsByStep.flat(),
+                  edgeIdsByStep: pathEdgeIdsByStep,
+                  resultLabel: task === "path" ? "Cammino minimo selezionato" : "Cammino tipizzato selezionato",
+                  completionLabel
+                })
               : task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? highlightEdgeSeparatorSet(nodeSet) : highlightNodeSet(nodeSet)}>
               <span>{index + 1}. {task === "typedPath"
-                ? nodeSet.slice(0, 20).map((id) => sourceIdByNodeId[id] ?? id).join(" → ")
+                ? nodeSet.slice(0, 20).map((id) => displayNodeResultLabel(id, nodeLabelById, sourceIdByNodeId)).join(" → ")
                 : nodeSet.slice(0, 20).map((id) => task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator"
                   ? sourceIdByEdgeId[id] ?? id
-                  : sourceIdByNodeId[id] ?? id).join(", ")}{nodeSet.length > 20 ? ` · +${nodeSet.length - 20} altri` : ""}</span>
+                  : displayNodeResultLabel(id, nodeLabelById, sourceIdByNodeId)).join(", ")}{nodeSet.length > 20 ? ` · +${nodeSet.length - 20} altri` : ""}</span>
               <span class="size">{nodeSet.length}</span>
             </button>
             {#if task === "typedPath" || task === "path"}
               <details class="result-evidence">
                 <summary>Elenco dei nodi del cammino · {nodeSet.length}</summary>
                 <ProgressiveList items={nodeSet} resetKey={resultSignature} label="nodi del cammino" let:item let:index>
-                  <span>{index + 1}. {nodeLabelById[item] ?? sourceIdByNodeId[item] ?? item}</span>
+                  <span>{index + 1}. {displayNodeResultLabel(item, nodeLabelById, sourceIdByNodeId)}</span>
                 </ProgressiveList>
               </details>
             {:else if task === "minimumNodeSeparator" || task === "minimumCostNodeSeparator" || task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator"}
               <details class="result-evidence">
                 <summary>{task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? "Elenco degli archi rimossi" : "Elenco dei nodi rimossi"} · {nodeSet.length}</summary>
                 <ProgressiveList items={nodeSet} resetKey={resultSignature} label={task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? "archi rimossi" : "nodi rimossi"} let:item>
-                  <span>{task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? sourceIdByEdgeId[item] ?? item : sourceIdByNodeId[item] ?? item}</span>
+                  <span>{task === "minimumEdgeSeparator" || task === "minimumCostEdgeSeparator" ? sourceIdByEdgeId[item] ?? item : resultNodeLabel(item)}</span>
                 </ProgressiveList>
               </details>
             {/if}
@@ -3567,7 +3774,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 {#each pathEdgeIdsByStep as edgeIds, step}
                   {@const stepProvenanceEntries = edgeProvenanceEntries(edgeIds)}
                   <li>
-                    <strong>{sourceIdByNodeId[nodeSet[step]] ?? nodeSet[step]} → {sourceIdByNodeId[nodeSet[step + 1]] ?? nodeSet[step + 1]}</strong>
+                    <strong>{resultNodeLabel(nodeSet[step])} → {resultNodeLabel(nodeSet[step + 1])}</strong>
                     <ProgressiveList items={edgeIds} resetKey={resultSignature} label="record d'arco del passo" let:item>
                       <span>{sourceIdByEdgeId[item] ?? item}</span>
                     </ProgressiveList>
@@ -3597,7 +3804,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                         <li>
                           <strong>≤ {layer.depth} · {layer.nodeIds.length} nodi raggiungibili</strong>
                           <ProgressiveList items={layer.nodeIds} resetKey={pathMinimality} label={`nodi raggiungibili entro ${layer.depth} archi`} let:item>
-                            <span>{sourceIdByNodeId[item] ?? item}</span>
+                            <span>{resultNodeLabel(item)}</span>
                           </ProgressiveList>
                         </li>
                       {/each}
@@ -3619,10 +3826,10 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
           {#if separatorTask && selectedSeparatorReachable.length > 0}
             <div class="separator-explanation" aria-live="polite">
               <strong>Lato raggiungibile dal terminale iniziale</strong>
-              <p>{sourceIdByNodeId[startNodeId] ?? startNodeId} raggiunge i nodi elencati; il terminale finale {sourceIdByNodeId[goalNodeId] ?? goalNodeId} resta fuori da questo lato.</p>
+              <p>{resultNodeLabel(startNodeId)} raggiunge i nodi elencati; il terminale finale {resultNodeLabel(goalNodeId)} resta fuori da questo lato.</p>
               <ul>
                 {#each visibleSeparatorReachable as nodeId}
-                  <li>{sourceIdByNodeId[nodeId] ?? nodeId}</li>
+                  <li>{resultNodeLabel(nodeId)}</li>
                 {/each}
               </ul>
               <ResultListPager
@@ -3632,7 +3839,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 label="nodi raggiungibili"
                 showMore={() => visibleSeparatorReachableLimit += certificatePageSize}
               />
-              <small>Il lato raggiungibile è ricalcolato sul grafo dopo le rimozioni. Per un taglio di archi, ogni record che attraversa i due lati deve essere rimosso; per un separatore di nodi, ogni arco attraversante deve toccare un nodo rimosso. Il certificato controlla la separazione e il criterio dell'analisi stabilisce il numero minimo di rimozioni.</small>
+              <small>Il certificato verifica che le rimozioni separino i terminali e rispettino l'obiettivo minimo selezionato.</small>
+              <details class="field-note separator-certificate-details">
+                <summary>Come viene verificata la separazione</summary>
+                <p>Il lato raggiungibile è ricalcolato sul grafo dopo le rimozioni. In un taglio di archi, ogni record che attraversa i due lati deve essere rimosso; in un separatore di nodi, ogni arco attraversante deve toccare un nodo rimosso. L'obiettivo selezionato minimizza il numero o il costo delle rimozioni.</p>
+              </details>
               <button type="button" on:click={highlightSeparatorReachableSide}>Evidenzia lato sorgente</button>
             </div>
           {/if}
@@ -3648,13 +3859,13 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                       {#each visibleMaximalityCandidateIds as candidateNodeId}
                         {@const blocker = selectedKplexMaximality.blockers.find((item) => item.candidateNodeId === candidateNodeId)}
                         <li>
-                          <strong>{sourceIdByNodeId[candidateNodeId] ?? candidateNodeId}</strong>
+                          <strong>{resultNodeLabel(candidateNodeId)}</strong>
                           {#if blocker}
                             <ul>
                               {#if blocker.reason === "candidate_degree"}
                                 <li>ha {blocker.candidateMissingDegree} non-vicini nel gruppo selezionato (servirebbero meno di {parameter}).</li>
                               {:else}
-                                <li>non è adiacente a {sourceIdByNodeId[blocker.blockingNodeId] ?? blocker.blockingNodeId}, che ha già {blocker.blockingNodeMissingDegree} non-vicini (il limite è {Math.max(0, Number(parameter) - 1)}).</li>
+                                <li>non è adiacente a {resultNodeLabel(blocker.blockingNodeId)}, che ha già {blocker.blockingNodeMissingDegree} non-vicini (il limite è {Math.max(0, Number(parameter) - 1)}).</li>
                               {/if}
                             </ul>
                           {/if}
@@ -3673,11 +3884,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                   {/if}
                 {/if}
               {/if}
-              <p>Le coppie seguenti non sono adiacenti; ogni nodo compare in non più di {Math.max(0, Number(parameter) - 1)} coppie.</p>
+              <p>Le coppie seguenti non sono adiacenti; ogni nodo compare in non più di {Math.max(0, Number(parameter) - 1)} {countForm(Math.max(0, Number(parameter) - 1), "coppia", "coppie")}.</p>
               {#if selectedKplexMissingPairs.length > 0}
                 <ul>
                   {#each visibleSelectedKplexMissingPairs as [first, second]}
-                    <li>{sourceIdByNodeId[first] ?? first} — {sourceIdByNodeId[second] ?? second}</li>
+                    <li>{resultNodeLabel(first)} — {resultNodeLabel(second)}</li>
                   {/each}
                 </ul>
                 <ResultListPager
@@ -3690,7 +3901,10 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
               {:else}
                 <small>Non ci sono coppie mancanti: questa soluzione è una clique.</small>
               {/if}
-              <button type="button" disabled={task === "maximalKPlex" && !selectedKplexMaximality} on:click={exportKplexExplanation}>Esporta spiegazione CSV</button>
+              {#if task === "maximalKPlex" && !selectedKplexMaximality}
+                <small id="kplex-maximality-export-blocker" class="field-note scenario-readiness-note" role="status">La massimalità di questa soluzione non è verificata; la spiegazione CSV non è disponibile.</small>
+              {/if}
+              <button type="button" aria-describedby={task === "maximalKPlex" && !selectedKplexMaximality ? "kplex-maximality-export-blocker" : undefined} disabled={task === "maximalKPlex" && !selectedKplexMaximality} on:click={exportKplexExplanation}>Esporta spiegazione CSV</button>
               <StructuralCompletionCounterfactualPanel
                 bind:target={kPlexCompletionTargetS}
                 running={running}
@@ -3711,6 +3925,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 excludedCandidateCount={kPlexCounterfactualExcludedCandidateCount}
                 cohortNodeIds={selectedKplexSignature.split("\u0000")}
                 sourceIdByNodeId={sourceIdByNodeId}
+                nodeLabelById={nodeLabelById}
                 enumerateAllOptima={task === "kPlex" && enumerateAllOptima}
                 showEnumeration={true}
                 on:criteriaChange={() => dispatch("kPlexCohortChange")}
@@ -3745,7 +3960,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     {@const neighborId = pair.sourceNodeId === selectedKcoreNodeId ? pair.targetNodeId : pair.sourceNodeId}
                     {@const visibleKcoreRecords = visibleKcoreSupportRecords(pair)}
                     <li>
-                      {sourceIdByNodeId[neighborId] ?? neighborId}: {#if pair.supportingRecords.length > 0}
+                      {resultNodeLabel(neighborId)}: {#if pair.supportingRecords.length > 0}
                         {#each visibleKcoreRecords as record, recordIndex}{recordIndex > 0 ? ", " : ""}{edgeRecordDescription(record)}{/each}
                         <ResultListPager
                           total={pair.supportingRecords.length}
@@ -3784,16 +3999,16 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     <ol>
                       {#each visibleSelectedKcorePeeling as step}
                         <li>
-                          <button type="button" on:click={() => highlightKCorePeelingStep(step)}>
-                            Turno {step.round}: {sourceIdByNodeId[step.nodeId] ?? step.nodeId} ({step.survivingNeighborIds.length} &lt; {parameter})
+                          <button type="button" aria-pressed={isCurrentHighlightedWitness([step.nodeId, ...step.survivingNeighborIds])} on:click={() => highlightKCorePeelingStep(step)}>
+                            Turno {step.round}: {resultNodeLabel(step.nodeId)} ({step.survivingNeighborIds.length} &lt; {parameter})
                           </button>
                           {#if step.survivingNeighborIds.length > 0}
-                            <ul>
-                              {#each step.supportingPairs as pair}
+                            <div class="kcore-supporting-pair-list">
+                              <ProgressiveList items={step.supportingPairs} resetKey={step} pageSize={certificatePageSize} label={`vicini nel turno ${step.round}`} let:item={pair}>
                                 {@const neighborId = pair.sourceNodeId === step.nodeId ? pair.targetNodeId : pair.sourceNodeId}
                                 {@const visibleKcoreRecords = visibleKcoreSupportRecords(pair)}
-                                <li>
-                                  {sourceIdByNodeId[neighborId] ?? neighborId}: {#if pair.supportingRecords.length > 0}
+                                <div class="kcore-supporting-pair">
+                                  <span>{resultNodeLabel(neighborId)}: </span>{#if pair.supportingRecords.length > 0}
                                     {#each visibleKcoreRecords as record, recordIndex}{recordIndex > 0 ? ", " : ""}{edgeRecordDescription(record)}{/each}
                                     <ResultListPager
                                       total={pair.supportingRecords.length}
@@ -3805,9 +4020,9 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                                   {:else}
                                     adiacenza senza record sorgente risolto
                                   {/if}
-                                </li>
-                              {/each}
-                            </ul>
+                                </div>
+                              </ProgressiveList>
+                            </div>
                           {:else}
                             <small>Nessun vicino distinto era ancora attivo.</small>
                           {/if}
@@ -3849,6 +4064,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                 excludedCandidateCount={kCoreCounterfactualExcludedCandidateCount}
                 cohortNodeIds={selectedKcoreSignature.split("\u0000")}
                 sourceIdByNodeId={sourceIdByNodeId}
+                nodeLabelById={nodeLabelById}
                 showEnumeration={true}
                 on:criteriaChange={() => dispatch("kCoreCohortChange")}
                 on:openData={() => dispatch("openData")}
@@ -3878,7 +4094,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                     {#if item.targetNodeId === item.coveringNodeId}
                       Coperto da se stesso perché è selezionato.
                     {:else}
-                      Coperto dal nodo selezionato {sourceIdByNodeId[item.coveringNodeId] ?? item.coveringNodeId} tramite
+                      Coperto dal nodo selezionato {resultNodeLabel(item.coveringNodeId)} tramite
                       {#if item.supportingRecords.length > 0}
                         {@const visibleSupportingRecords = item.supportingRecords.slice(0, visibleDominatingSupportRecordLimits[item.coveringNodeId] ?? certificatePageSize)}
                         {#each visibleSupportingRecords as record, recordIndex}{recordIndex > 0 ? ", " : ""}{edgeRecordDescription(record)}{/each}.
@@ -3886,7 +4102,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
                           total={item.supportingRecords.length}
                           visible={visibleSupportingRecords.length}
                           pageSize={certificatePageSize}
-                          label={`record d'arco per ${sourceIdByNodeId[item.coveringNodeId] ?? item.coveringNodeId}`}
+                          label={`record d'arco per ${resultNodeLabel(item.coveringNodeId)}`}
                           showMore={() => showMoreDominatingSupportRecords(item.coveringNodeId)}
                         />
                       {:else}
@@ -3931,7 +4147,7 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     background: var(--solver-bg);
     box-shadow: var(--solver-shadow);
     color: #0f172a;
-    font: 13px/1.45 system-ui, sans-serif;
+    font: 13px/1.45 Arial, Helvetica, sans-serif;
   }
 
   .structural-panel > * {
@@ -3993,6 +4209,25 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     font-weight: 600;
   }
 
+  .optional-task-options {
+    display: grid;
+    gap: 8px;
+    padding: 8px 9px;
+    border: 1px solid #dbe3ee;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+
+  .optional-task-options summary {
+    color: #334155;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .optional-task-options .field-note {
+    margin: 0;
+  }
+
   .task-contract p {
     margin: 6px 0 0;
   }
@@ -4023,15 +4258,16 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     color: #75542d;
   }
 
-  .task-readiness-card p,
-  .task-readiness-card ul {
+  .task-readiness-card p {
     margin: 0;
   }
 
-  .task-readiness-card ul {
+  .task-requirement-reasons {
     display: grid;
     gap: 3px;
-    padding-left: 19px;
+    max-height: 150px;
+    overflow: auto;
+    overflow-wrap: anywhere;
   }
 
   .task-readiness-card button {
@@ -4139,6 +4375,11 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   }
 
   .readiness-action { justify-self: start; color: #1e4d68; }
+
+  .field-error {
+    color: #991b1b;
+    font-weight: 600;
+  }
 
   .error {
     padding: 8px;
@@ -4331,6 +4572,29 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     overflow-wrap: anywhere;
   }
 
+  .community-attribute-bounds {
+    display: grid;
+    gap: 3px;
+    max-height: 150px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+  }
+
+  .selected-edit-list,
+  .kcore-supporting-pair-list {
+    display: grid;
+    gap: 5px;
+    max-height: 180px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+  }
+
+  .selected-edit-item,
+  .kcore-supporting-pair {
+    min-width: 0;
+    padding: 2px 0;
+  }
+
   .community-optimum-stability {
     display: grid;
     gap: 7px;
@@ -4354,7 +4618,8 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   }
 
   .community-topology-counterfactual h3,
-  .community-topology-counterfactual p {
+  .community-topology-counterfactual p,
+  .community-topology-result :global(.analysis-completion-status) {
     margin: 0;
   }
 
@@ -4378,11 +4643,70 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     margin: 5px 0 0;
   }
 
-  .community-topology-counterfactual ul {
-    max-height: 160px;
-    margin: 4px 0 0;
-    overflow: auto;
-    padding-left: 22px;
+  .scenario-comparison-details {
+    margin: 0;
+    color: #475569;
+    font-size: 0.82rem;
+  }
+
+  .scenario-comparison-details summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .scenario-comparison-details summary:focus-visible {
+    border-radius: 2px;
+    outline: 2px solid #0284c7;
+    outline-offset: 2px;
+  }
+
+  .scenario-comparison-details p {
+    margin: 5px 0 0;
+  }
+
+  .separator-certificate-details {
+    margin: 0;
+    color: #475569;
+    font-size: 0.82rem;
+  }
+
+  .separator-certificate-details summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .separator-certificate-details summary:focus-visible {
+    border-radius: 2px;
+    outline: 2px solid #0284c7;
+    outline-offset: 2px;
+  }
+
+  .separator-certificate-details p {
+    margin: 5px 0 0;
+  }
+
+  .separator-configuration-details {
+    margin: 0;
+    color: #475569;
+    font-size: 0.82rem;
+  }
+
+  .separator-configuration-details summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .separator-configuration-details summary:focus-visible {
+    border-radius: 2px;
+    outline: 2px solid #0284c7;
+    outline-offset: 2px;
+  }
+
+  .separator-configuration-details p {
+    margin: 5px 0 0;
   }
 
   .community-constraint-diagnosis {
@@ -4612,10 +4936,6 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     padding-left: 24px;
   }
 
-  .kcore-peeling li > ul {
-    padding-left: 18px;
-  }
-
   .kplex-explanation button,
   .kcore-explanation button,
   .dominating-explanation button,
@@ -4679,6 +4999,21 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
     background: #bae6fd;
   }
 
+  .result[aria-pressed="true"] {
+    background: #ccfbf1;
+    outline: 2px solid #0f766e;
+    outline-offset: 1px;
+  }
+
+  .kcore-profile-level-heading button[aria-pressed="true"],
+  .kcore-peeling li > button[aria-pressed="true"] {
+    border-color: #0f766e;
+    background: #ccfbf1;
+    color: #134e4a;
+    outline: 2px solid #0f766e;
+    outline-offset: 1px;
+  }
+
   .size {
     flex: none;
     font-weight: 650;
@@ -4687,6 +5022,13 @@ import type { BoundedPathNoRouteCertificate, DirectedKCoreMode, DominatingSetCov
   .empty {
     margin: 0;
     color: #475569;
+  }
+
+  .empty-next-step {
+    display: block;
+    margin-top: 4px;
+    color: #334155;
+    line-height: 1.4;
   }
 
   @media (max-width: 1280px) {

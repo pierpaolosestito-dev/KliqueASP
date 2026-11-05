@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildKliqueAspProject, parseKliqueAspProject, validateGraphDataset } from "../src/lib/kliqueasp/graph/projectFile.ts";
+import {
+  buildKliqueAspProject,
+  createKliqueAspProjectFilename,
+  DEFAULT_KLIQUEASP_PROJECT_NAME,
+  normalizeKliqueAspProjectName,
+  parseKliqueAspProject,
+  validateGraphDataset
+} from "../src/lib/kliqueasp/graph/projectFile.ts";
 
 test("project bundle preserves the source graph and configuration", () => {
   const graphConfig = { schemaVersion: 2, graphMapping: { edge: { typeField: "$.kind" } } };
@@ -24,6 +31,31 @@ test("project reader accepts supported links alias without rewriting it", () => 
     graphData: { nodes: [{ id: 1 }], links: [{ source: 1, target: 1, type: "loop" }] }
   };
   assert.deepEqual(parseKliqueAspProject(project), project);
+});
+
+test("project names round-trip while older unnamed project files remain valid", () => {
+  const named = buildKliqueAspProject({}, { nodes: [], edges: [] }, "Rete psicologi");
+  assert.equal(named.name, "Rete psicologi");
+  assert.equal(parseKliqueAspProject(named).name, "Rete psicologi");
+
+  const legacy = parseKliqueAspProject({
+    format: "kliqueasp-project",
+    version: 1,
+    metadata: { source: "external-tool" },
+    graphConfig: {},
+    graphData: { nodes: [], edges: [] }
+  });
+  assert.equal(legacy.name, undefined);
+  assert.equal("name" in legacy, false);
+  assert.deepEqual(legacy.metadata, { source: "external-tool" });
+});
+
+test("project names are bounded, normalized and safe in portable filenames", () => {
+  assert.equal(normalizeKliqueAspProjectName("  Rete\n   psicologi  "), "Rete psicologi");
+  assert.equal(normalizeKliqueAspProjectName("\u0000\u0007"), DEFAULT_KLIQUEASP_PROJECT_NAME);
+  assert.equal(normalizeKliqueAspProjectName("x".repeat(120)).length, 100);
+  assert.equal(createKliqueAspProjectFilename("Psicologi: Italia / rete?", new Date("2026-11-03T12:00:00Z")), "kliqueasp-psicologi-italia-rete-2026-11-03.json");
+  assert.equal(createKliqueAspProjectFilename("東京", new Date("2026-11-03T12:00:00Z")), "kliqueasp-progetto-2026-11-03.json");
 });
 
 test("project and dataset validation report unsupported JSON shapes", () => {

@@ -2121,6 +2121,23 @@ export function getStructuralEdgeIdentity(link: StructuralEdgeLike): string {
   return `pair:${[source, target].sort().join("\u0000")}`;
 }
 
+/** Resolves source-record IDs returned by analyses to the identities used by graph overlays. */
+export function mapSourceEdgeIdsToStructuralIdentities(
+  sourceEdgeIds: Iterable<string>,
+  links: StructuralEdgeLike[]
+): Set<string> {
+  const requestedIds = new Set([...sourceEdgeIds].map(String));
+  const identities = new Set<string>();
+
+  for (const link of links) {
+    const sourceId = link.sourceId ?? link.analysis?.id;
+    if (sourceId === undefined || sourceId === null || !requestedIds.has(String(sourceId))) continue;
+    identities.add(getStructuralEdgeIdentity(link));
+  }
+
+  return identities;
+}
+
 export interface StructuralEdgeSourceIdentity {
   sourceId?: string;
   generatedRecordKey?: string;

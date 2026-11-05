@@ -208,8 +208,8 @@ test("un task relazionale si abilita solo quando entrambi i tipi richiesti sono 
     available: false,
     missing: ["nodeTypes", "edgeTypes"],
     reasons: [
-      "mappare un tipo per ogni nodo con graphMapping.node.typeField",
-      "mappare un tipo per ogni arco con graphMapping.edge.typeField"
+      "In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni nodo.",
+      "In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni arco."
     ]
   });
   assert.deepEqual(checkGraphTaskRequirements(mapped.capabilities, required), {
@@ -519,14 +519,14 @@ test("mapping combinati incompleti disabilitano solo i task dipendenti dai campi
   assert.deepEqual(checkGraphTaskRequirements(mapped.capabilities, getGraphTaskRequirements("typedMotif")), {
     available: false,
     missing: ["nodeTypes"],
-    reasons: ["mappare un tipo per ogni nodo con graphMapping.node.typeField"]
+    reasons: ["In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni nodo."]
   });
   assert.deepEqual(checkGraphTaskRequirements(mapped.capabilities, getGraphTaskRequirements("temporalMotif")), {
     available: false,
     missing: ["nodeTypes", "edgeIntervals"],
     reasons: [
-      "mappare un tipo per ogni nodo con graphMapping.node.typeField",
-      "mappare intervalli validi e ordinati in un unico dominio temporale su tutti gli archi con graphMapping.edge.validity"
+      "In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni nodo.",
+      "In Dati → Campi opzionali e attributi, associa inizio e fine di ogni arco; gli intervalli devono essere validi e usare lo stesso dominio temporale."
     ]
   });
   assert.equal(checkGraphTaskRequirements(mapped.capabilities, ["edgeWeights", "edgeConfidence", "edgeProvenance"]).available, true,
@@ -574,6 +574,6 @@ test("domini di valore non validi degradano solo le capability che li interpreta
   assert.deepEqual(checkGraphTaskRequirements(mapped.capabilities, getGraphTaskRequirements("temporalMotif")), {
     available: false,
     missing: ["edgeIntervals"],
-    reasons: ["mappare intervalli validi e ordinati in un unico dominio temporale su tutti gli archi con graphMapping.edge.validity"]
+    reasons: ["In Dati → Campi opzionali e attributi, associa inizio e fine di ogni arco; gli intervalli devono essere validi e usare lo stesso dominio temporale."]
   });
 });

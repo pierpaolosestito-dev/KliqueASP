@@ -3,6 +3,27 @@ export interface NumericTemporalInterval {
   end: number;
 }
 
+/** Resolves an optional startup selection while keeping the full timeline bounds navigable. */
+export function resolveInitialTemporalWindow(
+  bounds: NumericTemporalInterval,
+  configuredWindow: unknown
+): NumericTemporalInterval {
+  if (configuredWindow === null || typeof configuredWindow !== "object" || Array.isArray(configuredWindow)) {
+    return { ...bounds };
+  }
+  const candidate = configuredWindow as Record<string, unknown>;
+  const start = candidate.start;
+  const end = candidate.end;
+  if (typeof bounds.start !== "number" || !Number.isFinite(bounds.start) ||
+    typeof bounds.end !== "number" || !Number.isFinite(bounds.end) || bounds.start > bounds.end ||
+    typeof start !== "number" || !Number.isFinite(start) ||
+    typeof end !== "number" || !Number.isFinite(end) || start > end ||
+    start < bounds.start || end > bounds.end) {
+    return { ...bounds };
+  }
+  return { start, end };
+}
+
 export function isTimelineControlAvailable(
   featureEnabled: boolean,
   hasMappedNodeTimeline: boolean,

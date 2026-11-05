@@ -81,3 +81,23 @@ test("attribute mappings can be added, edited, and removed without mutating prio
   assert.equal(removed.graphMapping.edge.attributes, undefined);
   assert.equal(base.graphMapping.edge.attributes, undefined);
 });
+
+test("reserved attribute names remain ordinary JSON keys and never alter object prototypes", () => {
+  const mapped = updateGraphAttributeMapping({}, dataset, "edge", "__proto__", "$.sign");
+  assert.equal(Object.hasOwn(mapped.graphMapping.edge.attributes, "__proto__"), true);
+  assert.equal(mapped.graphMapping.edge.attributes["__proto__"], "$.sign");
+  assert.equal(JSON.parse(JSON.stringify(mapped)).graphMapping.edge.attributes["__proto__"], "$.sign");
+  assert.equal(Object.prototype.polluted, undefined);
+
+  const removed = updateGraphAttributeMapping(mapped, dataset, "edge", "__proto__", "");
+  assert.equal(Object.hasOwn(removed.graphMapping.edge.attributes ?? {}, "__proto__"), false);
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("mapping updates reject unsupported scopes and field names", () => {
+  assert.throws(() => updateGraphFieldMapping({}, dataset, "node", "__proto__", "polluted"), /non è supportato/);
+  assert.throws(() => updateGraphFieldMapping({}, dataset, "node", "constructor", "polluted"), /non è supportato/);
+  assert.throws(() => updateGraphFieldMapping({}, dataset, "edge", "validity.__proto__", "polluted"), /non è supportato/);
+  assert.throws(() => updateGraphFieldMapping({}, dataset, "__proto__", "idField", "$.id"), /mappatura valida/);
+  assert.equal(Object.prototype.polluted, undefined);
+});

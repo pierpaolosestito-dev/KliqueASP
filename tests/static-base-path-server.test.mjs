@@ -70,6 +70,28 @@ test("the static preview rejects malformed and traversal paths", () => {
   });
 });
 
+test("the static preview serves PNG graph assets with an image MIME type", async () => {
+  const temporaryBuildDirectory = await mkdtemp(path.join(os.tmpdir(), "kliqueasp-static-png-"));
+  const iconPath = path.join(temporaryBuildDirectory, "graph-icon.png");
+  await writeFile(iconPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const server = createStaticBasePathServer({ buildDirectory: temporaryBuildDirectory });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}${BASE_PATH}/graph-icon.png`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(temporaryBuildDirectory, { recursive: true, force: true });
+  }
+});
+
 test("the static preview serves opt-in diagnostics with opt-in cross-origin isolation", async () => {
   const temporaryBuildDirectory = await mkdtemp(path.join(os.tmpdir(), "kliqueasp-static-preview-"));
   await writeFile(path.join(temporaryBuildDirectory, "index.html"), "<!doctype html><title>probe</title>");

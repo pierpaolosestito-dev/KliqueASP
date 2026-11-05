@@ -141,7 +141,8 @@ export function getAspGraph(): AspGraph {
     a.localeCompare(b)
   );
 
-  const idByKey: Record<string, number> = {};
+  // Entity keys are data-driven; do not let IDs resolve through Object.prototype.
+  const idByKey: Record<string, number> = Object.create(null);
   const index: Record<number, { type: string; id: string; label: string }> = {};
 
   let nextId = 1;

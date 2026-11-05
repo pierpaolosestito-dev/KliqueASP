@@ -111,6 +111,11 @@ test("il comando contestuale collega l'evidenza alla vista 2D e all'export", () 
   assert.match(handler, /showGraph2DExportPanel\s*=\s*true/);
   assert.match(handler, /graph2DOverlayResultLabel\s*=\s*overlay\.resultLabel/);
   assert.match(panel, /Evidenzia in 3D e apri la vista 2D/);
+  assert.match(panel, /aria-pressed=\{selectedResultKey === pairWitnessKey\(result\)\}/);
+  assert.match(panel, /selectedResultKey = pairWitnessKey\(result\);\s+dispatch\("highlight", result\)/);
+  assert.match(panel, /if \(results !== previousResults\)[\s\S]*?selectedResultKey = null/);
+  assert.match(panel, /function criteriaChanged\(\)[\s\S]*?selectedResultKey = null/);
+  assert.match(panel, /\.group-heading button\[aria-pressed="true"\]/);
 });
 
 test("cambiare i criteri contestuali scarta i risultati e il witness della ricerca precedente", () => {
@@ -125,7 +130,7 @@ test("cambiare i criteri contestuali scarta i risultati e il witness della ricer
   assert.match(panel, /bind:checked=\{enumerateAllOptima\}[^>]*on:change=\{criteriaChanged\}/);
   assert.match(panel, /if \(hasRun \|\| results\.length > 0\) criteriaChangedAfterRun = true/);
   assert.match(panel, /Criteri modificati: rilancia la ricerca per aggiornare il risultato/);
-  assert.match(panel, /criteriaChangedAfterRun = false;\s+expandedResultKey = null;\s+dispatch\("run"/);
+  assert.match(panel, /criteriaChangedAfterRun = false;\s+expandedResultKey = null;\s+selectedResultKey = null;\s+dispatch\("run"/);
   assert.match(motifPanel, /on:criteriaChange=\{\(\) => dispatch\("clearContextualClique"\)\}/);
   assert.match(graphApp, /on:clearContextualClique=\{clearContextualCliqueResultAndFocus\}/);
   assert.match(clearHandler, /clearContextualCliqueAnalysis\(\);/);

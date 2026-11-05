@@ -30,7 +30,7 @@
       "scale": 8
     },
     "label": {
-      "font": "26px sans-serif",
+      "font": "26px Arial, Helvetica, sans-serif",
       "scale": [18, 8],
       "offsetY": -10
     }
@@ -225,7 +225,7 @@
   "body": {
     "background": "#f8fafc",
     "textColor": "#0f172a",
-    "fontFamily": "system-ui, sans-serif"
+    "fontFamily": "Arial, Helvetica, sans-serif"
   },
 
   "toolbar": {

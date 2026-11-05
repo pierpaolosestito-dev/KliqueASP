@@ -542,7 +542,7 @@ export function checkNodeRemovalCostCapabilityForCandidates(
     return configuredCapability ?? {
       available: false,
       configured: false,
-      reason: "mappare un costo di rimozione con graphMapping.node.removalCostField"
+      reason: "In Dati → Campi opzionali e attributi, associa un costo di rimozione ai nodi candidati."
     };
   }
 
@@ -654,57 +654,57 @@ function makeCapabilities(
     undirectedAdjacency: capability(
       edgeDirection === "undirected",
       edgeDirection === "undirected",
-      "il task richiede una proiezione non orientata, ma il mapping corrente dichiara archi diretti"
+      "Imposta «Direzione» su «Non orientato» in Dati → Mappatura rapida."
     ),
     directedEdges: capability(
       schemaVersion === 2 && edgeMapping.direction === "directed",
       schemaVersion === 2 && edgeDirection === "directed",
-      "la direzione degli archi non è stata dichiarata nel mapping"
+      "In Dati → Mappatura rapida, dichiara gli archi come orientati."
     ),
     nodeTypes: capability(
       schemaVersion === 2 && Boolean(nodeMapping.typeField),
       nodeTypesComplete,
-      "mappare un tipo per ogni nodo con graphMapping.node.typeField"
+      "In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni nodo."
     ),
     nodeRoles: capability(
       schemaVersion === 2 && Boolean(nodeMapping.roleField),
       nodeRolesComplete,
-      "mappare un ruolo per ogni nodo con graphMapping.node.roleField"
+      "In Dati → Campi opzionali e attributi, associa il campo che contiene il ruolo di ogni nodo."
     ),
     nodeGroups: capability(
       schemaVersion === 2 && Boolean(nodeMapping.groupFields?.length),
       nodeGroupsComplete,
-      "mappare i gruppi con graphMapping.node.groupFields"
+      "In Dati → Mappatura rapida, associa il campo che contiene il gruppo di ogni nodo."
     ),
     nodeAttributes: capability(
       schemaVersion === 2 && Boolean(Object.keys(nodeMapping.attributes ?? {}).length),
       schemaVersion === 2 && Boolean(Object.keys(nodeMapping.attributes ?? {}).length),
-      "mappare gli attributi necessari con graphMapping.node.attributes"
+      "In Dati → Campi opzionali e attributi, aggiungi gli attributi dei nodi richiesti dall'analisi."
     ),
     nodeRemovalCosts: capability(
       schemaVersion === 2 && Boolean(nodeMapping.removalCostField),
       nodeRemovalCostsComplete,
-      "mappare un costo di rimozione intero positivo per ogni nodo della proiezione completa; il separatore pesato richiede costi soltanto per i candidati non terminali del gruppo selezionato"
+      "In Dati → Campi opzionali e attributi, associa un costo di rimozione intero positivo a ogni nodo richiesto dal taglio."
     ),
     edgeTypes: capability(
       schemaVersion === 2 && Boolean(edgeMapping.typeField),
       edgeTypesComplete,
-      "mappare un tipo per ogni arco con graphMapping.edge.typeField"
+      "In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni arco."
     ),
     edgeAttributes: capability(
       schemaVersion === 2 && Boolean(Object.keys(edgeMapping.attributes ?? {}).length),
       schemaVersion === 2 && Boolean(Object.keys(edgeMapping.attributes ?? {}).length),
-      "mappare gli attributi necessari con graphMapping.edge.attributes"
+      "In Dati → Campi opzionali e attributi, aggiungi gli attributi degli archi richiesti dall'analisi."
     ),
     edgeIntervals: capability(
       schemaVersion === 2 && Boolean(fromField && toField),
       intervalsComplete,
-      "mappare intervalli validi e ordinati in un unico dominio temporale su tutti gli archi con graphMapping.edge.validity"
+      "In Dati → Campi opzionali e attributi, associa inizio e fine di ogni arco; gli intervalli devono essere validi e usare lo stesso dominio temporale."
     ),
     edgeWeights: capability(
       schemaVersion === 2 && Boolean(edgeMapping.weightField),
       weightsComplete,
-      "mappare un peso numerico per ogni arco con graphMapping.edge.weightField"
+      "In Dati → Campi opzionali e attributi, associa a ogni arco un valore numerico di peso."
     ),
     modularityWeights: capability(
       weightedCommunitiesRequested && schemaVersion === 2 && Boolean(edgeMapping.weightField),
@@ -713,30 +713,30 @@ function makeCapabilities(
         const scaled = scaleNonNegativeDecimalWeights(links.map((link) => link.analysis?.weight));
         return scaled.ok && scaled.value.total > 0;
       })(),
-      "per la modularità pesata mappare pesi decimali finiti non negativi con totale positivo, normalizzabili esattamente entro i limiti interi sicuri"
+      "Per la modularità pesata, associa pesi non negativi agli archi: il totale deve essere positivo e normalizzabile esattamente."
     ),
     edgeRemovalCosts: capability(
       schemaVersion === 2 && Boolean(edgeMapping.removalCostField),
       removalCostsComplete,
-      "mappare un costo di rimozione intero positivo per ogni arco con graphMapping.edge.removalCostField"
+      "In Dati → Campi opzionali e attributi, associa a ogni arco un costo di rimozione intero positivo."
     ),
     edgeConfidence: {
       ...capability(
         schemaVersion === 2 && Boolean(edgeMapping.confidenceField),
         confidenceComplete,
-        "mappare un punteggio numerico per ogni arco entro graphMapping.edge.confidenceRange (default: 0–1)"
+        "In Dati → Campi opzionali e attributi, associa a ogni arco una confidenza numerica entro l'intervallo configurato (da 0 a 1 se non specificato)."
       ),
       range: confidenceRange
     },
     edgeProvenance: capability(
       schemaVersion === 2 && Boolean(edgeMapping.provenanceField),
       provenanceComplete,
-      "mappare almeno un riferimento di fonte scalare per ogni arco con graphMapping.edge.provenanceField"
+      "In Dati → Campi opzionali e attributi, associa almeno una fonte a ogni arco."
     ),
     edgeIdentity: capability(
       schemaVersion === 2 && edgeIdentity === "multigraph" && Boolean(edgeMapping.idField),
       schemaVersion === 2 && edgeIdentity === "multigraph" && mappedEdgeIdsComplete && mappedEdgeIdsUnique,
-      "per avere identità persistenti sugli archi, configurare identity: 'multigraph' e un idField univoco"
+      "Per conservare gli archi paralleli, scegli «Mantieni ogni record» e associa a ogni arco un ID univoco in Dati → Mappatura rapida."
     )
   };
 }

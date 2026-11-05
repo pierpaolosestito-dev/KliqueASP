@@ -12,6 +12,7 @@ import {
 } from "../src/lib/kliqueasp/graph/contextualCliqueTask.ts";
 import { createClingoWasmRunner } from "./helpers/clingoWasm.mjs";
 import { hasCompleteOptimalModelEnumeration } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
+import { buildGraph2DOptimizationCompletionLabel } from "../src/lib/kliqueasp/graph/graph2DAnalysisOutcome.ts";
 import { GRAPH_TASK_CONTRACTS } from "../src/lib/kliqueasp/graph/graphTaskContracts.ts";
 
 const graphConfig = {
@@ -89,6 +90,12 @@ test("il gruppo contestuale massimizza la coesione pairwise anche quando ogni co
 
   assert.equal(result.Result, "OPTIMUM FOUND", result.Error ?? JSON.stringify(result));
   assert.equal(hasCompleteOptimalModelEnumeration(result), true, "tutti i gruppi massimi devono essere enumerati");
+  assert.equal(buildGraph2DOptimizationCompletionLabel({
+    optimizationProven: hasCompleteOptimalModelEnumeration(result),
+    hasSolution: true,
+    enumerateAllOptima: true,
+    allOptimaEnumerationComplete: hasCompleteOptimalModelEnumeration(result)
+  }), "Ottimo provato · enumerazione completa degli ottimi");
   const groups = parse(result.Call?.[0]?.Witnesses);
   assert.deepEqual(Object.keys(groups[0]).sort(), [...GRAPH_TASK_CONTRACTS.contextualClique.resultFields].sort());
   assert.deepEqual(groups.map(({ sourceNodeIds }) => sourceNodeIds.sort()), [
@@ -117,9 +124,39 @@ test("il gruppo selezionato limita solo i nodi focali e non elimina i contesti t
 
   assert.equal(result.Result, "OPTIMUM FOUND", result.Error ?? JSON.stringify(result));
   assert.equal(hasCompleteOptimalModelEnumeration(result), true);
+  assert.equal(buildGraph2DOptimizationCompletionLabel({
+    optimizationProven: hasCompleteOptimalModelEnumeration(result),
+    hasSolution: true,
+    enumerateAllOptima: false
+  }), "Ottimo provato · una soluzione ottima mostrata");
   const groups = parse(result.Call?.[0]?.Witnesses);
   assert.deepEqual(groups.map(({ sourceNodeIds }) => sourceNodeIds.sort()), [["p1", "p2", "p3"]]);
   assert.ok(groups[0].pairWitnesses.every(({ contextSourceId }) => ["a", "b", "c"].includes(contextSourceId)));
+});
+
+test("una ricerca contestuale senza gruppo ammissibile espone l'infeasibilità provata", async () => {
+  const graph = normalizeGraphData({
+    nodes: [
+      { id: "p1", kind: "person" }, { id: "p2", kind: "person" },
+      { id: "p3", kind: "person" }, { id: "place", kind: "place" }
+    ],
+    edges: [
+      { id: "p1-place", from: "p1", to: "place", kind: "person-place" },
+      { id: "p2-place", from: "p2", to: "place", kind: "person-place" }
+    ]
+  }, graphConfig);
+  const facts = buildAspFactsFromGraph(graph);
+  const program = buildContextualCliqueProgram(contextualCliqueConfig, graph.direction);
+  const runner = await createClingoWasmRunner();
+  const result = await runner.run(`${facts.facts}\n${program}`, ["--opt-mode=optN"]);
+
+  assert.equal(result.Result, "UNSATISFIABLE", result.Error ?? JSON.stringify(result));
+  assert.equal(buildGraph2DOptimizationCompletionLabel({
+    optimizationProven: result.Result === "UNSATISFIABLE",
+    hasSolution: false,
+    enumerateAllOptima: true,
+    allOptimaEnumerationComplete: true
+  }), "Infeasibilità provata · nessuna soluzione ammissibile");
 });
 
 test("il riepilogo distingue le coppie focali dai testimoni coppia-contesto", () => {

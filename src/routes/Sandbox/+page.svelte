@@ -13,7 +13,21 @@
   import invsConfig from "$lib/kliqueasp/data/examples/sociopatterns-invs-100-minute.config.json";
   import invsDataset from "$lib/kliqueasp/data/examples/sociopatterns-invs-100-minute.json";
   import invsFullConfig from "$lib/kliqueasp/data/examples/sociopatterns-invs-full.config.json";
-  import { buildKliqueAspProject, parseKliqueAspProject } from "$lib/kliqueasp/graph/projectFile";
+  import syntheticGraphConfig from "$lib/kliqueasp/data/examples/synthetic-graph.config.json";
+  import syntheticGraphDirectedConfig from "$lib/kliqueasp/data/examples/synthetic-graph-directed.config.json";
+  import syntheticGraphDataset from "$lib/kliqueasp/data/examples/synthetic-graph.json";
+  import bitcoinOtcConfig from "$lib/kliqueasp/data/examples/bitcoin-otc.config.json";
+  import bitcoinOtcManifest from "$lib/kliqueasp/data/examples/bitcoin-otc.manifest.json";
+  import {
+    buildKliqueAspProject,
+    createKliqueAspProjectFilename,
+    DEFAULT_KLIQUEASP_PROJECT_NAME,
+    normalizeKliqueAspProjectName,
+    parseKliqueAspProject
+  } from "$lib/kliqueasp/graph/projectFile";
+  import { GraphJsonUploadReadError } from "$lib/kliqueasp/graph/graphJsonUpload";
+  import { GraphJsonTextParseError, parseGraphJsonTexts, type GraphJsonTextInput } from "$lib/kliqueasp/graph/graphJsonText";
+  import { parseWorkspaceExampleId, type WorkspaceExampleId } from "$lib/kliqueasp/graph/exampleCatalog";
   import {
     loadWorkbenchSession,
     parseWorkbenchSession,
@@ -106,6 +120,7 @@
 
   const EXIT_SESSION_BACKUP_KEY = "kliqueasp-workbench-exit-backup";
   const EXIT_SESSION_BACKUP_MAX_CHARS = 1_500_000;
+  const DEFAULT_PROJECT_NAME = "Rete demo";
 
   let configText = DEFAULT_CONFIG_TEXT;
   let datasetText = DEFAULT_DATASET_TEXT;
@@ -115,6 +130,7 @@
   let appliedConfigText = DEFAULT_CONFIG_TEXT;
   let appliedDatasetText = DEFAULT_DATASET_TEXT;
   let appliedGraphKey = createWorkbenchGraphKey(appliedConfigText, appliedDatasetText);
+  let projectName = DEFAULT_PROJECT_NAME;
 
   let graphKey = 0;
   let nodeLabelsVisible = true;
@@ -122,17 +138,37 @@
   let graphAppLoading = true;
   let graphAppLoadError = "";
   let graphAppLoadAttempt = 0;
+  let bitcoinLoadStatus: "idle" | "loading" | "failed" | "complete" = "idle";
+  let bitcoinLoadedEdges = 0;
+  let bitcoinFailedShardIndex = 0;
+  let bitcoinLoadError = "";
+  let bitcoinLoadNotice = "";
+  let bitcoinEdges: any[] = [];
   let errorMessage = "";
+  let errorTechnicalDetails = "";
+  let errorInput: GraphJsonTextInput | "" = "";
   let editorOpen = false;
   let projectDirty = false;
   let navigationHistory: WorkbenchHistoryEntry[] = [];
   let analysisSessionState: WorkbenchAnalysisSessionSnapshot | null = null;
   let analysisArchiveState: WorkbenchAnalysisArchiveSnapshot | null = null;
   let sessionReady = false;
+  let sessionPersistenceEnabled = true;
   let sessionRestored = false;
   let sessionStatus = "";
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let skipNextSessionSave = false;
+
+  type WorkspaceStartAction = "data" | "project" | "example";
+
+  function readWorkspaceStartAction(search: string): WorkspaceStartAction | null {
+    const action = new URLSearchParams(search).get("start");
+    return action === "data" || action === "project" || action === "example" ? action : null;
+  }
+
+  function readWorkspaceExampleId(search: string): WorkspaceExampleId {
+    return parseWorkspaceExampleId(new URLSearchParams(search).get("example"));
+  }
 
   async function loadGraphApp() {
     const attempt = ++graphAppLoadAttempt;
@@ -150,12 +186,13 @@
     }
   }
 
-  $: sessionSnapshot = sessionReady ? {
+  $: sessionSnapshot = sessionReady && sessionPersistenceEnabled ? {
     version: 3 as const,
     draftConfigText: configText,
     draftDatasetText: datasetText,
     appliedConfigText: appliedConfigText !== configText ? appliedConfigText : undefined,
     appliedDatasetText: appliedDatasetText !== datasetText ? appliedDatasetText : undefined,
+    projectName: normalizeKliqueAspProjectName(projectName),
     projectDirty,
     nodeLabelsVisible,
     history: navigationHistory,
@@ -168,8 +205,16 @@
 
   onMount(() => {
     void loadGraphApp();
+    const startAction = readWorkspaceStartAction(window.location.search);
+    const exampleId = readWorkspaceExampleId(window.location.search);
+    if (startAction) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("start");
+      if (startAction === "example") cleanUrl.searchParams.delete("example");
+      window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    }
     const flushSessionBeforeLeaving = () => {
-      if (!sessionReady) return;
+      if (!sessionReady || !sessionPersistenceEnabled) return;
       if (sessionSaveTimer) {
         clearTimeout(sessionSaveTimer);
         sessionSaveTimer = null;
@@ -181,7 +226,17 @@
         .catch(() => {});
     };
     window.addEventListener("pagehide", flushSessionBeforeLeaving);
-    void restoreWorkbenchSession();
+    if (startAction === "example") {
+      sessionPersistenceEnabled = false;
+      sessionStatus = "Esempio aperto in una scheda isolata. Esporta il progetto per conservarne una copia.";
+      void loadWorkspaceExample(exampleId).finally(() => {
+        sessionReady = true;
+      });
+    } else {
+      void restoreWorkbenchSession().then(() => {
+        if (startAction === "data" || startAction === "project") editorOpen = true;
+      });
+    }
     return () => {
       window.removeEventListener("pagehide", flushSessionBeforeLeaving);
       if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
@@ -193,40 +248,49 @@
     configText,
     datasetText,
     errorMessage,
+    errorTechnicalDetails,
+    errorInput,
+    projectName,
     projectDirty,
     sessionStatus,
 
     onConfigTextChange: (value: string) => {
       configText = value;
       projectDirty = true;
+      errorMessage = "";
+      errorTechnicalDetails = "";
+      errorInput = "";
     },
 
-    onDatasetTextChange: (value: string) => {
+    onDatasetTextChange: (value: string, sourceName?: string) => {
       datasetText = value;
+      if (sourceName) projectName = normalizeKliqueAspProjectName(sourceName);
+      projectDirty = true;
+      errorMessage = "";
+      errorTechnicalDetails = "";
+      errorInput = "";
+    },
+
+    onProjectNameChange: (value: string) => {
+      projectName = value;
       projectDirty = true;
     },
 
     onApply: applyJson,
 
+    onCreateProject: createNewProject,
+
     onReset: resetEditors,
-
-    onLoadDavis: loadDavisExample,
-
-    onLoadKarate: loadKarateExample,
-
-    onLoadGahukuGama: loadGahukuGamaExample,
-
-    onLoadTemporalEdges: loadTemporalEdgeExample,
-
-    onLoadInVS: loadInVSExample,
-
-    onLoadInVSFull: loadFullInVSExample,
 
     onLoadProject: loadProject,
 
     onSaveProject: saveProject,
 
     onOpen: () => {
+      if (bitcoinLoadStatus === "loading" || bitcoinLoadStatus === "failed") {
+        bitcoinLoadNotice = "Dati e progetto si sbloccano quando termina il caricamento.";
+        return;
+      }
       editorOpen = true;
     },
 
@@ -237,8 +301,7 @@
 
   function applyJson() {
     try {
-      const parsedConfig = JSON.parse(configText);
-      const parsedDataset = JSON.parse(datasetText);
+      const { graphConfig: parsedConfig, graphData: parsedDataset } = parseGraphJsonTexts(configText, datasetText);
 
       graphConfig = parsedConfig;
       graphData = normalizeDataset(parsedDataset);
@@ -252,42 +315,80 @@
       navigationHistory = [];
       graphKey += 1;
       errorMessage = "";
-    } catch (error: any) {
-      errorMessage = error?.message ?? "Invalid JSON";
+      errorTechnicalDetails = "";
+      errorInput = "";
+    } catch (error: unknown) {
+      if (error instanceof GraphJsonTextParseError) {
+        errorMessage = error.message;
+        errorTechnicalDetails = error.technicalDetails;
+        errorInput = error.input;
+      } else {
+        errorMessage = "Impossibile applicare il grafo. Verifica i dati e riprova.";
+        errorTechnicalDetails = error instanceof Error ? error.message : String(error ?? "Errore non specificato.");
+        errorInput = "";
+      }
     }
   }
 
   function loadProject(project: unknown) {
+    errorMessage = "";
+    errorTechnicalDetails = "";
+    errorInput = "";
     const parsedProject = parseKliqueAspProject(project);
     configText = JSON.stringify(parsedProject.graphConfig, null, 2);
     datasetText = JSON.stringify(parsedProject.graphData, null, 2);
     applyJson();
-    if (errorMessage) throw new Error(errorMessage);
+    if (errorMessage) {
+      const message = errorMessage;
+      const technicalDetails = errorTechnicalDetails;
+      errorMessage = "";
+      errorTechnicalDetails = "";
+      errorInput = "";
+      throw new GraphJsonUploadReadError(message, technicalDetails);
+    }
+    projectName = parsedProject.name ?? "Progetto importato";
     projectDirty = false;
     editorOpen = false;
   }
 
+  function createNewProject() {
+    projectName = "Nuovo progetto";
+    configText = DEFAULT_CONFIG_TEXT;
+    datasetText = JSON.stringify({ nodes: [], edges: [] }, null, 2);
+    applyJson();
+    projectDirty = true;
+  }
+
   function saveProject() {
+    if (bitcoinLoadStatus === "loading" || bitcoinLoadStatus === "failed") {
+      return "Attendi il caricamento completo di Bitcoin OTC prima di esportare il progetto.";
+    }
     try {
-      const project = buildKliqueAspProject(JSON.parse(configText), JSON.parse(datasetText));
+      const project = buildKliqueAspProject(JSON.parse(configText), JSON.parse(datasetText), projectName);
+      projectName = project.name ?? DEFAULT_KLIQUEASP_PROJECT_NAME;
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `kliqueasp-progetto-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = createKliqueAspProjectFilename(projectName);
       document.body.append(anchor);
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 0);
       errorMessage = "";
+      errorTechnicalDetails = "";
+      errorInput = "";
       projectDirty = false;
       return `Richiesta di download inviata al browser: ${anchor.download}`;
     } catch (error: any) {
-      errorMessage = error?.message ?? "Impossibile esportare il progetto.";
+      errorMessage = "Il progetto non è stato esportato. Verifica configurazione e dataset, poi riprova.";
+      errorTechnicalDetails = error instanceof Error ? error.message : String(error ?? "Errore non specificato.");
+      errorInput = "";
     }
   }
 
   function resetEditors() {
+    projectName = DEFAULT_PROJECT_NAME;
     configText = DEFAULT_CONFIG_TEXT;
     datasetText = DEFAULT_DATASET_TEXT;
     applyJson();
@@ -295,6 +396,7 @@
   }
 
   function loadDavisExample() {
+    projectName = "Davis Southern Women";
     configText = JSON.stringify(davisConfig, null, 2);
     datasetText = JSON.stringify(davisDataset, null, 2);
     applyJson();
@@ -302,13 +404,48 @@
   }
 
   function loadKarateExample() {
+    projectName = "Karate Club";
     configText = JSON.stringify(karateConfig, null, 2);
     datasetText = JSON.stringify(karateDataset, null, 2);
     applyJson();
     projectDirty = true;
   }
 
+  async function loadWorkspaceExample(exampleId: WorkspaceExampleId) {
+    switch (exampleId) {
+      case "davis-southern-women":
+        loadDavisExample();
+        break;
+      case "gahuku-gama-signed":
+        loadGahukuGamaExample();
+        break;
+      case "temporal-edge-projection":
+        loadTemporalEdgeExample();
+        break;
+      case "sociopatterns-invs-100-minute":
+        loadInVSExample();
+        break;
+      case "sociopatterns-invs-full":
+        await loadFullInVSExample();
+        break;
+      case "synthetic-graph":
+        loadSyntheticGraphExample(false);
+        break;
+      case "synthetic-graph-directed":
+        loadSyntheticGraphExample(true);
+        break;
+      case "bitcoin-otc":
+        await loadBitcoinOtcExample();
+        break;
+      case "karate-club":
+      default:
+        loadKarateExample();
+        break;
+    }
+  }
+
   function loadGahukuGamaExample() {
+    projectName = "Gahuku-Gama";
     configText = JSON.stringify(gahukuGamaConfig, null, 2);
     datasetText = JSON.stringify(gahukuGamaDataset, null, 2);
     applyJson();
@@ -316,6 +453,7 @@
   }
 
   function loadTemporalEdgeExample() {
+    projectName = "Rete temporale";
     configText = JSON.stringify(temporalEdgeConfig, null, 2);
     datasetText = JSON.stringify(temporalEdgeDataset, null, 2);
     applyJson();
@@ -323,6 +461,7 @@
   }
 
   function loadInVSExample() {
+    projectName = "SocioPatterns InVS";
     configText = JSON.stringify(invsConfig, null, 2);
     datasetText = JSON.stringify(invsDataset, null, 2);
     applyJson();
@@ -334,13 +473,110 @@
       const response = await fetch(`${base}/examples/sociopatterns-invs-full.json`);
       if (!response.ok) throw new Error(`HTTP ${response.status} caricando il dataset InVS completo.`);
       const fullDataset = await response.json();
+      projectName = "SocioPatterns InVS completo";
       configText = JSON.stringify(invsFullConfig, null, 2);
       datasetText = JSON.stringify(fullDataset, null, 2);
       applyJson();
       projectDirty = true;
     } catch (error: any) {
-      errorMessage = error?.message ?? "Impossibile caricare il dataset InVS completo.";
+      errorMessage = "Impossibile caricare il dataset InVS completo. Controlla la connessione e riprova.";
+      errorTechnicalDetails = error instanceof Error ? error.message : String(error ?? "Errore non specificato.");
+      errorInput = "";
     }
+  }
+
+  function loadSyntheticGraphExample(directed: boolean) {
+    projectName = directed ? "Synthetic Graph · orientato" : "Synthetic Graph";
+    configText = JSON.stringify(directed ? syntheticGraphDirectedConfig : syntheticGraphConfig, null, 2);
+    datasetText = JSON.stringify(syntheticGraphDataset, null, 2);
+    applyJson();
+    projectDirty = true;
+  }
+
+  async function loadBitcoinOtcExample() {
+    try {
+      bitcoinLoadStatus = "loading";
+      bitcoinLoadedEdges = 0;
+      bitcoinFailedShardIndex = 0;
+      bitcoinLoadError = "";
+      bitcoinLoadNotice = "";
+      bitcoinEdges = [];
+      const response = await fetch(`${base}/examples/${bitcoinOtcManifest.bootstrapPath}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status} caricando il periodo iniziale Bitcoin OTC.`);
+      const bootstrap = await response.json();
+      if (bootstrap?.nodes?.length !== bitcoinOtcManifest.nodeCount ||
+        bootstrap?.edges?.length !== bitcoinOtcManifest.initialWindowEdgeCount) {
+        throw new Error("Il pacchetto iniziale Bitcoin OTC non corrisponde al manifest.");
+      }
+      projectName = "Bitcoin OTC · SNAP";
+      configText = JSON.stringify(bitcoinOtcConfig, null, 2);
+      datasetText = JSON.stringify(bootstrap);
+      bitcoinEdges = [...bootstrap.edges];
+      bitcoinLoadedEdges = bitcoinEdges.length;
+      applyJson();
+      projectDirty = true;
+      void continueBitcoinOtcLoading(0);
+    } catch (error: any) {
+      bitcoinLoadStatus = "failed";
+      bitcoinLoadError = error instanceof Error ? error.message : String(error ?? "Errore non specificato.");
+      errorMessage = "Impossibile caricare il dataset Bitcoin OTC. Controlla la connessione e riprova.";
+      errorTechnicalDetails = bitcoinLoadError;
+      errorInput = "";
+    }
+  }
+
+  function waitForWorkspaceFrame(): Promise<void> {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  }
+
+  async function continueBitcoinOtcLoading(startIndex: number) {
+    if (bitcoinLoadStatus === "loading" && startIndex > 0) return;
+    bitcoinLoadStatus = "loading";
+    bitcoinLoadError = "";
+    bitcoinLoadNotice = "";
+    try {
+      if (startIndex === 0) {
+        // Let the ready initial projection mount before downloading the remaining archive.
+        await waitForWorkspaceFrame();
+        await waitForWorkspaceFrame();
+      }
+      for (let index = startIndex; index < bitcoinOtcManifest.shards.length; index += 1) {
+        const shard = bitcoinOtcManifest.shards[index];
+        const response = await fetch(`${base}/examples/${shard.path}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status} caricando il pacchetto ${index + 1} di Bitcoin OTC.`);
+        const payload = await response.json();
+        if (!Array.isArray(payload?.edges) || payload.edges.length !== shard.edgeCount) {
+          throw new Error(`Il pacchetto ${index + 1} di Bitcoin OTC è incompleto.`);
+        }
+        bitcoinEdges = [...bitcoinEdges, ...payload.edges];
+        bitcoinFailedShardIndex = index + 1;
+        bitcoinLoadedEdges = bitcoinEdges.length;
+        await waitForWorkspaceFrame();
+      }
+
+      if (bitcoinEdges.length !== bitcoinOtcManifest.edgeCount) {
+        throw new Error("Il numero totale dei rating Bitcoin OTC non corrisponde al manifest.");
+      }
+      const fullEdges = [...bitcoinEdges].sort((left, right) => Number(left.validFrom) - Number(right.validFrom));
+      const fullDataset = { ...graphData, edges: fullEdges };
+      graphData = fullDataset;
+      datasetText = JSON.stringify(fullDataset);
+      appliedDatasetText = datasetText;
+      bitcoinLoadStatus = "complete";
+      bitcoinLoadError = "";
+      bitcoinLoadNotice = "";
+    } catch (error: unknown) {
+      bitcoinLoadStatus = "failed";
+      bitcoinLoadError = error instanceof Error ? error.message : String(error ?? "Errore non specificato.");
+      errorMessage = "Il periodo iniziale è pronto, ma il resto del dataset Bitcoin OTC non è stato caricato.";
+      errorTechnicalDetails = bitcoinLoadError;
+      errorInput = "";
+    }
+  }
+
+  function retryBitcoinOtcLoading() {
+    if (bitcoinEdges.length === 0) void loadBitcoinOtcExample();
+    else void continueBitcoinOtcLoading(bitcoinFailedShardIndex);
   }
 
   function normalizeDataset(dataset: any) {
@@ -380,6 +616,7 @@
         appliedConfigText = restoredConfigText;
         appliedDatasetText = restoredDatasetText;
         appliedGraphKey = createWorkbenchGraphKey(restoredConfigText, restoredDatasetText);
+        projectName = snapshot.projectName ?? DEFAULT_PROJECT_NAME;
         analysisSessionState = snapshot.analysis?.graphKey === appliedGraphKey ? snapshot.analysis : null;
         analysisArchiveState = snapshot.analysisArchive?.graphKey === appliedGraphKey
           ? snapshot.analysisArchive
@@ -435,6 +672,7 @@
       draftDatasetText: datasetText,
       ...(appliedConfigText !== configText ? { appliedConfigText } : {}),
       ...(appliedDatasetText !== datasetText ? { appliedDatasetText } : {}),
+      projectName: normalizeKliqueAspProjectName(projectName),
       projectDirty,
       nodeLabelsVisible,
       history: navigationHistory,
@@ -498,9 +736,7 @@
       <div>
         <h1>Area di lavoro non disponibile</h1>
         <p>{graphAppLoadError}</p>
-        <button type="button" onclick={loadGraphApp} disabled={graphAppLoading}>
-          {graphAppLoading ? "Caricamento…" : "Riprova"}
-        </button>
+        <button type="button" onclick={loadGraphApp}>Riprova</button>
       </div>
     </main>
   {:else if sessionReady && GraphAppComponent}
@@ -509,6 +745,8 @@
         this={GraphAppComponent}
         {graphConfig}
         {graphData}
+        datasetIsComplete={bitcoinLoadStatus === "idle" || bitcoinLoadStatus === "complete"}
+        incrementalDatasetUpdates={graphData?.datasetMetadata?.id === "bitcoin-otc"}
         bind:nodeLabelsVisible
         {JsonEditor}
         {jsonEditorProps}
@@ -533,6 +771,34 @@
       {sessionReady ? "Caricamento dell’area di lavoro…" : "Ripristino della sessione…"}
     </div>
   {/if}
+  {#if bitcoinLoadStatus === "loading" || bitcoinLoadStatus === "failed"}
+    <section class="bitcoin-load-banner" aria-label="Caricamento del dataset Bitcoin OTC">
+      <div class="bitcoin-load-copy">
+        <strong>Bitcoin OTC</strong>
+        <p role="status" aria-live="polite" aria-atomic="true">
+          {#if bitcoinLoadNotice}
+            {bitcoinLoadNotice}
+          {:else if bitcoinLoadStatus === "failed"}
+            {bitcoinEdges.length > 0
+              ? `Il periodo iniziale è pronto; caricati ${bitcoinLoadedEdges.toLocaleString("it-IT")} di ${bitcoinOtcManifest.edgeCount.toLocaleString("it-IT")} rating.`
+              : "Non è stato caricato il pacchetto iniziale."}
+          {:else if bitcoinLoadedEdges < bitcoinOtcManifest.initialWindowEdgeCount}
+            Preparazione della finestra iniziale…
+          {:else}
+            Finestra iniziale pronta · scaricati {bitcoinLoadedEdges.toLocaleString("it-IT")} di {bitcoinOtcManifest.edgeCount.toLocaleString("it-IT")} rating
+          {/if}
+        </p>
+      </div>
+      <progress
+        max={bitcoinOtcManifest.edgeCount}
+        value={bitcoinLoadedEdges}
+        aria-label="Avanzamento caricamento Bitcoin OTC"
+      ></progress>
+      {#if bitcoinLoadStatus === "failed"}
+        <button type="button" onclick={retryBitcoinOtcLoading}>Riprendi</button>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -553,7 +819,49 @@
     height: 100%;
     place-items: center;
     color: #cbd5e1;
-    font: 500 14px/1.4 system-ui, sans-serif;
+    font: 500 14px/1.4 Arial, Helvetica, sans-serif;
+  }
+
+  .bitcoin-load-banner {
+    position: fixed;
+    z-index: 1100;
+    top: 66px;
+    left: 50%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 14px;
+    width: min(460px, calc(100vw - 28px));
+    box-sizing: border-box;
+    padding: 11px 14px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.96);
+    color: #f8fafc;
+    box-shadow: 0 10px 32px rgba(2, 6, 23, 0.32);
+    font: 12px/1.4 Arial, Helvetica, sans-serif;
+  }
+
+  .bitcoin-load-copy { min-width: 0; }
+  .bitcoin-load-copy strong { font-size: 12px; }
+  .bitcoin-load-copy p { margin: 2px 0 0; color: #cbd5e1; }
+  .bitcoin-load-banner progress { grid-column: 1; width: 100%; height: 7px; align-self: center; accent-color: #38bdf8; }
+  .bitcoin-load-banner button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    padding: 7px 11px;
+    border: 1px solid #64748b;
+    border-radius: 8px;
+    background: #1e293b;
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+  }
+  .bitcoin-load-banner button:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
+
+  @media (max-width: 520px) {
+    .bitcoin-load-banner { top: 58px; padding: 9px 11px; }
   }
 
   .workspace-load-error {
@@ -564,7 +872,7 @@
     place-items: center;
     padding: 24px;
     color: #e2e8f0;
-    font: 500 14px/1.5 system-ui, sans-serif;
+    font: 500 14px/1.5 Arial, Helvetica, sans-serif;
     text-align: center;
   }
 

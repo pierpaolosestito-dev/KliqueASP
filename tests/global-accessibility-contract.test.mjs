@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { getCliqueTaskLabel } from "../src/lib/kliqueasp/graph/cliqueTaskCopy.ts";
 
 const layout = await readFile(new URL("../src/routes/+layout.svelte", import.meta.url), "utf8");
 const graphApp = await readFile(new URL("../src/lib/kliqueasp/GraphApp.svelte", import.meta.url), "utf8");
@@ -77,9 +78,14 @@ test("analysis menu controls include accessible naming markup for their visible 
   }
   assert.match(menu, /aria-labelledby="analysis-menu-label"[\s\S]*?<span id="analysis-menu-label">Analisi<\/span>/);
   assert.match(menu, /aria-labelledby="analysis-clique-label"[\s\S]*?<span id="analysis-clique-label">\{solverRunning \?/);
-  for (const label of ["Analisi", "Clique massima", "Calcolo in corso…", "Riavvia analisi", "k-plex, k-core e struttura…", "Motivi, triadi e gruppi contestuali…", "Verifica e riparazione…", "Requisiti mancanti", "Requisiti per la riparazione", "Confronta clique massime", "Confronto in corso…", "Apri Dati e mapping", "Apri Dati e configurazione scenari", "Configura scenari"]) {
+  for (const label of ["Analisi", "Calcolo in corso…", "Riavvia analisi", "k-plex, k-core e struttura…", "Motivi, triadi e gruppi contestuali…", "Verifica e riparazione…", "Requisiti mancanti", "Requisiti per la riparazione", "Confronta clique massime", "Confronto in corso…", "Apri Dati e mappatura", "Apri Dati e configurazione scenari", "Configura scenari"]) {
     assert.ok(menu.includes(label), `etichetta visibile mancante: ${label}`);
   }
+  assert.deepEqual(["maximal", "all", "maximum"].map(getCliqueTaskLabel), [
+    "Clique massimali",
+    "Tutte le clique",
+    "Clique di taglia massima"
+  ]);
 });
 
 test("scenario menu starts the clique comparison and explains blocking requirements", () => {
@@ -96,8 +102,8 @@ test("closed toolbar menus are removed from keyboard access and open menus stay 
 });
 
 test("view menu actions use visible labels and name the icon-only zoom buttons", () => {
-  const start = graphApp.indexOf('<details class="toolbar-menu" bind:this={viewMenuElement}>');
-  const end = graphApp.indexOf("  </details>", start);
+  const start = graphApp.indexOf('<details class="toolbar-menu desktop-toolbar-control" bind:this={viewMenuElement}>');
+  const end = graphApp.indexOf('\n  </details>\n\n  {#if (data?.nodes?.length ?? 0) > 0}\n    <details class="toolbar-menu graph-node-directory', start);
   assert.ok(start >= 0 && end > start, "menu Vista della toolbar non trovato");
   const menu = graphApp.slice(start, end);
   const controls = [...menu.matchAll(/<(?:button|summary)\b[^>]*>/g)].map(([tag]) => tag);
@@ -138,7 +144,7 @@ test("graph navigation hints and status text meet AA contrast on their surfaces"
   assert.match(graphApp, /:global\(\.app-root \.scene-container \.scene-nav-info\)\s*\{[^}]*left:\s*0;[^}]*right:\s*0;[^}]*margin:\s*0 auto;/s);
   const mobileNavigationRule = graphApp.match(/@media \(max-width:\s*600px\)\s*\{\s*:global\(\.app-root \.scene-container \.scene-nav-info\)\s*\{([^}]+)\}/);
   assert.ok(mobileNavigationRule, "le istruzioni devono restare nella zona libera della toolbar mobile");
-  assert.match(mobileNavigationRule[1], /top:\s*calc\(var\(--toolbar-top\)\s*\+\s*var\(--toolbar-height,\s*48px\)\s*\+\s*40px\)/);
+  assert.match(mobileNavigationRule[1], /top:\s*calc\(var\(--toolbar-top\)\s*\+\s*var\(--toolbar-height,\s*48px\)\s*\+\s*var\(--mobile-status-reserve,\s*48px\)\s*\+\s*5px\)/);
   assert.match(mobileNavigationRule[1], /bottom:\s*auto/);
   const pillColor = navigationBackground.slice(1, 4).map(Number);
   const pillOpacity = Number(navigationBackground[4]);
@@ -147,7 +153,7 @@ test("graph navigation hints and status text meet AA contrast on their surfaces"
     assert.ok(contrastRatio(hexRgb(navigationColor), pillBackground) >= 4.5);
   }
 
-  const statusRule = graphApp.match(/\.graph-status-bar\s*\{([^}]+)\}/);
+  const statusRule = graphApp.match(/(?:^|\n)\s*\.graph-status-bar\s*\{\s*position:\s*absolute;([^}]+)\}/);
   assert.ok(statusRule, "manca la regola della barra di stato del grafo");
   const statusColor = statusRule[1].match(/color:\s*(#[0-9a-f]{6})/i)?.[1];
   assert.ok(statusColor, "manca il colore della barra di stato del grafo");
@@ -255,6 +261,14 @@ test("counterfactual search actions announce their running state", () => {
   assert.match(motifPanel, /running && activeAnalysisKind === "motifNearMatch" \? "Ricerca in corso…"/);
   assert.match(motifPanel, /running && activeAnalysisKind === "motifCounterfactual" \? "Ricerca in corso…"/);
   assert.match(motifPanel, /running && activeAnalysisKind === "signedTriads" \? "Classificazione in corso…"/);
+});
+
+test("counterfactual criteria stay fixed while their solver query is running", () => {
+  assert.match(structuralCompletionPanel, /if \(running \|\| !candidateEnabled/);
+  assert.match(structuralCompletionPanel, /<input type="number"[^\n]*disabled=\{running\}/);
+  assert.match(structuralCompletionPanel, /bind:checked=\{enumerateAllOptima\}[^\n]*disabled=\{running\}/);
+  assert.match(typedPathCounterfactualPanel, /if \(running \|\| !enabled/);
+  assert.match(typedPathCounterfactualPanel, /bind:checked=\{enumerateAllOptima\}[^\n]*disabled=\{running\}/);
 });
 
 test("structural panel children keep their height inside the scrollable panel", () => {

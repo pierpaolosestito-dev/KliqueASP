@@ -1,8 +1,11 @@
 <script lang="ts">
+  import type { GraphViewFilterSnapshot } from "../graph/graphViewFilters.ts";
   import { createEventDispatcher } from "svelte";
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import { displayNodeResultLabel } from "../graph/nodeResultLabel.ts";
   import { downloadCsvText } from "../csvExport";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import ResultListPager from "./ResultListPager.svelte";
   import GraphFilterSummary from "./GraphFilterSummary.svelte";
   import {
@@ -11,33 +14,45 @@
   } from "../graph/provenanceScenarioAnalysis";
 
   export let open = false;
+  export let compactModal = false;
   export let running = false;
   export let progress = "";
   export let error = "";
+  export let completionLabel = "";
   export let comparison: ProvenanceScenarioCliqueComparison | null = null;
   export let nodeLabels: Record<string, string> = {};
+  export let sourceIdByNodeId: Record<string, string> = {};
+  export let highlightedNodeIds: string[] = [];
   export let selectedGroup = "";
   export let confidenceThreshold: number | null = null;
   export let timelineWindow = "";
-  export let viewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  export let viewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
 
   const dispatch = createEventDispatcher();
   const scenarioPageSize = 20;
   const membershipPageSize = 100;
   let visibleScenarioLimit = scenarioPageSize;
   let visibleMembershipLimit = membershipPageSize;
+  let selectedMembershipNodeId = "";
   let previousComparison = comparison;
   $: if (comparison !== previousComparison) {
     previousComparison = comparison;
     visibleScenarioLimit = scenarioPageSize;
     visibleMembershipLimit = membershipPageSize;
+    selectedMembershipNodeId = "";
   }
   $: visibleScenarios = comparison?.scenarios.slice(0, visibleScenarioLimit) ?? [];
   $: visibleMemberships = comparison?.memberships.slice(0, visibleMembershipLimit) ?? [];
   $: candidateDomainDeclared = comparison?.scenarios.some((scenario) => scenario.candidateNodeCount !== undefined) ?? false;
 
   function highlightNode(nodeId: string) {
+    selectedMembershipNodeId = nodeId;
     dispatch("highlight", [nodeId]);
+  }
+
+  function isMembershipRowSelected(nodeId: string): boolean {
+    return selectedMembershipNodeId === nodeId &&
+      highlightedNodeIds.length === 1 && highlightedNodeIds[0] === nodeId;
   }
 
   function exportComparison() {
@@ -61,7 +76,10 @@
 {#if open}
   <section
     class="scenario-comparison-panel"
+    role={compactModal ? "dialog" : undefined}
+    aria-modal={compactModal ? "true" : undefined}
     aria-labelledby="scenario-comparison-title"
+    tabindex="-1"
   >
     <header>
       <div>
@@ -73,8 +91,10 @@
           <p>Confronta le clique massime calcolate separatamente per ogni scenario configurato.</p>
         {/if}
       </div>
-      <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
+      <button type="button" class="close" aria-label="Chiudi confronto scenari" title="Chiudi confronto scenari" on:click={() => dispatch("close")}>×</button>
     </header>
+
+    <AnalysisCompletionStatus label={completionLabel} />
 
     {#if running}
       <div class="status" role="status">{progress || "Calcolo delle clique massime per scenario…"}</div>
@@ -105,7 +125,7 @@
         <span>Gruppo clique: {selectedGroup || "tutti"}</span>
         <span>Soglia confidenza: {confidenceThreshold ?? "non attiva"}</span>
         {#if timelineWindow}<span>Finestra: {timelineWindow}</span>{/if}
-        <GraphFilterSummary types={viewFilters.types} groups={viewFilters.groups} />
+        <GraphFilterSummary types={viewFilters.types} groups={viewFilters.groups} degreeFilters={viewFilters.degreeFilters} />
       </div>
 
       <section class="scenario-list" aria-label="Risultati per scenario">
@@ -134,14 +154,17 @@
         <button type="button" on:click={exportComparison}>Esporta CSV</button>
       </div>
       {#if comparison.memberships.length === 0}
-        <p>Nessun nodo compare nelle clique massime trovate.</p>
+        <div class="empty-memberships">
+          <p>Nessun nodo compare nelle clique massime trovate.</p>
+          <small>Se l'esito è inatteso, rivedi gli scenari, i gruppi candidati e i filtri applicati.</small>
+          <button type="button" on:click={() => dispatch("openData")}>Rivedi scenari e dati</button>
+        </div>
       {:else}
         <ul class="membership-list">
           {#each visibleMemberships as membership (membership.nodeId)}
             <li>
-              <button type="button" class:stable={membership.stableAcrossEveryOptimalAnswerSet} on:click={() => highlightNode(membership.nodeId)}>
-                <span class="node-name">{nodeLabels[membership.nodeId] ?? membership.nodeId}</span>
-                <span class="node-id">ID: {membership.nodeId}</span>
+              <button type="button" aria-pressed={isMembershipRowSelected(membership.nodeId)} class:stable={membership.stableAcrossEveryOptimalAnswerSet} on:click={() => highlightNode(membership.nodeId)}>
+                <span class="node-name">{displayNodeResultLabel(membership.nodeId, nodeLabels, sourceIdByNodeId)}</span>
                 {#if membership.candidateScenarioSupportCount !== undefined}
                   <span>Candidato in {membership.candidateScenarioSupportCount}/{comparison.scenarioCount} scenari</span>
                 {/if}
@@ -205,7 +228,7 @@
     background: var(--solver-bg);
     box-shadow: var(--solver-shadow);
     color: #0f172a;
-    font: 13px/1.45 system-ui, sans-serif;
+    font: 13px/1.45 Arial, Helvetica, sans-serif;
   }
 
   header,
@@ -224,8 +247,7 @@
 
   header p,
   small,
-  .context,
-  .node-id {
+  .context {
     color: #475569;
   }
 
@@ -318,12 +340,53 @@
     background: #f0fdf4;
   }
 
+  .membership-list button[aria-pressed="true"] {
+    border-color: #0f766e;
+    background: #ccfbf1;
+    outline: 2px solid #0f766e;
+    outline-offset: 1px;
+  }
+
   .membership-list button strong {
     color: #334155;
   }
 
   .membership-list button.stable strong {
     color: #166534;
+  }
+
+  .empty-memberships {
+    display: grid;
+    justify-items: start;
+    gap: 7px;
+    padding: 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .empty-memberships p,
+  .empty-memberships small {
+    margin: 0;
+    color: #475569;
+    line-height: 1.45;
+  }
+
+  .empty-memberships button {
+    min-height: 32px;
+    padding: 6px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #fff;
+    color: #164e63;
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .empty-memberships button:focus-visible {
+    outline: 3px solid #0284c7;
+    outline-offset: 2px;
   }
 
   .node-name {

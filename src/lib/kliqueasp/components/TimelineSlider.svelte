@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { deepMergeConfig } from "../config/deepMergeConfig";
+  import { displayMappedGraphTime, displayMappedTimelineValue } from "../graph/temporalDisplay";
 
   // Sezione ui.timeline del config già risolta dal parent (GraphApp).
   export let uiConfig: any = {};
@@ -83,7 +84,9 @@
 <div
   class="timeline-container"
   role="group"
-  aria-label="Intervallo temporale del grafo"
+  aria-label={Math.abs(min) >= 100_000_000_000 || Math.abs(max) >= 100_000_000_000
+    ? "Intervallo temporale del grafo; date in UTC"
+    : "Intervallo temporale del grafo"}
   style="
     --tl-bottom: {UI.timeline.bottom}px;
     --tl-width: {UI.timeline.width};
@@ -109,16 +112,26 @@
     --tl-thumb-border: {UI.timeline.slider.thumbBorder};
   "
 >
-  <div class="timeline-label">
-    <span>{localStart}</span>
-    <span>—</span>
-    <span>{localEnd}</span>
+  <div class="timeline-header">
+    <div class="timeline-label">
+      <span title={displayMappedGraphTime(localStart)}>{displayMappedTimelineValue(localStart)}</span>
+      <span>—</span>
+      <span title={displayMappedGraphTime(localEnd)}>{displayMappedTimelineValue(localEnd)}</span>
+    </div>
+    <button
+      class="timeline-dismiss"
+      type="button"
+      aria-label="Nascondi timeline"
+      title="Nascondi timeline"
+      on:click={() => dispatch("dismiss")}
+    >×</button>
   </div>
 
   <div class="slider-wrapper">
     <input
       type="range"
-      aria-label="Anno iniziale del periodo"
+      aria-label="Inizio del periodo"
+      aria-describedby={disabled ? "analysis-in-progress-status" : undefined}
       min={min}
       max={max}
       value={localStart}
@@ -129,7 +142,8 @@
 
     <input
       type="range"
-      aria-label="Anno finale del periodo"
+      aria-label="Fine del periodo"
+      aria-describedby={disabled ? "analysis-in-progress-status" : undefined}
       min={min}
       max={max}
       value={localEnd}
@@ -163,13 +177,49 @@
     }
   }
 
+  @media (max-width: 600px) and (max-height: 420px) {
+    .timeline-container { bottom: var(--tl-bottom); }
+  }
+
+  .timeline-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: var(--tl-label-mb);
+  }
+
   .timeline-label {
     display: flex;
+    flex: 1 1 auto;
     justify-content: center;
     gap: var(--tl-label-gap);
     font-size: var(--tl-label-size);
     font-weight: var(--tl-label-weight);
-    margin-bottom: var(--tl-label-mb);
+    margin-bottom: 0;
+  }
+
+  .timeline-dismiss {
+    display: grid;
+    flex: 0 0 30px;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid rgba(71, 85, 105, .24);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, .7);
+    color: #334155;
+    font: inherit;
+    font-size: 19px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .timeline-dismiss:hover,
+  .timeline-dismiss:focus-visible {
+    background: #fff;
+    outline: 2px solid #256d85;
+    outline-offset: 2px;
   }
 
   .slider-wrapper {

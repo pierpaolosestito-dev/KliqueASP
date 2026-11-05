@@ -2,16 +2,18 @@
   import { presentAnalysisError } from "../graph/analysisErrorPresentation.ts";
 
   export let message = "";
+  export let technicalDetails: string | undefined = undefined;
   $: presentation = presentAnalysisError(message);
+  $: visibleTechnicalDetails = technicalDetails?.trim() || presentation.technicalDetails;
 </script>
 
 {#if presentation.message}
   <div class="analysis-error" role="alert">
     <p>{presentation.message}</p>
-    {#if presentation.technicalDetails}
+    {#if visibleTechnicalDetails}
       <details>
         <summary>Dettagli tecnici</summary>
-        <pre>{presentation.technicalDetails}</pre>
+        <pre>{visibleTechnicalDetails}</pre>
       </details>
     {/if}
   </div>

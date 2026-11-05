@@ -3,6 +3,8 @@
   import type { NeighborhoodDirection } from "../graph/graphVisualization.ts";
   import ProgressiveList from "./ProgressiveList.svelte";
   import ResultListPager from "./ResultListPager.svelte";
+  import { describeNeighborhoodRadiusBlocker } from "../graph/analysisReadiness.ts";
+  import { hasNodeDetailContent } from "../graph/nodeDetails.ts";
 
   type Neighbor = {
     id: string;
@@ -33,6 +35,7 @@
   export let onClearNeighborhoodFocus: () => void = () => {};
   export let onViewNeighbor: (id: string) => void = () => {};
   export let onCommitNeighbor: (id: string) => void = () => {};
+  export let onOpenData: () => void = () => {};
 
   let neighborhoodRadius: number | undefined = 1;
   let maximumNeighborhoodRadius = 1;
@@ -45,8 +48,11 @@
   let previousNeighborCount = -1;
 
   $: maximumNeighborhoodRadius = Math.max(1, totalGraphNodeCount);
-  $: neighborhoodRadiusIsValid = Number.isSafeInteger(Number(neighborhoodRadius)) &&
-    Number(neighborhoodRadius) >= 1 && Number(neighborhoodRadius) <= maximumNeighborhoodRadius;
+  $: neighborhoodRadiusBlocker = describeNeighborhoodRadiusBlocker({
+    radius: neighborhoodRadius,
+    maximum: maximumNeighborhoodRadius
+  });
+  $: neighborhoodRadiusIsValid = !neighborhoodRadiusBlocker;
   $: selectedNodeId = selectedNode?.id == null ? "" : String(selectedNode.id);
   $: if (selectedNodeId !== previousSelectedNodeId || neighborIds.length !== previousNeighborCount) {
     previousSelectedNodeId = selectedNodeId;
@@ -55,6 +61,12 @@
   }
   $: visibleNeighborIds = neighborIds.slice(0, visibleNeighborLimit);
   $: genericDetails = getGenericDetails(selectedDetails);
+  $: hasVisibleNodeDetails = hasNodeDetailContent({
+    details: selectedDetails,
+    genericDetailCount: genericDetails.length,
+    failedImageUrl,
+    resolveImageUrl
+  });
 
   function showMoreNeighbors() {
     visibleNeighborLimit += neighborPageSize;
@@ -69,14 +81,24 @@
     showModal = true;
   }
 
-  function closeModal() {
+  function dismissModal(restoreFocus: boolean) {
     if (!showModal) return;
     showModal = false;
     const trigger = modalTrigger;
     modalTrigger = null;
     void tick().then(() => {
-      if (trigger?.isConnected) trigger.focus();
+      if (restoreFocus && trigger?.isConnected) trigger.focus();
     });
+  }
+
+  function closeModal() {
+    dismissModal(true);
+  }
+
+  async function openDataFromNodeDetails() {
+    dismissModal(false);
+    await tick();
+    onOpenData();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -249,8 +271,13 @@
           max={maximumNeighborhoodRadius}
           step="1"
           bind:value={neighborhoodRadius}
+          aria-invalid={neighborhoodRadiusBlocker ? "true" : undefined}
+          aria-describedby={neighborhoodRadiusBlocker ? "neighborhood-radius-blocker" : undefined}
         />
       </label>
+      {#if neighborhoodRadiusBlocker}
+        <small id="neighborhood-radius-blocker" class="field-error" role="status" aria-live="polite">{neighborhoodRadiusBlocker}</small>
+      {/if}
       {#if directedGraph}
         <label>
           Direzione
@@ -263,6 +290,7 @@
       {/if}
       <button
         type="button"
+        aria-describedby={neighborhoodRadiusBlocker ? "neighborhood-radius-blocker" : undefined}
         disabled={!neighborhoodRadiusIsValid}
         on:click={() => neighborhoodRadiusIsValid && onFocusNeighborhood(
           String(selectedNode.id),
@@ -277,7 +305,7 @@
           {:else}
             Vista limitata a {neighborhoodFocus.nodeCount} di {totalGraphNodeCount} nodi entro {neighborhoodFocus.maxHops} archi da {neighborhoodFocus.rootNodeId} ({neighborhoodFocus.direction}).
           {/if}
-          Mostra {neighborhoodFocus.recordCount} record in {neighborhoodFocus.renderedLinkCount} linee. L'analisi e gli export restano riferiti all'intero grafo filtrato.
+          Mostra {neighborhoodFocus.recordCount} record in {neighborhoodFocus.renderedLinkCount} linee. L'analisi e le esportazioni restano riferite all'intero grafo filtrato.
         </small>
         <button type="button" on:click={onClearNeighborhoodFocus}>Mostra tutta la proiezione</button>
       {/if}
@@ -292,6 +320,7 @@
     <strong>Vicini · {neighborIds.length}</strong>
     {#if neighborIds.length === 0}
       <p>Nessun vicino nella proiezione corrente.</p>
+      <small>Se ti aspettavi collegamenti, amplia la proiezione o rivedi i filtri in Vista.</small>
     {:else}
     <ul>
       {#each visibleNeighborIds as n}
@@ -467,21 +496,24 @@
                     <p><strong>{item.label}:</strong> {item.value}</p>
                   </ProgressiveList>
                 </div>
-              {:else}
-                <p>Nessun dettaglio disponibile.</p>
               {/if}
 
             {/if}
+          {/if}
 
-          {:else}
-            <p>Nessun dettaglio disponibile.</p>
+          {#if !hasVisibleNodeDetails}
+            <div class="node-details-empty" role="status">
+              <p>{selectedDetails ? "Questo nodo non ha attributi di dettaglio valorizzati." : "I dati di dettaglio per questo nodo non sono presenti nel progetto."}</p>
+              <small>Puoi associare altri campi del nodo in Dati e configurazione.</small>
+              <button class="details-data-action" type="button" on:click={openDataFromNodeDetails}>Configura campi in Dati</button>
+            </div>
           {/if}
 
         </div>
 
         <!-- FOOTER -->
         <div class="modal-footer">
-          <button class="modal-close" type="button" aria-label={`Chiudi dettagli di ${selectedNode.label}`} on:click={closeModal}>
+          <button class="modal-close" type="button" aria-label={`Chiudi dettagli di ${selectedNode.label}`} title={`Chiudi dettagli di ${selectedNode.label}`} on:click={closeModal}>
             ✕
           </button>
         </div>
@@ -560,6 +592,11 @@
     min-width: 0;
   }
 
+  .neighborhood-focus .field-error {
+    color: #991b1b;
+    font-weight: 600;
+  }
+
   .explore-btn {
     cursor: pointer;
   }
@@ -608,6 +645,38 @@
 
   .node-detail-list :global(p) {
     margin: 2px 0;
+  }
+
+  .node-details-empty {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #334155;
+  }
+
+  .node-details-empty p,
+  .node-details-empty small {
+    margin: 0;
+  }
+
+  .details-data-action {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+  }
+
+  .details-data-action:focus-visible {
+    outline: 2px solid var(--focus-color, #2563eb);
+    outline-offset: 2px;
   }
 
   .role-entry {

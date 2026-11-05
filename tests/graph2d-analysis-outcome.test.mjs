@@ -5,6 +5,7 @@ import { buildGraph2DScene, buildGraph2DSvg } from "../src/lib/kliqueasp/graph/g
 import {
   buildGraph2DInfeasibleAnalysisSummary,
   buildGraph2DIncompleteAnalysisSummary,
+  buildGraph2DTemporalNoRouteDiagnosticSummary,
   buildGraph2DOptimizationCompletionLabel,
   buildGraph2DStructuralCompletionLabel,
   buildGraph2DScenarioComparisonCompletionLabel,
@@ -14,6 +15,7 @@ import {
 
 const graphApp = await readFile(new URL("../src/lib/kliqueasp/GraphApp.svelte", import.meta.url), "utf8");
 const structuralPanel = await readFile(new URL("../src/lib/kliqueasp/components/StructuralAnalysisPanel.svelte", import.meta.url), "utf8");
+const integrityPanel = await readFile(new URL("../src/lib/kliqueasp/components/IntegrityPanel.svelte", import.meta.url), "utf8");
 
 test("a timed-out query is labeled as context only, without a witness", () => {
   const summary = buildGraph2DIncompleteAnalysisSummary("TIMEOUT");
@@ -22,9 +24,23 @@ test("a timed-out query is labeled as context only, without a witness", () => {
   assert.match(summary?.completionLabel ?? "", /grafo di contesto/);
 });
 
+test("temporal why-not witnesses remain labeled as diagnostics, not as simple-path solutions", () => {
+  assert.deepEqual(buildGraph2DTemporalNoRouteDiagnosticSummary(true), {
+    resultLabel: "Diagnosi del cammino temporale",
+    completionLabel: "Nessun cammino semplice ammissibile \u00b7 la meta si raggiunge solo ripassando da nodi visitati"
+  });
+  assert.deepEqual(buildGraph2DTemporalNoRouteDiagnosticSummary(false), {
+    resultLabel: "Diagnosi del cammino temporale",
+    completionLabel: "Nessun cammino semplice ammissibile \u00b7 il prefisso massimo non raggiunge la meta"
+  });
+});
+
 test("cancelled and incomplete solver runs have distinct completion labels", () => {
   assert.match(buildGraph2DIncompleteAnalysisSummary("Conteggio annullato; il totale parziale non è stato pubblicato.")?.completionLabel ?? "",
     /Calcolo interrotto/);
+  assert.match(buildGraph2DIncompleteAnalysisSummary("Tempo massimo superato (20 s): il calcolo è stato interrotto prima del risultato completo.")?.completionLabel ?? "",
+    /Limite di calcolo raggiunto/,
+    "un timeout resta riconoscibile anche quando il dettaglio tecnico dice che il calcolo è stato interrotto");
   assert.match(buildGraph2DIncompleteAnalysisSummary("clingo non conferma che tutti gli ottimi siano stati enumerati")?.completionLabel ?? "",
     /Calcolo non completato/);
   assert.match(buildGraph2DIncompleteAnalysisSummary("Errore inatteso")?.completionLabel ?? "",
@@ -38,6 +54,14 @@ test("engine failures and missing prerequisites are distinct from solver interru
     /Analisi non eseguita/);
   assert.match(buildGraph2DIncompleteAnalysisSummary("Il gruppo candidato è vuoto")?.completionLabel ?? "",
     /Analisi non eseguita/);
+});
+
+test("an integrity diagnosis without a model is reported as incomplete in the 2D summary", () => {
+  const summary = buildGraph2DIncompleteAnalysisSummary(
+    "Clingo non ha restituito alcun modello diagnostico. L'assenza di modelli non dimostra che il grafo sia privo di violazioni."
+  );
+  assert.match(summary?.completionLabel ?? "", /Calcolo non completato/);
+  assert.match(summary?.completionLabel ?? "", /solo il grafo di contesto/);
 });
 
 test("empty or non-text errors do not create an incomplete-result label", () => {
@@ -64,6 +88,25 @@ test("a proved infeasible task is distinguished from an analysis that did not ru
   assert.throws(() => buildGraph2DInfeasibleAnalysisSummary(" ", "motivo"), /task e motivo/);
 });
 
+test("an infeasible integrity repair is a proved outcome separate from a repair error", () => {
+  const start = graphApp.indexOf("async function runIntegrityRepair()");
+  const end = graphApp.indexOf("// ---------------- LIFECYCLE", start);
+  assert.ok(start >= 0 && end > start, "funzione di riparazione d'integrità non trovata");
+  const repairFlow = graphApp.slice(start, end);
+  assert.match(repairFlow, /lastGraph2DAnalysisKind = "integrityRepair"/);
+  const infeasibleStart = repairFlow.indexOf('if (result?.Result === "UNSATISFIABLE")');
+  const infeasibleEnd = repairFlow.indexOf("\n      if (result?.Result !==", infeasibleStart);
+  assert.ok(infeasibleStart >= 0 && infeasibleEnd > infeasibleStart, "ramo UNSAT della riparazione non trovato");
+  const infeasibleBranch = repairFlow.slice(infeasibleStart, infeasibleEnd);
+  assert.match(infeasibleBranch, /integrityRepairOutcomeMessage\s*=/);
+  assert.doesNotMatch(infeasibleBranch, /integrityRepairError\s*=/,
+    "l'assenza provata di riparazioni non è un errore di esecuzione");
+  assert.match(graphApp, /analysisLabel:\s*"Riparazione minima d'integrità"[\s\S]*?completionLabel:\s*"Ottimo di costo provato[\s\S]*?kind:\s*"collection"/);
+  assert.match(graphApp, /buildGraph2DInfeasibleAnalysisSummary\([\s\S]*?"Riparazione d'integrità"/);
+  assert.match(integrityPanel, /\{#if repairOutcomeMessage\}[\s\S]*?class="repair-outcome" role="status" aria-live="polite"/);
+  assert.match(integrityPanel, /Rivedi le azioni candidate/);
+});
+
 test("dominating-set infeasibility remains visible if its optional why-not certificate fails", () => {
   const start = graphApp.indexOf('if (request.task === "dominatingSet" && result?.Result === "UNSATISFIABLE")');
   const explanation = graphApp.indexOf("const feasibilityProgram = buildDominatingSetFeasibilityProgram", start);
@@ -81,7 +124,7 @@ test("dominating-set infeasibility remains visible if its optional why-not certi
   assert.doesNotMatch(successfulCertificate, /structuralError\s*=/,
     "la diagnosi verificata viene mostrata nel suo pannello dedicato, senza un falso alert di errore");
   assert.match(graphApp.slice(explanation, successStart),
-    /La copertura è impossibile, ma la diagnosi dei target non è stata verificata/,
+    /La copertura è impossibile, ma la verifica dei nodi non coperti/,
     "gli errori della diagnosi opzionale devono distinguersi dall'infeasibilità provata");
 });
 
@@ -185,6 +228,14 @@ test("path tasks report their witness scope even when the single model stream is
   }
 });
 
+test("selected paths and temporal why-not walks keep their distinct 2D result labels", () => {
+  assert.match(graphApp, /graph2DOverlayResultLabel = path\.resultLabel\?\.trim\(\) \?\? ""/);
+  assert.match(graphApp, /graph2DOverlayCompletionLabel = path\.completionLabel\?\.trim\(\) \?\? ""/);
+  assert.match(structuralPanel, /resultLabel: task === "path" \? "Cammino minimo selezionato"/);
+  assert.match(structuralPanel, /resultLabel: summary\.resultLabel/);
+  assert.match(structuralPanel, /completionLabel: summary\.completionLabel/);
+});
+
 test("maximal k-plex reports one certified set or the requested full enumeration", () => {
   for (const completeModelEnumeration of [false, true]) {
     assert.equal(buildGraph2DStructuralCompletionLabel({
@@ -242,6 +293,56 @@ test("structural optimization uses the user's all-optima setting in the 2D compl
   const summary = graphApp.slice(start, end);
   assert.match(summary, /completionLabel:\s*buildGraph2DStructuralCompletionLabel\(\{\s*task:\s*request\.task,\s*resultStatus:\s*result\?\.Result,\s*completeModelEnumeration:\s*hasCompleteModelEnumeration\(result\),/);
   assert.match(summary, /enumerateAllOptima:\s*request\.enumerateAllOptima === true/);
+});
+
+test("structural completion labels require a completed satisfiable solver status", () => {
+  for (const resultStatus of [undefined, "UNKNOWN", "UNSATISFIABLE", "ERROR"]) {
+    assert.equal(buildGraph2DStructuralCompletionLabel({
+      task: "components",
+      resultStatus,
+      completeModelEnumeration: true,
+      hasSolution: true,
+      enumerateAllOptima: false
+    }), undefined, `${resultStatus ?? "stato assente"} non può essere presentato come completo`);
+    assert.equal(buildGraph2DStructuralCompletionLabel({
+      task: "minimumNodeSeparator",
+      resultStatus,
+      completeModelEnumeration: true,
+      hasSolution: true,
+      enumerateAllOptima: false
+    }), undefined, `${resultStatus ?? "stato assente"} non può certificare un'ottimizzazione`);
+  }
+});
+
+test("structural completion labels require a parsed model for every task", () => {
+  for (const task of ["path", "typedPath", "kPlex", "maximalKPlex", "kCore", "components", "dominatingSet", "communities"]) {
+    assert.equal(buildGraph2DStructuralCompletionLabel({
+      task,
+      resultStatus: task === "kPlex" ? "OPTIMUM FOUND" : "SATISFIABLE",
+      completeModelEnumeration: true,
+      maximumKPlexSearchComplete: true,
+      hasSolution: false,
+      enumerateAllOptima: true,
+      enumerateAllMaximalKPlex: true
+    }), undefined, `${task} non deve certificare un esito senza almeno un modello interpretato`);
+  }
+});
+
+test("parsed empty answer sets keep valid task-specific outcomes", () => {
+  assert.equal(buildGraph2DStructuralCompletionLabel({
+    task: "kCore",
+    resultStatus: "OPTIMUM FOUND",
+    completeModelEnumeration: true,
+    hasSolution: true,
+    enumerateAllOptima: false
+  }), "k-core calcolato · risultato unico alla soglia");
+  assert.equal(buildGraph2DStructuralCompletionLabel({
+    task: "components",
+    resultStatus: "SATISFIABLE",
+    completeModelEnumeration: true,
+    hasSolution: true,
+    enumerateAllOptima: false
+  }), "Partizione completa · tutte le componenti");
 });
 
 test("maximum k-plex completion follows the proven search and the all-optima setting", () => {
@@ -315,6 +416,12 @@ test("the active panel reads only its own error", () => {
   assert.equal(getGraph2DActiveAnalysisError(null, "provenanceKPlex", errors), "");
 });
 
+test("integrity repair reads its own error rather than the completed integrity check", () => {
+  const errors = { integrity: "verifica precedente completata", integrityRepair: "timeout riparazione" };
+  assert.equal(getGraph2DActiveAnalysisError("integrity", "integrityRepair", errors), "timeout riparazione");
+  assert.equal(getGraph2DActiveAnalysisError("integrity", "integrity", errors), "verifica precedente completata");
+});
+
 test("scenario comparison failures are attributed to the active motif task", () => {
   const errors = {
     motifScenarioComparison: "Confronto interrotto nel secondo mondo",
@@ -337,6 +444,10 @@ test("the 2D result summary excludes completion data from inactive analyses", ()
     structural,
     clique: { resultLabel: "Clique massimali", completionLabel: "Enumerazione completa" }
   }), { resultLabel: "Clique massimali", completionLabel: "Enumerazione completa" });
+});
+
+test("the 2D motif-completion summary reports the minimum proposal cost", () => {
+  assert.match(graphApp, /analysisLabel: "Completamento del motivo",\s*resultSummary: motifCounterfactuals\.length\s*\?\s*`\$\{motifCounterfactuals\.length\} proposte minime · costo minimo \$\{motifCounterfactuals\[0\]\.totalCost\}`/);
 });
 
 test("incomplete or overlay summaries take priority over saved analysis summaries", () => {

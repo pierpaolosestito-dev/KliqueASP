@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   filterSearchableNodeOptions,
   describeSearchableNodeResults,
+  getSearchableOptionsWithCurrentValue,
   getNextSearchableNodeOptionPage,
   getNextEnabledNodeOptionIndex,
   getActiveNodeOptionScrollAdjustment
@@ -24,6 +25,53 @@ test("live search announcements distinguish no match from an empty graph", () =>
   assert.equal(describeSearchableNodeResults("", 0, 0), "Nessun nodo disponibile.");
   assert.equal(describeSearchableNodeResults("chi", 0, 0), "Nessun nodo corrisponde alla ricerca.");
   assert.equal(describeSearchableNodeResults("chi", 2, 30), "2 nodi trovati. 2 opzioni mostrate.");
+});
+
+test("live search announcements can describe JSON fields instead of graph nodes", () => {
+  const copy = {
+    emptyMessage: "Nessun campo JSON disponibile.",
+    noResultsMessage: "Nessun campo JSON corrisponde alla ricerca.",
+    singularResultLabel: "campo trovato",
+    pluralResultLabel: "campi trovati"
+  };
+  assert.equal(describeSearchableNodeResults("", 0, 0, copy), "Nessun campo JSON disponibile.");
+  assert.equal(describeSearchableNodeResults("inesistente", 0, 0, copy), "Nessun campo JSON corrisponde alla ricerca.");
+  assert.equal(describeSearchableNodeResults("id", 1, 1, copy), "1 campo trovato. 1 opzione mostrata.");
+  assert.equal(describeSearchableNodeResults("tipo", 24, 20, copy), "24 campi trovati. 20 opzioni mostrate.");
+});
+
+test("searchable field choices preserve a stale configured path and exclude the clear choice from counts", () => {
+  const discovered = [{ value: "$.id", label: "$.id" }];
+  const prepared = getSearchableOptionsWithCurrentValue(discovered, "$.legacy", "Automatico / radice");
+  assert.deepEqual(prepared, [
+    { value: "$.legacy", label: "$.legacy" },
+    { value: "", label: "Automatico / radice", countable: false },
+    { value: "$.id", label: "$.id" }
+  ]);
+  assert.deepEqual(getSearchableOptionsWithCurrentValue([
+    { value: "$.label", label: "$.label" },
+    { value: "$.id", label: "$.id" }
+  ], "$.id", "Automatico / radice"), [
+    { value: "$.id", label: "$.id" },
+    { value: "", label: "Automatico / radice", countable: false },
+    { value: "$.label", label: "$.label" }
+  ]);
+  assert.equal(getSearchableOptionsWithCurrentValue(discovered, "", "")[0], discovered[0]);
+  assert.deepEqual(discovered, [{ value: "$.id", label: "$.id" }]);
+});
+
+test("a wide JSON schema stays searchable without truncating field paths", () => {
+  const discovered = Array.from({ length: 5000 }, (_, index) => ({
+    value: `$.field_${String(index).padStart(4, "0")}`,
+    label: `$.field_${String(index).padStart(4, "0")}`
+  }));
+  const optionsWithClear = getSearchableOptionsWithCurrentValue(discovered, "$.field_4999", "Nessun mapping");
+  const matches = filterSearchableNodeOptions(optionsWithClear, "field_4999");
+
+  assert.equal(optionsWithClear.length, 5001);
+  assert.equal(optionsWithClear[0].value, "$.field_4999");
+  assert.equal(optionsWithClear[1].countable, false);
+  assert.deepEqual(matches.map(({ value }) => value), ["$.field_4999"]);
 });
 
 test("live search announcements clamp invalid or excessive displayed counts", () => {

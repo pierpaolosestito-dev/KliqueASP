@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "bitcoin-otc",
+  "nodeCount": 5881,
+  "edgeCount": 35592,
+  "initialWindow": {
+    "start": 1305543359824,
+    "end": 1308135359824
+  },
+  "initialWindowEdgeCount": 2698,
+  "bootstrapPath": "bitcoin-otc-bootstrap.json",
+  "shards": [
+    {
+      "path": "bitcoin-otc-shards/part-01.json",
+      "edgeCount": 5483
+    },
+    {
+      "path": "bitcoin-otc-shards/part-02.json",
+      "edgeCount": 5483
+    },
+    {
+      "path": "bitcoin-otc-shards/part-03.json",
+      "edgeCount": 5483
+    },
+    {
+      "path": "bitcoin-otc-shards/part-04.json",
+      "edgeCount": 5483
+    },
+    {
+      "path": "bitcoin-otc-shards/part-05.json",
+      "edgeCount": 5483
+    },
+    {
+      "path": "bitcoin-otc-shards/part-06.json",
+      "edgeCount": 5479
+    }
+  ]
+}

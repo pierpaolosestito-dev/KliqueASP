@@ -16,7 +16,9 @@ export const CSV_DOWNLOAD_REQUESTED_EVENT = "kliqueasp:csv-download-requested";
 
 /** Downloads CSV text and defers object-URL revocation until the browser has handled the click. */
 export function downloadCsvText(filename: string, csv: string): void {
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  // Spreadsheet apps on Windows often need the UTF-8 signature to detect accents reliably.
+  // Keep serializeCsv() BOM-free so generated strings remain convenient for parsers and APIs.
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;

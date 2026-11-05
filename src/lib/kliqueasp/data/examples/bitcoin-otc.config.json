@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 2,
+  "features": {
+    "filters": true,
+    "timeline": true,
+    "labelVisibilityToggle": true,
+    "nodeLabelsVisibleByDefault": false
+  },
+  "timeline": {
+    "start": 1289241911728,
+    "end": 1453684323757,
+    "initialWindow": {
+      "start": 1305543359824,
+      "end": 1308135359824
+    },
+    "debounceMs": 180
+  },
+  "nodeTypes": {
+    "user": {
+      "color": "#4c78a8"
+    }
+  },
+  "colors": {
+    "edgeTypes": {
+      "positive-rating": "#218c72",
+      "negative-rating": "#c44e52"
+    }
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type",
+      "roleField": "$.roles[*]"
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "directed",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.validFrom",
+        "toField": "$.validTo",
+        "numericUnit": "milliseconds"
+      },
+      "weightField": "$.rating",
+      "attributes": {
+        "rating": "$.rating",
+        "polarity": "$.polarity",
+        "sourceTimeSeconds": "$.sourceTimeSeconds"
+      }
+    }
+  },
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "negative-rating",
+        "label": "Rating negativi registrati",
+        "roles": {
+          "rater": {
+            "nodeTypes": [
+              "user"
+            ]
+          },
+          "ratee": {
+            "nodeTypes": [
+              "user"
+            ]
+          }
+        },
+        "edges": [
+          {
+            "sourceRole": "rater",
+            "targetRole": "ratee",
+            "edgeType": "negative-rating",
+            "attributes": {
+              "polarity": -1
+            }
+          }
+        ]
+      },
+      {
+        "id": "opposed-reciprocal-ratings",
+        "label": "Rating reciproci con segno opposto",
+        "roles": {
+          "first": {
+            "nodeTypes": [
+              "user"
+            ]
+          },
+          "second": {
+            "nodeTypes": [
+              "user"
+            ]
+          }
+        },
+        "edges": [
+          {
+            "sourceRole": "first",
+            "targetRole": "second",
+            "edgeType": "positive-rating",
+            "attributes": {
+              "polarity": 1
+            }
+          },
+          {
+            "sourceRole": "second",
+            "targetRole": "first",
+            "edgeType": "negative-rating",
+            "attributes": {
+              "polarity": -1
+            }
+          }
+        ]
+      },
+      {
+        "id": "ordered-negative-rating-chain",
+        "label": "Due rating negativi in sequenza",
+        "roles": {
+          "first": {
+            "nodeTypes": [
+              "user"
+            ]
+          },
+          "middle": {
+            "nodeTypes": [
+              "user"
+            ]
+          },
+          "last": {
+            "nodeTypes": [
+              "user"
+            ]
+          }
+        },
+        "edges": [
+          {
+            "sourceRole": "first",
+            "targetRole": "middle",
+            "edgeType": "negative-rating",
+            "attributes": {
+              "polarity": -1
+            }
+          },
+          {
+            "sourceRole": "middle",
+            "targetRole": "last",
+            "edgeType": "negative-rating",
+            "attributes": {
+              "polarity": -1
+            }
+          }
+        ],
+        "temporal": {
+          "semantics": "orderedByStart",
+          "strict": true
+        }
+      }
+    ]
+  },
+  "graphIntegrity": {
+    "requireNodeTypes": true,
+    "requireEdgeTypes": true,
+    "allowedNodeTypes": [
+      "user"
+    ],
+    "allowedEdgeTypes": [
+      "positive-rating",
+      "negative-rating"
+    ],
+    "requiredEdgeIntervals": [
+      "positive-rating",
+      "negative-rating"
+    ],
+    "edgeTypeDomains": [
+      {
+        "edgeType": "positive-rating",
+        "sourceNodeTypes": [
+          "user"
+        ],
+        "targetNodeTypes": [
+          "user"
+        ]
+      },
+      {
+        "edgeType": "negative-rating",
+        "sourceNodeTypes": [
+          "user"
+        ],
+        "targetNodeTypes": [
+          "user"
+        ]
+      }
+    ],
+    "requiredEdgeAttributes": [
+      {
+        "edgeType": "positive-rating",
+        "attributes": [
+          "rating",
+          "polarity",
+          "sourceTimeSeconds"
+        ]
+      },
+      {
+        "edgeType": "negative-rating",
+        "attributes": [
+          "rating",
+          "polarity",
+          "sourceTimeSeconds"
+        ]
+      }
+    ]
+  }
+}

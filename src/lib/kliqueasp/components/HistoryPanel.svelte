@@ -2,19 +2,19 @@
   export let history: { id: string; label: string }[] = [];
   export let analysisArchive: { id: string; label: string; savedAt: string }[] = [];
   export let onJumpTo: (id: string) => void = () => {};
-  export let onClear: () => void = () => {};
+  export let onDismiss: () => void = () => {};
   export let onRestoreAnalysis: (id: string) => void = () => {};
   export let onClearAnalysisArchive: () => void = () => {};
 </script>
 
 {#if history.length > 0 || analysisArchive.length > 0}
   <div class="history-panel">
-    {#if history.length > 0}
-      <div class="history-head">
-        <strong>Cronologia di navigazione</strong>
-        <button class="clear-btn" type="button" aria-label="Svuota cronologia" on:click={onClear} title="Svuota cronologia">✕</button>
-      </div>
+    <div class="history-head">
+      <strong>{history.length > 0 ? "Cronologia di navigazione" : "Analisi precedenti · stesso grafo"}</strong>
+      <button class="dismiss-btn" type="button" aria-label="Nascondi pannello cronologia" on:click={onDismiss} title="Nascondi pannello">✕</button>
+    </div>
 
+    {#if history.length > 0}
       <div class="crumbs">
         {#each history as item, i}
           <button class="crumb" type="button" on:click={() => onJumpTo(item.id)}>
@@ -30,9 +30,9 @@
     {#if analysisArchive.length > 0}
       <section class="analysis-history" aria-label="Analisi precedenti dello stesso grafo">
         <div class="history-head analysis-head">
-          <strong>Analisi precedenti · stesso grafo</strong>
-          <button class="clear-archive" type="button" on:click={onClearAnalysisArchive} title="Elimina le analisi precedenti">
-            Svuota
+          {#if history.length > 0}<strong>Analisi precedenti · stesso grafo</strong>{/if}
+          <button class="clear-archive" type="button" on:click={onClearAnalysisArchive} title="Svuota archivio delle analisi">
+            Svuota archivio
           </button>
         </div>
         <div class="analysis-list">
@@ -57,7 +57,7 @@
   .history-panel {
     position: absolute;
     left: var(--history-left);
-    bottom: calc(var(--history-bottom) + var(--mobile-status-reserve, 48px));
+    bottom: calc(var(--history-bottom) + max(var(--mobile-status-reserve, 48px), var(--desktop-timeline-reserve, 0px)));
     max-width: var(--history-max-width);
     background: var(--history-bg);
     border-radius: var(--history-radius);
@@ -77,7 +77,7 @@
     margin-bottom: var(--history-header-mb);
   }
 
-  .clear-btn {
+  .dismiss-btn {
     border: none;
     background: var(--history-clear-bg);
     color: inherit;
@@ -85,6 +85,11 @@
     width: var(--history-clear-size);
     height: var(--history-clear-size);
     cursor: pointer;
+  }
+
+  .dismiss-btn:hover,
+  .dismiss-btn:focus-visible {
+    background: rgba(148, 163, 184, 0.24);
   }
 
   .crumbs {
@@ -185,10 +190,21 @@
   @media (max-width: 600px) {
     .history-panel {
       bottom: calc(var(--history-bottom) + max(var(--mobile-status-reserve, 48px), var(--mobile-filter-timeline-reserve, 0px)));
-      width: calc(50vw - 18px);
+      width: min(150px, calc(42vw - 18px));
       max-width: none;
       padding: 8px;
       font-size: 11px;
+    }
+  }
+
+  @media (max-width: 600px) and (max-height: 420px) {
+    .history-panel {
+      top: calc(var(--toolbar-top, 10px) + var(--toolbar-height, 48px) + 4px);
+      right: 0;
+      bottom: auto;
+      left: auto;
+      width: min(142px, calc(100vw - 8px));
+      max-height: min(60vh, calc(100dvh - var(--toolbar-top, 10px) - var(--toolbar-height, 48px) - 24px - 108px));
     }
   }
 </style>

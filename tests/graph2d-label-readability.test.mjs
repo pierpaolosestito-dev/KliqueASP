@@ -4,7 +4,9 @@ import test from "node:test";
 import karateDataset from "../src/lib/kliqueasp/data/examples/karate-club.json" with { type: "json" };
 import {
   buildGraph2DScene,
-  countGraph2DNodeLabelOverlaps
+  countGraph2DNodeLabelOverlaps,
+  describeActiveGraph2DLabelOverlaps,
+  describeGraph2DLabelOverlaps
 } from "../src/lib/kliqueasp/graph/graph2dExport.ts";
 
 const exportPanel = await readFile(new URL("../src/lib/kliqueasp/components/Graph2DExportPanel.svelte", import.meta.url), "utf8");
@@ -12,6 +14,18 @@ const exportPanel = await readFile(new URL("../src/lib/kliqueasp/components/Grap
 test("stima le sovrapposizioni delle etichette con le stesse dimensioni usate nel grafico 2D", () => {
   const karateScene = buildGraph2DScene(karateDataset.nodes, karateDataset.edges, { seed: 7 });
   assert.equal(countGraph2DNodeLabelOverlaps(karateScene, { showLabels: true }), 0);
+
+  const witnessIds = karateDataset.nodes.slice(0, 5).map((node) => node.id);
+  const annotatedKarateScene = buildGraph2DScene(karateDataset.nodes, karateDataset.edges, {
+    graphDirection: "undirected",
+    highlightedNodeIds: witnessIds,
+    nodeAnnotations: Object.fromEntries(witnessIds.map((id) => [id, "nodo selezionato"])),
+    seed: 7
+  });
+  assert.equal(countGraph2DNodeLabelOverlaps(annotatedKarateScene, {
+    showLabels: true,
+    showAnnotations: true
+  }), 1);
 
   const nodes = Array.from({ length: 120 }, (_, index) => ({
     id: String(index),
@@ -32,8 +46,16 @@ test("stima le sovrapposizioni delle etichette con le stesse dimensioni usate ne
 test("l'export avvisa prima del download e lascia attivabili nomi e ID", () => {
   assert.match(exportPanel, /countGraph2DNodeLabelOverlaps\(scene/);
   assert.match(exportPanel, /showLabels = estimatedLabelOverlaps === 0/);
-  assert.match(exportPanel, /Nomi nascosti inizialmente: \{estimatedLabelOverlaps\} coppie di etichette si sovrapporrebbero/);
-  assert.match(exportPanel, /Le etichette attive si sovrappongono in \{activeLabelOverlaps\} coppie/);
+  assert.match(exportPanel, /describeGraph2DLabelOverlaps\(estimatedLabelOverlaps\)/);
+  assert.match(exportPanel, /describeActiveGraph2DLabelOverlaps\(activeLabelOverlaps\)/);
   assert.match(exportPanel, /Nomi dei nodi/);
   assert.match(exportPanel, /Mostra ID dei nodi/);
+});
+
+test("il messaggio sulle collisioni usa numero e verbo corretti", () => {
+  assert.equal(describeGraph2DLabelOverlaps(1), "una coppia di etichette si sovrapporrebbe");
+  assert.equal(describeGraph2DLabelOverlaps(3), "3 coppie di etichette si sovrapporrebbero");
+  assert.equal(describeActiveGraph2DLabelOverlaps(1), "Le etichette attive si sovrappongono in una coppia");
+  assert.equal(describeActiveGraph2DLabelOverlaps(3), "Le etichette attive si sovrappongono in 3 coppie");
+  assert.equal(describeGraph2DLabelOverlaps(0), "0 coppie di etichette si sovrapporrebbero");
 });

@@ -14,7 +14,9 @@ test("opening node details focuses the dialog and closing restores its trigger",
   assert.match(infoPanel, /function openModal\(event: MouseEvent\)[\s\S]*?modalTrigger = event\.currentTarget as HTMLButtonElement[\s\S]*?showModal = true/);
   assert.match(infoPanel, /function focusOnMount\(node: HTMLElement\)[\s\S]*?node\.focus\(\)/);
   assert.match(infoPanel, /use:focusOnMount/);
-  assert.match(infoPanel, /void tick\(\)\.then\(\(\) => \{\s*if \(trigger\?\.isConnected\) trigger\.focus\(\);\s*\}\)/);
+  assert.match(infoPanel, /function dismissModal\(restoreFocus: boolean\)[\s\S]*?void tick\(\)\.then\(\(\) => \{\s*if \(restoreFocus && trigger\?\.isConnected\) trigger\.focus\(\);\s*\}\)/);
+  assert.match(infoPanel, /function closeModal\(\)\s*\{\s*dismissModal\(true\);\s*\}/);
+  assert.match(infoPanel, /async function openDataFromNodeDetails\(\)[\s\S]*?dismissModal\(false\)/);
 });
 
 test("Escape closes node details and Tab stays inside the dialog", () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { base } from "$app/paths";
   import { onMount } from "svelte";
-  import WorkspaceNavigation from "$lib/kliqueasp/components/WorkspaceNavigation.svelte";
 
   import graphConfig from "$lib/kliqueasp/config/graph.config.json";
   import graphDataUrl from "$lib/kliqueasp/data/my-dataset.json?url";
@@ -10,6 +10,7 @@
   let isLoading = true;
   let loadError = "";
   let loadAttempt = 0;
+  const workspaceHref = `${base}/Sandbox/`;
 
   async function loadGraphData() {
     const attempt = ++loadAttempt;
@@ -64,15 +65,13 @@
 </svelte:head>
 
 {#if graphData && GraphAppComponent}
-  <svelte:component this={GraphAppComponent} {graphConfig} {graphData} />
+  <svelte:component this={GraphAppComponent} {graphConfig} {graphData} workspaceNavigationHref={workspaceHref} />
 {:else if loadError}
   <main class="dataset-state dataset-state--error" role="alert">
     <div class="dataset-state__card">
       <h1>Il caso studio non è disponibile</h1>
       <p>{loadError}</p>
-      <button type="button" onclick={loadGraphData} disabled={isLoading}>
-        {isLoading ? "Caricamento…" : "Riprova"}
-      </button>
+      <button type="button" onclick={loadGraphData}>Riprova</button>
     </div>
   </main>
 {:else}
@@ -81,8 +80,6 @@
     <p>Caricamento del grafo del caso psicologi…</p>
   </main>
 {/if}
-
-<WorkspaceNavigation variant="case-study" />
 
 <style>
   .dataset-state {

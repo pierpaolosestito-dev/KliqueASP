@@ -5,6 +5,7 @@ export interface StructuralResultSelectionState {
   selectedDominatingSignature: string;
   selectedKcoreSignature: string;
   selectedKplexSignature: string;
+  selectedResultSignature?: string;
 }
 
 /** Returns a pressed state only for result families whose witness selection is tracked. */
@@ -16,9 +17,9 @@ export function getStructuralResultPressedState(
   switch (task) {
     case "kPlex":
     case "maximalKPlex":
-      return resultSignature === selection.selectedKplexSignature;
+      return resultSignature === (selection.selectedResultSignature ?? selection.selectedKplexSignature);
     case "kCore":
-      return resultSignature === selection.selectedKcoreSignature;
+      return resultSignature === (selection.selectedResultSignature ?? selection.selectedKcoreSignature);
     case "dominatingSet":
       return resultSignature === selection.selectedDominatingSignature;
     case "minimumNodeSeparator":
@@ -26,7 +27,11 @@ export function getStructuralResultPressedState(
     case "minimumEdgeSeparator":
     case "minimumCostEdgeSeparator":
       return resultSignature === selection.activeSeparatorSignature;
-    default:
+    case "communities":
       return undefined;
+    default:
+      return selection.selectedResultSignature === undefined
+        ? undefined
+        : resultSignature === selection.selectedResultSignature;
   }
 }

@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import { displayNodeResultLabel } from "../graph/nodeResultLabel.ts";
+  import { buildGraph2DOptimizationCompletionLabel } from "../graph/graph2DAnalysisOutcome.ts";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
   import CounterfactualConfigHint from "./CounterfactualConfigHint.svelte";
   import { describeTypedPathCounterfactualBlocker } from "../graph/analysisReadiness";
@@ -58,9 +61,23 @@
     goalNodeId,
     edgeTypeSequence
   });
+  $: runBlockerDescriptionId = [
+    running ? "analysis-in-progress-status" : "",
+    requirementReasons.length > 0 ? "typed-path-counterfactual-requirements" : "",
+    !enabled && requirementReasons.length === 0 ? "typed-path-counterfactual-config" : "",
+    prerequisiteMessage ? "typed-path-counterfactual-readiness" : ""
+  ].filter(Boolean).join(" ") || undefined;
+  $: completionLabel = hasRun
+    ? buildGraph2DOptimizationCompletionLabel({
+        optimizationProven: true,
+        hasSolution: proposals.length > 0,
+        enumerateAllOptima,
+        allOptimaEnumerationComplete: hasRun
+      })
+    : "";
 
   function nodeLabel(nodeId: string): string {
-    return nodeLabelById[nodeId] ?? sourceIdByNodeId[nodeId] ?? nodeId;
+    return displayNodeResultLabel(nodeId, nodeLabelById, sourceIdByNodeId);
   }
 
   function temporalSemanticsLabel(semantics: TypedPathTemporalSemantics): string {
@@ -88,7 +105,7 @@
   }
 
   function requestRun() {
-    if (!enabled || requirementReasons.length > 0 || prerequisiteMessage) return;
+    if (running || !enabled || requirementReasons.length > 0 || prerequisiteMessage) return;
     searchPending = true;
     dispatch("run", {
       startNodeId,
@@ -153,14 +170,19 @@
   }
 </script>
 
-<section class="typed-path-counterfactual" aria-live="polite">
+<section class="typed-path-counterfactual">
   <strong>Completamento controfattuale del cammino</strong>
   <p>Trova la combinazione di archi candidati dichiarati a costo minimo che consente il cammino fra i terminali, rispettando sequenza e direzione. I candidati sono ipotetici: il grafo osservato resta invariato.</p>
   {#if requirementReasons.length > 0}
-    <small>{requirementReasons.join("; ")}</small>
-    <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
+    <div id="typed-path-counterfactual-requirements" class="requirement-reasons" role="status" aria-live="polite">
+      <ProgressiveList items={requirementReasons} label="prerequisiti del cammino" let:item>
+        <div>{item}</div>
+      </ProgressiveList>
+    </div>
+    <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mappatura</button>
   {:else if !enabled}
     <CounterfactualConfigHint
+      descriptionId="typed-path-counterfactual-config"
       description="Aggiungi archi candidati e costi positivi nella configurazione del grafo per abilitare questa ricerca."
       on:openData={() => dispatch("openData")}
     />
@@ -170,17 +192,19 @@
       : "Gli intervalli validity dei candidati sono richiesti e partecipano al vincolo temporale; il costo e il tipo sono quelli dichiarati nella configurazione."}</small>
   {/if}
   {#if prerequisiteMessage}
-    <small class="readiness-message" role="status">{prerequisiteMessage}</small>
+    <small id="typed-path-counterfactual-readiness" class="readiness-message" role="status" aria-live="polite">{prerequisiteMessage}</small>
   {/if}
   <label class="checkbox-label">
     <span>Proposte</span>
-    <span><input type="checkbox" bind:checked={enumerateAllOptima} on:change={() => dispatch("criteriaChange")} /> Tutte le proposte minime</span>
+    <span><input type="checkbox" bind:checked={enumerateAllOptima} on:change={() => dispatch("criteriaChange")} aria-describedby={running ? "typed-path-counterfactual-enumeration-help analysis-in-progress-status" : "typed-path-counterfactual-enumeration-help"} disabled={running} /> Tutte le proposte minime</span>
   </label>
-  <button type="button" disabled={running || !enabled || requirementReasons.length > 0 || Boolean(prerequisiteMessage)} on:click={requestRun}>
+  <small id="typed-path-counterfactual-enumeration-help">Per impostazione predefinita è mostrata una proposta minima; attiva l'opzione per elencare tutti i pareggi di costo minimo.</small>
+  <button type="button" aria-describedby={runBlockerDescriptionId} disabled={running || !enabled || requirementReasons.length > 0 || Boolean(prerequisiteMessage)} on:click={requestRun}>
     {running && searchPending ? "Ricerca in corso…" : "Calcola le aggiunte minime"}
   </button>
 {#if error}<AnalysisErrorMessage message={error} />{/if}
   {#if hasRun}
+    <AnalysisCompletionStatus label={completionLabel} />
     {#if timeMs !== undefined}<small>Tempo di calcolo: {formatItalianNumber(timeMs, 1)} ms.</small>{/if}
     {#if excludedCandidateCount > 0}<small>{excludedCandidateCount} candidati esclusi perché fuori dalla proiezione/gruppo, irrilevanti per la sequenza o già osservati con lo stesso tipo e verso.</small>{/if}
     {#if proposals.length === 0}
@@ -190,11 +214,11 @@
           {#if "temporalSemantics" in whyNot}
             <strong>Diagnosi temporale nel grafo massimo dichiarato</strong>
             <p>
-              La verifica include tutti gli archi osservati e tutti i {whyNot.candidateEdgeIds.length} candidati eleggibili; vincolo temporale: {temporalSemanticsLabel(whyNot.temporalSemantics)}.
+              Esamina {whyNot.candidateEdgeIds.length} archi candidati e quelli osservati. Semantica temporale: {temporalSemanticsLabel(whyNot.temporalSemantics)}.
               {#if whyNot.goalReachableAsWalk}
-                La meta è raggiungibile con un cammino temporale con ripetizioni, ma non con un cammino semplice: vengono rivisitati {whyNot.repeatedNodeIds.length} nodi.
+                La meta è raggiungibile solo ripetendo nodi; non esiste un cammino semplice ({whyNot.repeatedNodeIds.length} nodi rivisitati).
               {:else if whyNot.firstBlockedStep !== undefined}
-                Il prefisso massimo si ferma a {whyNot.maximumPrefixLength} passi; il passo {whyNot.firstBlockedStep} ({edgeTypeSequence[whyNot.firstBlockedStep - 1] ?? "tipo non disponibile"}) non è compatibile con gli intervalli e l'ordine temporale.
+                Si arresta dopo {whyNot.maximumPrefixLength} passi: il tipo {edgeTypeSequence[whyNot.firstBlockedStep - 1] ?? "non disponibile"} al passo {whyNot.firstBlockedStep} non rispetta intervalli e ordine.
               {/if}
             </p>
             {#if whyNot.goalReachableAsWalk && whyNot.repeatedNodeIds.length > 0}
@@ -230,13 +254,13 @@
           {:else}
             <strong>Diagnosi nel grafo massimo dichiarato</strong>
             <p>
-              La verifica include tutti gli archi osservati e tutti i {whyNot.candidateEdgeIds.length} candidati eleggibili.
+              Grafo massimo: {whyNot.candidateEdgeIds.length} archi candidati più gli archi osservati.
               {#if whyNot.firstEmptyStep !== undefined}
-                Dopo il passo {whyNot.firstEmptyStep} ({edgeTypeSequence[whyNot.firstEmptyStep - 1] ?? "tipo non disponibile"}) non resta alcun nodo raggiungibile.
+                Nessun nodo è raggiungibile dopo il passo {whyNot.firstEmptyStep} (tipo {edgeTypeSequence[whyNot.firstEmptyStep - 1] ?? "non disponibile"}).
               {:else if whyNot.goalReachableAsWalk}
-                La meta è raggiungibile rispettando i tipi con un cammino che ripete nodi, ma non esiste un cammino semplice: ogni sequenza completa deve rivisitare un nodo.
+                La meta è raggiungibile solo ripetendo nodi; non esiste un cammino semplice.
               {:else}
-                La meta non è raggiungibile dopo la sequenza completa, anche se alcuni prefissi intermedi hanno nodi raggiungibili.
+                La sequenza completa non raggiunge la meta, ma alcuni prefissi intermedi sono possibili.
               {/if}
             </p>
             <details class="candidate-records">
@@ -251,9 +275,9 @@
                 <li>
                   <div class="proposal-heading">
                     <span>Prefisso {layer.step}{layer.step > 0 ? `: ${edgeTypeSequence[layer.step - 1] ?? ""}` : ": nodo iniziale"}: {layer.nodeIds.length} nodi</span>
-                    <button type="button" disabled={layer.nodeIds.length === 0} on:click={() => dispatch("highlight", layer.nodeIds)}>Evidenzia</button>
+                    <button type="button" aria-describedby={layer.nodeIds.length === 0 ? `typed-path-prefix-nodes-${layer.step}` : undefined} disabled={layer.nodeIds.length === 0} on:click={() => dispatch("highlight", layer.nodeIds)}>Evidenzia</button>
                   </div>
-                  <span>{layer.nodeIds.length > 0 ? visibleLayerNodeIds.map(nodeLabel).join(", ") : "nessuno"}{layer.nodeIds.length > visibleLayerNodeIds.length ? ` · +${layer.nodeIds.length - visibleLayerNodeIds.length} altri nodi` : ""}</span>
+                  <span id={`typed-path-prefix-nodes-${layer.step}`}>{layer.nodeIds.length > 0 ? visibleLayerNodeIds.map(nodeLabel).join(", ") : "Nessun nodo raggiungibile in questo prefisso."}{layer.nodeIds.length > visibleLayerNodeIds.length ? ` · +${layer.nodeIds.length - visibleLayerNodeIds.length} altri nodi` : ""}</span>
                   <ResultListPager
                     total={layer.nodeIds.length}
                     visible={visibleLayerNodeIds.length}
@@ -270,6 +294,7 @@
       {:else if whyNotError}
         <AnalysisErrorMessage message={whyNotError} />
       {/if}
+      <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Rivedi archi candidati in Dati</button>
     {:else}
       <ol class="proposal-list">
         {#each visibleProposals as proposal, index}
@@ -282,7 +307,8 @@
                 dispatch("highlightCounterfactual", {
                   proposal,
                   nodeIds: proposal.path.nodeIds,
-                  title: "Cammino tipizzato controfattuale"
+                  title: "Cammino tipizzato controfattuale",
+                  completionLabel
                 });
               }}>Visualizza proposta in 2D</button>
             </div>
@@ -349,4 +375,5 @@
   .prefix-list > li { margin-top: 0.25rem; }
   .proposal-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
   .readiness-action { justify-self: start; color: #1e4d68; }
+  .requirement-reasons { display: grid; gap: 3px; max-height: 140px; overflow: auto; overflow-wrap: anywhere; }
 </style>

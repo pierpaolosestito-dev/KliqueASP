@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import { displayNodeResultLabel } from "../graph/nodeResultLabel.ts";
+  import { buildGraph2DOptimizationCompletionLabel } from "../graph/graph2DAnalysisOutcome.ts";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
   import CounterfactualConfigHint from "./CounterfactualConfigHint.svelte";
   import SearchableNodeSelect from "./SearchableNodeSelect.svelte";
@@ -37,6 +40,7 @@
   export let excludedCandidateCount = 0;
   export let cohortNodeIds: string[] = [];
   export let sourceIdByNodeId: Record<string, string> = {};
+  export let nodeLabelById: Record<string, string> = {};
   export let targetNodeSelection = false;
   export let targetNodeId = "";
   export let targetNodeFieldLabel = "Nodo obiettivo";
@@ -51,6 +55,7 @@
   let visibleKCoreWhyNotBlockerLimit = counterfactualPageSize;
   let visibleKCoreMembershipPeelingLimit = counterfactualPageSize;
   let visibleProposalEdgeLimits: Record<number, number> = {};
+  let selectedProposalIndex: number | null = null;
   let previousProposals = proposals;
   let previousWhyNot = whyNot;
   let previousKCoreWhyNot = kCoreWhyNot;
@@ -59,6 +64,7 @@
     previousProposals = proposals;
     visibleProposalLimit = counterfactualPageSize;
     visibleProposalEdgeLimits = {};
+    selectedProposalIndex = null;
   }
   $: visibleProposals = proposals.slice(0, visibleProposalLimit);
   $: if (whyNot !== previousWhyNot) {
@@ -94,15 +100,35 @@
     targetNodeCount: targetNodeOptions.length,
     targetNodeSelected: targetNodeOptions.some((option) => option.id === targetNodeId)
   });
+  $: runBlockerDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    unavailableReason ? "structural-counterfactual-unavailable" : "",
+    !unavailableReason && !candidateEnabled ? "structural-counterfactual-config" : "",
+    !unavailableReason && prerequisiteMessage && !invalidTarget ? "structural-counterfactual-readiness" : "",
+    invalidTarget && !running ? "structural-counterfactual-target-error" : ""
+  ].filter(Boolean).join(" ") || undefined;
+  $: completionLabel = hasRun
+    ? buildGraph2DOptimizationCompletionLabel({
+        optimizationProven: true,
+        hasSolution: proposals.length > 0,
+        enumerateAllOptima,
+        allOptimaEnumerationComplete: hasRun
+      })
+    : "";
   $: searchableTargetNodeOptions = targetNodeOptions.map((option) => ({
     value: option.id,
-    label: sourceIdByNodeId[option.id] ?? option.label
+    label: displayNodeResultLabel(option.id, nodeLabelById, sourceIdByNodeId)
   }));
 
+  function resultNodeLabel(nodeId: string): string {
+    return displayNodeResultLabel(nodeId, nodeLabelById, sourceIdByNodeId);
+  }
+
   function run() {
-    if (!candidateEnabled || invalidTarget || cohortNodeIds.length === 0 ||
+    if (running || !candidateEnabled || invalidTarget || cohortNodeIds.length === 0 ||
       (targetNodeSelection && !targetNodeOptions.some((option) => option.id === targetNodeId))) return;
     searchPending = true;
+    selectedProposalIndex = null;
     dispatch("run", {
       target: Number(target),
       cohortNodeIds: [...cohortNodeIds],
@@ -111,14 +137,20 @@
     });
   }
 
+  function criteriaChanged() {
+    selectedProposalIndex = null;
+    dispatch("criteriaChange");
+  }
+
   function highlight(proposal: StructuralEdgeCompletionProposal) {
     const nodeIds = [...new Set([
-      ...(proposal.coreWitnessNodeIds ?? []),
+      ...(proposal.coreWitnessNodeIds?.length ? proposal.coreWitnessNodeIds : cohortNodeIds),
       ...proposal.addedEdges.flatMap((edge) => [edge.sourceNodeId, edge.targetNodeId])
     ])];
     if (nodeIds.length > 0) {
+      selectedProposalIndex = proposals.indexOf(proposal);
       dispatch("highlight", nodeIds);
-      dispatch("highlightCounterfactual", { proposal, nodeIds, title });
+      dispatch("highlightCounterfactual", { proposal, nodeIds, title, completionLabel });
     }
   }
 
@@ -243,37 +275,44 @@
           options={searchableTargetNodeOptions}
           ariaLabel={targetNodeFieldLabel}
           placeholder="Cerca nodo…"
+          disabledDescriptionId={running ? "analysis-in-progress-status" : undefined}
           disabled={running}
-          on:change={() => dispatch("criteriaChange")}
+          on:change={criteriaChanged}
         />
       </label>
     {/if}
   {/if}
   <label class="counterfactual-field">
     {targetLabel}
-    <input type="number" bind:value={target} on:input={() => dispatch("criteriaChange")} min={minimumTarget} max={maximumTarget} step="1" />
+    <input type="number" bind:value={target} on:input={criteriaChanged} min={minimumTarget} max={maximumTarget} step="1" disabled={running}
+      aria-invalid={invalidTarget ? "true" : undefined}
+      aria-describedby={running ? "analysis-in-progress-status" : invalidTarget ? "structural-counterfactual-target-error" : undefined} />
   </label>
+  {#if invalidTarget && !running}
+    <small id="structural-counterfactual-target-error" class="readiness-message" role="status" aria-live="polite">{prerequisiteMessage}</small>
+  {/if}
   <small>{targetHelp}</small>
   {#if unavailableReason}
-    <small>{unavailableReason}</small>
+    <small id="structural-counterfactual-unavailable" role="status" aria-live="polite">{unavailableReason}</small>
   {:else if !candidateEnabled}
     <CounterfactualConfigHint
+      descriptionId="structural-counterfactual-config"
       description="Aggiungi archi candidati e costi positivi per attivare il completamento ipotetico."
       on:openData={() => dispatch("openData")}
     />
   {:else}
     <small>Candidati configurati: {candidateCount}. Il tipo d'arco resta informazione descrittiva; i vincoli usano adiacenza non orientata.{showEnumeration ? ` ${enumerateAllOptima ? "Saranno mostrate tutte le proposte con costo minimo." : "Sarà mostrata una proposta minima."}` : ""}</small>
   {/if}
-  {#if !unavailableReason && candidateEnabled && prerequisiteMessage}
-    <small class="readiness-message" role="status">{prerequisiteMessage}</small>
+  {#if !unavailableReason && candidateEnabled && prerequisiteMessage && !invalidTarget}
+    <small id="structural-counterfactual-readiness" class="readiness-message" role="status" aria-live="polite">{prerequisiteMessage}</small>
   {/if}
   {#if showEnumeration && !unavailableReason && candidateEnabled}
     <label class="checkbox-label">
       <span>Proposte</span>
-      <span><input type="checkbox" bind:checked={enumerateAllOptima} on:change={() => dispatch("criteriaChange")} /> Tutte le proposte minime</span>
+        <span><input type="checkbox" bind:checked={enumerateAllOptima} on:change={criteriaChanged} aria-describedby={running ? "analysis-in-progress-status" : undefined} disabled={running} /> Tutte le proposte minime</span>
     </label>
   {/if}
-  <button type="button" disabled={running || !candidateEnabled || Boolean(unavailableReason) || invalidTarget || cohortNodeIds.length === 0 ||
+  <button type="button" aria-describedby={runBlockerDescriptionIds} disabled={running || !candidateEnabled || Boolean(unavailableReason) || invalidTarget || cohortNodeIds.length === 0 ||
     (targetNodeSelection && !targetNodeOptions.some((option) => option.id === targetNodeId))} on:click={run}>
     {running && searchPending ? "Ricerca in corso…" : "Calcola completamento minimo"}
   </button>
@@ -281,6 +320,7 @@
       <AnalysisErrorMessage message={error} />
   {/if}
   {#if hasRun}
+    <AnalysisCompletionStatus label={completionLabel} />
     {#if excludedCandidateCount > 0}
       <p>{excludedCandidateCount} candidati esclusi perché fuori dal testimone, dalla proiezione visibile o già adiacenti.</p>
     {/if}
@@ -292,12 +332,12 @@
           <ul>
             {#each visibleWhyNotBlockers as blocker}
               <li>
-                <strong>{sourceIdByNodeId[blocker.nodeId] ?? blocker.nodeId}</strong>: {blocker.unfillableMissingNeighborIds.length} coppie mancanti senza candidato.
+                <strong>{resultNodeLabel(blocker.nodeId)}</strong>: {blocker.unfillableMissingNeighborIds.length} coppie mancanti senza candidato.
                 {#if blocker.unfillableMissingNeighborIds.length > 0}
                   <div class="counterfactual-evidence-list">
                     <strong>Nodi senza arco candidato</strong>
                     <ProgressiveList items={blocker.unfillableMissingNeighborIds} resetKey={blocker} label="nodi senza arco candidato" let:item>
-                      <span>{sourceIdByNodeId[item] ?? item}</span>
+                      <span>{resultNodeLabel(item)}</span>
                     </ProgressiveList>
                   </div>
                 {/if}
@@ -321,12 +361,12 @@
           <ul>
             {#each visibleKCoreWhyNotBlockers as blocker}
               <li>
-                <strong>{sourceIdByNodeId[blocker.nodeId] ?? blocker.nodeId}</strong>: grado attuale {blocker.currentNeighborIds.length}; massimo raggiungibile {blocker.maximumAchievableDegree} &lt; {kCoreWhyNot.targetK}.
+                <strong>{resultNodeLabel(blocker.nodeId)}</strong>: grado attuale {blocker.currentNeighborIds.length}; massimo raggiungibile {blocker.maximumAchievableDegree} &lt; {kCoreWhyNot.targetK}.
                 {#if blocker.additionalCandidateNeighborIds.length > 0}
                   <div class="counterfactual-evidence-list">
                     <strong>Vicini aggiungibili · {blocker.additionalCandidateNeighborIds.length}</strong>
                     <ProgressiveList items={blocker.additionalCandidateNeighborIds} resetKey={blocker} label="vicini aggiungibili" let:item>
-                      <span>{sourceIdByNodeId[item] ?? item}</span>
+                      <span>{resultNodeLabel(item)}</span>
                     </ProgressiveList>
                   </div>
                 {:else}
@@ -348,16 +388,16 @@
           </div>
         {:else if kCoreMembershipWhyNot}
           {@const targetStep = kCoreMembershipWhyNot.peeling.find((step) => step.nodeId === kCoreMembershipWhyNot.targetNodeId)}
-          <p>Anche aggiungendo tutti gli archi candidati autorizzati nel dominio selezionato, {sourceIdByNodeId[kCoreMembershipWhyNot.targetNodeId] ?? kCoreMembershipWhyNot.targetNodeId} viene eliminato dal {kCoreMembershipWhyNot.targetK}-core al turno {targetStep?.round}. I turni mostrati bastano a spiegare l'esclusione del nodo: ogni sottoinsieme di queste aggiunte produce un grafo contenuto nel grafo massimo esaminato, quindi il nodo non può appartenere al core nei completamenti ammessi.</p>
+          <p>Anche aggiungendo tutti gli archi candidati autorizzati nel dominio selezionato, {resultNodeLabel(kCoreMembershipWhyNot.targetNodeId)} viene eliminato dal {kCoreMembershipWhyNot.targetK}-core al turno {targetStep?.round}. I turni mostrati bastano a spiegare l'esclusione del nodo: ogni sottoinsieme di queste aggiunte produce un grafo contenuto nel grafo massimo esaminato, quindi il nodo non può appartenere al core nei completamenti ammessi.</p>
           <ol>
             {#each visibleKCoreMembershipPeeling as step}
               <li>
-                Turno {step.round}: <strong>{sourceIdByNodeId[step.nodeId] ?? step.nodeId}</strong> ha {step.survivingNeighborIds.length} vicini ancora attivi, meno della soglia {kCoreMembershipWhyNot.targetK}.
+                Turno {step.round}: <strong>{resultNodeLabel(step.nodeId)}</strong> ha {step.survivingNeighborIds.length} vicini ancora attivi, meno della soglia {kCoreMembershipWhyNot.targetK}.
                 {#if step.survivingNeighborIds.length > 0}
                   <div class="counterfactual-evidence-list">
                     <strong>Vicini ancora attivi · {step.survivingNeighborIds.length}</strong>
                     <ProgressiveList items={step.survivingNeighborIds} resetKey={step} label="vicini ancora attivi" let:item>
-                      <span>{sourceIdByNodeId[item] ?? item}</span>
+                      <span>{resultNodeLabel(item)}</span>
                     </ProgressiveList>
                   </div>
                 {/if}
@@ -377,28 +417,29 @@
           </div>
         {:else}
           <p>I candidati autorizzati non bastano a raggiungere il valore richiesto.</p>
-          {#if whyNotMessage}<small>{whyNotMessage}</small>{/if}
-          {#if kCoreWhyNotMessage}<small>{kCoreWhyNotMessage}</small>{/if}
-          {#if kCoreMembershipWhyNotMessage}<small>{kCoreMembershipWhyNotMessage}</small>{/if}
+          {#if whyNotMessage}<small role="status" aria-live="polite">{whyNotMessage}</small>{/if}
+          {#if kCoreWhyNotMessage}<small role="status" aria-live="polite">{kCoreWhyNotMessage}</small>{/if}
+          {#if kCoreMembershipWhyNotMessage}<small role="status" aria-live="polite">{kCoreMembershipWhyNotMessage}</small>{/if}
         {/if}
+        <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Rivedi archi candidati</button>
       {:else}
         <strong>{proposals.length}</strong> proposta{proposals.length === 1 ? " minima" : " minime"} a costo minimo {#if timeMs !== undefined}<span>· {formatItalianNumber(timeMs, 1)} ms</span>{/if}
         {#each visibleProposals as proposal, proposalIndex}
           {@const visibleAddedEdges = proposal.addedEdges.slice(0, visibleProposalEdgeLimits[proposalIndex] ?? counterfactualPageSize)}
-          <div class="counterfactual-proposal">
+          <div class="counterfactual-proposal" class:selected={selectedProposalIndex === proposalIndex}>
             <strong>Proposta {proposalIndex + 1} · costo totale {proposal.totalCost}</strong>
             {#if proposal.coreWitnessNodeIds && proposal.coreWitnessNodeIds.length > 0}
               <div class="counterfactual-evidence-list">
                 <strong>Testimone di appartenenza al k-core · {proposal.coreWitnessNodeIds.length} nodi</strong>
                 <ProgressiveList items={proposal.coreWitnessNodeIds} resetKey={proposal} label="nodi del testimone k-core" let:item>
-                  <span>{sourceIdByNodeId[item] ?? item}</span>
+                  <span>{resultNodeLabel(item)}</span>
                 </ProgressiveList>
               </div>
             {/if}
             {#if proposal.addedEdges.length > 0}
               <ul>
                 {#each visibleAddedEdges as edge}
-                  <li>{sourceIdByNodeId[edge.sourceNodeId] ?? edge.sourceNodeId} — {sourceIdByNodeId[edge.targetNodeId] ?? edge.targetNodeId} · {edge.edgeType} · costo {edge.cost} · ID {edge.id}</li>
+                  <li>{resultNodeLabel(edge.sourceNodeId)} — {resultNodeLabel(edge.targetNodeId)} · {edge.edgeType} · costo {edge.cost} · ID {edge.id}</li>
                 {/each}
               </ul>
               <ResultListPager
@@ -408,10 +449,10 @@
                 label="archi proposti"
                 showMore={() => showMoreProposalEdges(proposalIndex)}
               />
-              <button type="button" on:click={() => highlight(proposal)}>Evidenzia gli estremi proposti</button>
+              <button type="button" aria-pressed={selectedProposalIndex === proposalIndex} on:click={() => highlight(proposal)}>Evidenzia gli estremi proposti</button>
             {:else}
               <p>{targetNodeSelection ? "Il nodo obiettivo appartiene già a un k-core con questa soglia; non serve aggiungere archi." : "I nodi selezionati soddisfano già il valore richiesto; non serve aggiungere archi."}</p>
-              <button type="button" on:click={() => highlight(proposal)}>Visualizza risultato in 2D</button>
+              <button type="button" aria-pressed={selectedProposalIndex === proposalIndex} on:click={() => highlight(proposal)}>Visualizza risultato in 2D</button>
             {/if}
           </div>
         {/each}
@@ -545,6 +586,19 @@
     padding: 8px;
     border-radius: 6px;
     background: #fff;
+  }
+
+  .counterfactual-proposal.selected {
+    outline: 2px solid #0f766e;
+    outline-offset: 1px;
+  }
+
+  .counterfactual-proposal button[aria-pressed="true"] {
+    border-color: #0f766e;
+    background: #ccfbf1;
+    color: #134e4a;
+    outline: 2px solid #0f766e;
+    outline-offset: 1px;
   }
 
   .counterfactual-proposal ul {

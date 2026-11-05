@@ -1,7 +1,10 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
+  import { displayNodeResultLabelWithSourceId } from "../graph/nodeResultLabel.ts";
+  import { buildGraph2DOptimizationCompletionLabel } from "../graph/graph2DAnalysisOutcome.ts";
   import { downloadCsvText } from "../csvExport";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
   import ResultListPager from "./ResultListPager.svelte";
   import ProgressiveList from "./ProgressiveList.svelte";
@@ -33,15 +36,29 @@
   const pairWitnessPageSize = 25;
   let pairWitnessLimits: Record<string, number> = {};
   let expandedResultKey: string | null = null;
+  let selectedResultKey: string | null = null;
   let previousResults = results;
   let criteriaChangedAfterRun = false;
   $: maximumSize = results[0]?.nodeIds.length ?? 0;
+  $: completionLabel = hasRun
+    ? buildGraph2DOptimizationCompletionLabel({
+        optimizationProven: true,
+        hasSolution: results.length > 0,
+        enumerateAllOptima,
+        allOptimaEnumerationComplete: hasRun
+      })
+    : "";
   $: searchableGroupOptions = availableGroups.map((group) => ({ value: group, label: group }));
+  $: actionDescriptionIds = [
+    running ? "analysis-in-progress-status" : "",
+    !available || !config ? "contextual-clique-readiness" : ""
+  ].filter(Boolean).join(" ") || undefined;
   $: visibleResults = results.slice(0, visibleLimit);
   $: if (results !== previousResults) {
     previousResults = results;
     pairWitnessLimits = {};
     expandedResultKey = null;
+    selectedResultKey = null;
   }
 
   function pairWitnessKey(result: ContextualCliqueResult): string {
@@ -70,11 +87,13 @@
     visibleLimit = 30;
     criteriaChangedAfterRun = false;
     expandedResultKey = null;
+    selectedResultKey = null;
     dispatch("run", { selectedGroup, enumerateAllOptima });
   }
 
   function criteriaChanged() {
     if (hasRun || results.length > 0) criteriaChangedAfterRun = true;
+    selectedResultKey = null;
     dispatch("criteriaChange");
   }
 
@@ -82,6 +101,7 @@
     visibleLimit = 30;
     criteriaChangedAfterRun = false;
     expandedResultKey = null;
+    selectedResultKey = null;
     dispatch("clear");
   }
 
@@ -91,11 +111,11 @@
   }
 
   function displayNode(nodeId: string, sourceId: string): string {
-    const label = nodeLabelById[nodeId] ?? nodeId;
-    return `${label} (${sourceId})`;
+    return displayNodeResultLabelWithSourceId(nodeId, nodeLabelById, sourceId);
   }
 
   function highlight(result: ContextualCliqueResult) {
+    selectedResultKey = pairWitnessKey(result);
     dispatch("highlight", result);
   }
 
@@ -112,10 +132,15 @@
     <div>
       <h4 id="contextual-clique-title">Gruppo coeso contestuale</h4>
       {#if config}
-        <small>
-          Focus: <code>{JSON.stringify(config.focusNodeTypes)}</code> · contesti: <code>{JSON.stringify(config.contextNodeTypes)}</code> · relazioni: <code>{JSON.stringify(config.edgeTypes)}</code>.
-          Cerca il massimo gruppo in cui ogni coppia di nodi focali condivide almeno un contesto nella proiezione corrente.
-        </small>
+        <small>Cerca il gruppo più grande di nodi focali in cui ogni coppia condivide un nodo di contesto, secondo i tipi e le relazioni configurati.</small>
+        <details class="contextual-config">
+          <summary>Tipi e relazioni inclusi</summary>
+          <dl>
+            <div><dt>Nodi focali</dt><dd><code>{JSON.stringify(config.focusNodeTypes)}</code></dd></div>
+            <div><dt>Nodi di contesto</dt><dd><code>{JSON.stringify(config.contextNodeTypes)}</code></dd></div>
+            <div><dt>Relazioni</dt><dd><code>{JSON.stringify(config.edgeTypes)}</code></dd></div>
+          </dl>
+        </details>
       {:else}
         <small>Configura i tipi di nodi focali, i nodi di contesto e le relazioni che li collegano per rendere disponibile questa analisi.</small>
       {/if}
@@ -123,8 +148,12 @@
   </div>
 
   <p class="semantics">
-    La coesione è pairwise: coppie diverse possono essere sostenute da contesti diversi. Il risultato non richiede che tutto il gruppo condivida un unico contesto e non assegna da solo un significato sociale alle relazioni.
+    Ogni coppia deve condividere un contesto; coppie diverse possono condividerne uno diverso. La misura è strutturale.
   </p>
+  <details class="semantics-detail">
+    <summary>Come interpretare questa misura</summary>
+    <p>Non richiede un unico contesto condiviso da tutto il gruppo e non attribuisce di per sé significato sociale ai legami.</p>
+  </details>
 
   <div class="controls">
     <label>
@@ -135,15 +164,17 @@
         options={searchableGroupOptions}
         ariaLabel="Cerca un gruppo di nodi focali"
         placeholder="Tutti i nodi focali"
+        disabledDescriptionId={running ? "analysis-in-progress-status" : undefined}
         disabled={running}
         on:change={criteriaChanged}
       />
     </label>
     <label class="all-optima">
-      <input type="checkbox" bind:checked={enumerateAllOptima} disabled={running} on:change={criteriaChanged} />
+      <input type="checkbox" bind:checked={enumerateAllOptima} aria-describedby={running ? "contextual-clique-enumeration-help analysis-in-progress-status" : "contextual-clique-enumeration-help"} disabled={running} on:change={criteriaChanged} />
       Mostra tutti i gruppi massimi
     </label>
-    <button type="button" class="run" on:click={run} disabled={running || !available || !config}>
+    <small id="contextual-clique-enumeration-help" class="all-optima-help">Attiva per elencare tutti i gruppi con la stessa cardinalità massima.</small>
+    <button type="button" class="run" on:click={run} aria-describedby={actionDescriptionIds} disabled={running || !available || !config}>
       {running ? "Ricerca in corso…" : "Trova gruppo contestuale massimo"}
     </button>
   </div>
@@ -152,12 +183,16 @@
     <p class="criteria-change" role="status">Criteri modificati: rilancia la ricerca per aggiornare il risultato.</p>
   {/if}
 
-  <div class="readiness" role="status">
+  <div id="contextual-clique-readiness" class="readiness" role="status">
     <strong>{available ? "Prerequisiti disponibili" : "Prerequisiti non soddisfatti"}</strong>
     <span>{graphNodesCount} nodi · {graphEdgesCount} archi visibili · cardinalità minima {config?.minimumSize ?? 3}</span>
     {#if requirementReasons.length > 0}
-      <ul>{#each requirementReasons as reason}<li>{reason}</li>{/each}</ul>
-      <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mapping</button>
+      <div class="readiness-reasons">
+        <ProgressiveList items={requirementReasons} label="prerequisiti mancanti" let:item>
+          <div>{item}</div>
+        </ProgressiveList>
+      </div>
+      <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Apri Dati e mappatura</button>
     {/if}
   </div>
 
@@ -166,6 +201,7 @@
   {/if}
 
   {#if hasRun}
+    <AnalysisCompletionStatus label={completionLabel} />
     <div class="summary" role="status">
       {#if results.length === 0}
         Nessun gruppo contestuale raggiunge la cardinalità minima configurata.
@@ -175,11 +211,17 @@
       {/if}
       {#if timeMs !== undefined}<span> · {formatItalianNumber(timeMs, 1)} ms</span>{/if}
     </div>
+    {#if results.length === 0}
+      <div class="no-result-next-step">
+        <p>Abbassa la cardinalità minima oppure rivedi in Dati i tipi di nodo e le relazioni usati per definire il contesto.</p>
+        <button type="button" class="readiness-action" on:click={() => dispatch("openData")}>Rivedi configurazione</button>
+      </div>
+    {/if}
     <div class="results-heading">
       <strong>Gruppi e contesti testimoni</strong>
       <div>
         <button type="button" on:click={exportCsv}>Esporta CSV</button>
-        <button type="button" on:click={clear}>Cancella</button>
+        <button type="button" on:click={clear}>Cancella risultati</button>
       </div>
     </div>
     {#if results.length > 0}
@@ -188,7 +230,7 @@
           <li>
             <div class="group-heading">
               <strong>Gruppo {index + 1} · {result.sourceNodeIds.length} nodi focali</strong>
-              <button type="button" on:click={() => highlight(result)}>Evidenzia in 3D e apri la vista 2D</button>
+              <button type="button" aria-pressed={selectedResultKey === pairWitnessKey(result)} on:click={() => highlight(result)}>Evidenzia in 3D e apri la vista 2D</button>
             </div>
             <span class="members">
               {result.sourceNodeIds.slice(0, 20).map((sourceId, memberIndex) => displayNode(result.nodeIds[memberIndex], sourceId)).join(" · ")}
@@ -248,6 +290,14 @@
   h4 { margin: 0 0 3px; }
   .heading small, .semantics, .readiness { color: #475569; }
   .semantics { margin: 0; }
+  .contextual-config, .semantics-detail { min-width: 0; color: #475569; font-size: 0.82rem; }
+  .contextual-config summary, .semantics-detail summary { width: fit-content; cursor: pointer; font-weight: 650; }
+  .contextual-config summary:focus-visible, .semantics-detail summary:focus-visible { outline: 3px solid #0284c7; outline-offset: 2px; }
+  .contextual-config dl { display: grid; gap: 4px; margin: 5px 0 0; }
+  .contextual-config dl > div { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 8px; }
+  .contextual-config dt { font-weight: 650; }
+  .contextual-config dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+  .semantics-detail p { margin: 5px 0 0; line-height: 1.4; }
   .member-evidence { min-width: 0; margin-top: 4px; color: #475569; font-size: 0.82rem; }
   .member-evidence summary { width: fit-content; cursor: pointer; font-weight: 650; }
   .controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
@@ -255,16 +305,20 @@
   label { display: grid; gap: 3px; font-size: 0.9rem; }
   label :global(.searchable-node-select) { min-width: 150px; }
   .all-optima { display: flex; align-items: center; gap: 6px; }
+  .all-optima-help { flex-basis: 100%; margin: -5px 0 0 22px; color: #475569; font-size: 0.78rem; line-height: 1.35; }
   .readiness, .summary { display: grid; gap: 3px; padding: 7px; border-radius: 5px; background: #f8fafc; }
-  .readiness ul { margin: 0; padding-left: 18px; }
+  .readiness-reasons { max-height: 140px; overflow: auto; overflow-wrap: anywhere; }
   .run { min-height: 36px; padding: 7px 10px; border: 1px solid #1e645d; border-radius: 8px; background: #1e645d; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
   .run:hover:not(:disabled) { border-color: #174f49; background: #174f49; }
   .readiness-action { justify-self: start; min-height: 30px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #0f172a; font: inherit; font-weight: 650; }
   .readiness-action:focus-visible { outline: 3px solid #0284c7; outline-offset: 2px; }
+  .no-result-next-step { display: grid; justify-items: start; gap: 7px; padding: 9px; border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; }
+  .no-result-next-step p { margin: 0; color: #475569; font-size: 0.84rem; line-height: 1.45; }
   .results-heading, .group-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
   .results-heading > div { display: flex; gap: 5px; }
   .results { display: grid; gap: 8px; margin: 0; padding-left: 25px; }
   .results > li { display: grid; gap: 5px; min-width: 0; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; overflow-wrap: anywhere; }
+  .group-heading button[aria-pressed="true"] { border-color: #0f766e; background: #ccfbf1; color: #134e4a; outline: 2px solid #0f766e; outline-offset: 1px; }
   .members { color: #334155; }
   .supporting-records { display: grid; gap: 3px; margin-top: 4px; color: #475569; }
   details summary { cursor: pointer; }

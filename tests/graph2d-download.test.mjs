@@ -41,7 +41,7 @@ test("2D blob URLs stay alive through the browser's download-start window", () =
     return 0;
   });
 
-  assert.equal(GRAPH2D_OBJECT_URL_REVOKE_DELAY_MS, 1_000);
+  assert.equal(GRAPH2D_OBJECT_URL_REVOKE_DELAY_MS, 30_000);
   assert.equal(scheduledDelay, GRAPH2D_OBJECT_URL_REVOKE_DELAY_MS);
   assert.deepEqual(revoked, []);
   scheduledCallback();
@@ -52,5 +52,7 @@ test("2D download actions announce the requested filename accessibly", async () 
   const component = await readFile(new URL("../src/lib/kliqueasp/components/Graph2DExportPanel.svelte", import.meta.url), "utf8");
   assert.match(component, /scheduleGraph2DObjectUrlRevocation\(url,/);
   assert.match(component, /downloadStatus = `Richiesta di download inviata al browser:/);
-  assert.match(component, /class="download-status" role="status" aria-live="polite"/);
+  assert.doesNotMatch(component, /\{#if downloadStatus\}/);
+  assert.match(component, /class:has-message=\{Boolean\(downloadStatus\.trim\(\)\)\}/);
+  assert.match(component, /class="download-status"[\s\S]{0,180}role="status"[\s\S]{0,40}aria-live="polite"[\s\S]{0,40}aria-atomic="true"[\s\S]{0,80}>\{downloadStatus\.trim\(\)\}<\/div>/);
 });

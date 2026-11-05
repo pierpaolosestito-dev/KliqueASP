@@ -1,5 +1,6 @@
 import { serializeCsv } from "../csvExport.ts";
 import type { SignedTriadResult } from "./signedTriadTask.ts";
+import type { GraphViewFilterSnapshot } from "./graphViewFilters.ts";
 
 export const FINITE_SIGNED_TRIAD_WORLD_ASSUMPTION = "finite-exhaustive-worlds" as const;
 
@@ -61,7 +62,7 @@ export interface SignedTriadScenarioQueryScope {
   selectedGroup: string;
   timelineWindow: string;
   minimumEdgeConfidence: number | null;
-  viewFilters: { types: string[]; groups: string[] };
+  viewFilters: GraphViewFilterSnapshot;
 }
 
 export interface SignedTriadScenarioComparison {
@@ -171,13 +172,24 @@ function validateTriadWitness(triad: SignedTriadResult, nodeIds: readonly string
 }
 
 function canonicalViewFilters(value: SignedTriadScenarioQueryScope["viewFilters"]) {
+  const degreeFilters = value?.degreeFilters ?? {};
   if (!value || !Array.isArray(value.types) || !Array.isArray(value.groups) ||
-    [...value.types, ...value.groups].some((entry) => typeof entry !== "string")) {
+    [...value.types, ...value.groups].some((entry) => typeof entry !== "string") ||
+    !degreeFilters || typeof degreeFilters !== "object" || Array.isArray(degreeFilters) ||
+    Object.entries(degreeFilters).some(([key, entry]) =>
+      !["excludeIsolated", "excludeWithoutIncoming", "excludeWithoutOutgoing"].includes(key) ||
+      typeof entry !== "boolean"
+    )) {
     throw new TypeError("viewFilters deve contenere liste di tipi e gruppi");
   }
   return {
     types: [...new Set(value.types)].sort(compareText),
-    groups: [...new Set(value.groups)].sort(compareText)
+    groups: [...new Set(value.groups)].sort(compareText),
+    degreeFilters: {
+      excludeIsolated: degreeFilters.excludeIsolated === true,
+      excludeWithoutIncoming: degreeFilters.excludeWithoutIncoming === true,
+      excludeWithoutOutgoing: degreeFilters.excludeWithoutOutgoing === true
+    }
   };
 }
 
@@ -360,6 +372,7 @@ export function buildSignedTriadScenarioCsv(comparison: SignedTriadScenarioCompa
     "minimum_edge_confidence",
     "view_types_json",
     "view_groups_json",
+    "view_degree_filters_json",
     "node_ids_json",
     "stability",
     "world_classifications_json",
@@ -393,7 +406,8 @@ export function buildSignedTriadScenarioCsv(comparison: SignedTriadScenarioCompa
     comparison.queryScope.timelineWindow,
     comparison.queryScope.minimumEdgeConfidence ?? "",
     JSON.stringify(comparison.queryScope.viewFilters.types),
-    JSON.stringify(comparison.queryScope.viewFilters.groups)
+    JSON.stringify(comparison.queryScope.viewFilters.groups),
+    JSON.stringify(comparison.queryScope.viewFilters.degreeFilters)
   ];
   const rows = comparison.memberships.map((membership) => [
     "triad",

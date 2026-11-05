@@ -2,7 +2,34 @@ export type SearchableNodeOption = {
   value: string;
   label: string;
   disabled?: boolean;
+  countable?: boolean;
 };
+
+export type SearchableOptionAnnouncementCopy = {
+  emptyMessage?: string;
+  noResultsMessage?: string;
+  singularResultLabel?: string;
+  pluralResultLabel?: string;
+};
+
+/** Keeps the selected choice visible first and adds an optional clear-mapping choice. */
+export function getSearchableOptionsWithCurrentValue(
+  options: SearchableNodeOption[],
+  selectedValue: string,
+  emptyOptionLabel = ""
+): SearchableNodeOption[] {
+  const currentOption = selectedValue
+    ? options.find((option) => option.value === selectedValue) ?? { value: selectedValue, label: selectedValue }
+    : undefined;
+  const emptyOption = emptyOptionLabel
+    ? { value: "", label: emptyOptionLabel, countable: false }
+    : options.find((option) => option.value === "");
+  return [
+    ...(currentOption ? [currentOption] : []),
+    ...(emptyOption ? [emptyOption] : []),
+    ...options.filter((option) => option.value !== selectedValue && option.value !== "")
+  ];
+}
 
 function normalizeSearchText(value: string): string {
   return value
@@ -12,15 +39,24 @@ function normalizeSearchText(value: string): string {
 }
 
 /** Describes search counts for a persistent live region without adding visible copy. */
-export function describeSearchableNodeResults(query: string, totalCount: number, visibleCount: number): string {
+export function describeSearchableNodeResults(
+  query: string,
+  totalCount: number,
+  visibleCount: number,
+  copy: SearchableOptionAnnouncementCopy = {}
+): string {
   const total = Number.isFinite(totalCount) ? Math.max(0, Math.floor(totalCount)) : 0;
   const visible = Number.isFinite(visibleCount) ? Math.min(total, Math.max(0, Math.floor(visibleCount))) : 0;
   if (total === 0) {
-    return query.trim() ? "Nessun nodo corrisponde alla ricerca." : "Nessun nodo disponibile.";
+    return query.trim()
+      ? copy.noResultsMessage ?? "Nessun nodo corrisponde alla ricerca."
+      : copy.emptyMessage ?? "Nessun nodo disponibile.";
   }
-  const nodeLabel = total === 1 ? "nodo trovato" : "nodi trovati";
   const optionLabel = visible === 1 ? "opzione mostrata" : "opzioni mostrate";
-  return `${total} ${nodeLabel}. ${visible} ${optionLabel}.`;
+  const resultLabel = total === 1
+    ? copy.singularResultLabel ?? "nodo trovato"
+    : copy.pluralResultLabel ?? "nodi trovati";
+  return `${total} ${resultLabel}. ${visible} ${optionLabel}.`;
 }
 
 /** Filters node choices by their visible label or stable source/internal ID. */

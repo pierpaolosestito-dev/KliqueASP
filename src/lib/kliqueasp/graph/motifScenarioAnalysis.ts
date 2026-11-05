@@ -1,5 +1,6 @@
 import { serializeCsv } from "../csvExport.ts";
 import type { TypedMotifMatch } from "./motifTask.ts";
+import type { GraphViewFilterSnapshot } from "./graphViewFilters.ts";
 
 export const FINITE_MOTIF_WORLD_ASSUMPTION = "finite-exhaustive-worlds" as const;
 
@@ -41,7 +42,7 @@ export interface ProvenanceMotifQueryScope {
   graphDirection: "directed" | "undirected";
   timelineWindow: string;
   minimumEdgeConfidence: number | null;
-  viewFilters: { types: string[]; groups: string[] };
+  viewFilters: GraphViewFilterSnapshot;
 }
 
 export interface ProvenanceMotifScenarioComparison {
@@ -118,9 +119,15 @@ export function summarizeProvenanceScenarioMotifs(
     throw new RangeError("minimumEdgeConfidence deve essere null o un numero finito non negativo.");
   }
   const viewFilters = queryScopeInput.viewFilters;
+  const degreeFilters = viewFilters?.degreeFilters ?? {};
   if (!viewFilters || typeof viewFilters !== "object" || Array.isArray(viewFilters) ||
     !Array.isArray(viewFilters.types) || !Array.isArray(viewFilters.groups) ||
-    [...viewFilters.types, ...viewFilters.groups].some((value) => typeof value !== "string")) {
+    [...viewFilters.types, ...viewFilters.groups].some((value) => typeof value !== "string") ||
+    !degreeFilters || typeof degreeFilters !== "object" || Array.isArray(degreeFilters) ||
+    Object.entries(degreeFilters).some(([key, value]) =>
+      !["excludeIsolated", "excludeWithoutIncoming", "excludeWithoutOutgoing"].includes(key) ||
+      typeof value !== "boolean"
+    )) {
     throw new TypeError("viewFilters deve contenere liste di tipi e gruppi.");
   }
   const queryScope: ProvenanceMotifQueryScope = {
@@ -130,7 +137,12 @@ export function summarizeProvenanceScenarioMotifs(
     minimumEdgeConfidence,
     viewFilters: {
       types: [...new Set(viewFilters.types)].sort(compareText),
-      groups: [...new Set(viewFilters.groups)].sort(compareText)
+      groups: [...new Set(viewFilters.groups)].sort(compareText),
+      degreeFilters: {
+        excludeIsolated: degreeFilters.excludeIsolated === true,
+        excludeWithoutIncoming: degreeFilters.excludeWithoutIncoming === true,
+        excludeWithoutOutgoing: degreeFilters.excludeWithoutOutgoing === true
+      }
     }
   };
 
@@ -268,7 +280,8 @@ export function buildProvenanceScenarioMotifCsv(
     comparison.queryScope.timelineWindow,
     comparison.queryScope.minimumEdgeConfidence ?? "",
     JSON.stringify(comparison.queryScope.viewFilters.types),
-    JSON.stringify(comparison.queryScope.viewFilters.groups)
+    JSON.stringify(comparison.queryScope.viewFilters.groups),
+    JSON.stringify(comparison.queryScope.viewFilters.degreeFilters)
   ];
   const headers = [
     "record_type",
@@ -282,6 +295,7 @@ export function buildProvenanceScenarioMotifCsv(
     "minimum_edge_confidence",
     "view_types_json",
     "view_groups_json",
+    "view_degree_filters_json",
     "role_assignments",
     "brave_cautious_status",
     "worlds_present_count",

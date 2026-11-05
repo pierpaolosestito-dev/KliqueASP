@@ -6,6 +6,11 @@ test("sparse graphs retain the configured link opacity", () => {
   assert.equal(getGraphLinkOpacity({ configuredOpacity: 0.4, nodeCount: 40, linkCount: 20 }), 0.4);
 });
 
+test("small complete graphs retain enough link contrast to read their structure", () => {
+  assert.equal(getGraphLinkOpacity({ configuredOpacity: 0.4, nodeCount: 3, linkCount: 3 }), 0.4);
+  assert.equal(getGraphLinkOpacity({ configuredOpacity: 0.4, nodeCount: 5, linkCount: 10 }), 0.4);
+});
+
 test("dense undirected graphs reduce line opacity", () => {
   assert.ok(Math.abs(getGraphLinkOpacity({ configuredOpacity: 0.4, nodeCount: 40, linkCount: 760 }) - 0.14) < 1e-9);
 });
@@ -24,7 +29,7 @@ test("highlighted links restore the configured opacity", () => {
 });
 
 test("opacity is bounded and a zero setting remains invisible", () => {
-  assert.equal(getGraphLinkOpacity({ configuredOpacity: 3, nodeCount: 2, linkCount: 1 }), 0.35);
+  assert.equal(getGraphLinkOpacity({ configuredOpacity: 3, nodeCount: 8, linkCount: 24 }), 0.35);
   assert.equal(getGraphLinkOpacity({ configuredOpacity: 0, nodeCount: 40, linkCount: 760 }), 0);
   assert.equal(getGraphLinkOpacity({ configuredOpacity: Number.NaN, nodeCount: 2, linkCount: 0 }), 0.4);
 });

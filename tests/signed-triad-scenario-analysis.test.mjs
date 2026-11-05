@@ -222,9 +222,18 @@ test("il CSV conserva le classificazioni per mondo e non trasforma gli scenari i
 
 test("il contesto multi-mondo canonizza i tipi firmati e ne rifiuta le dichiarazioni ambigue", () => {
   const comparison = summarizeSignedTriadScenarios([scenario("typed", [])], queryScope({
-    edgeTypes: ["workplace", "alliance"]
+    edgeTypes: ["workplace", "alliance"],
+    viewFilters: { types: ["person"], groups: [], degreeFilters: { excludeWithoutIncoming: true } }
   }));
   assert.deepEqual(comparison.queryScope.edgeTypes, ["alliance", "workplace"]);
+  assert.deepEqual(comparison.queryScope.viewFilters.degreeFilters, {
+    excludeIsolated: false,
+    excludeWithoutIncoming: true,
+    excludeWithoutOutgoing: false
+  });
+  const csv = buildSignedTriadScenarioCsv(comparison);
+  assert.match(csv, /view_degree_filters_json/);
+  assert.match(csv, /excludeWithoutIncoming"":true/);
   assert.throws(() => summarizeSignedTriadScenarios([scenario("duplicate", [])], queryScope({
     edgeTypes: ["friendship", "friendship"]
   })), /edgeTypes non deve contenere duplicati/);

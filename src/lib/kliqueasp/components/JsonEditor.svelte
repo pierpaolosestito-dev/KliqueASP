@@ -1,41 +1,206 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
-  import { readGraphJsonUpload } from "../graph/graphJsonUpload.ts";
+  import { onDestroy, onMount, tick } from "svelte";
+  import { base } from "$app/paths";
+  import { getGraphExampleCatalog } from "../graph/exampleCatalog";
+  import { GraphJsonUploadReadError, readGraphJsonUpload } from "../graph/graphJsonUpload.ts";
   import { collectGraphFieldPaths, GRAPH_FIELD_DISCOVERY_SAMPLE_LIMIT, updateGraphAttributeMapping, updateGraphFieldMapping } from "../graph/graphFieldMapping.ts";
   import { getSolverTaskTimeoutSeconds, setSolverTaskTimeoutSeconds } from "../graph/solverTimeoutSetting.ts";
+  import { MAX_KLIQUEASP_PROJECT_NAME_LENGTH } from "../graph/projectFile.ts";
   import { buildGraphInputPreview, formatGraphDiagnostic, inspectGraphInput, type GraphInputInspection } from "../graph/graphInputValidation.ts";
+  import type { GraphJsonTextInput } from "../graph/graphJsonText.ts";
+  import { announceWorkbenchStatus } from "../workbenchAnnouncement.ts";
+  import ResultListPager from "./ResultListPager.svelte";
+  import SearchableFieldSelect from "./SearchableFieldSelect.svelte";
+  import JsonCodeEditor from "./JsonCodeEditor.svelte";
   export let open: boolean = false;
+  export let focusReturnTarget: HTMLElement | null = null;
 
   export let configText: string = "";
   export let datasetText: string = "";
   export let errorMessage: string = "";
+  export let errorTechnicalDetails: string = "";
+  export let errorInput: GraphJsonTextInput | "" = "";
+  export let projectName: string = "Progetto senza nome";
   export let sessionStatus: string = "";
 
   export let onConfigTextChange: (value: string) => void = () => {};
-  export let onDatasetTextChange: (value: string) => void = () => {};
+  export let onDatasetTextChange: (value: string, sourceName?: string) => void = () => {};
+  export let onProjectNameChange: (value: string) => void = () => {};
   export let onApply: () => void = () => {};
+  export let onCreateProject: () => void = () => {};
   export let onReset: () => void = () => {};
-  export let onLoadDavis: () => void = () => {};
-  export let onLoadKarate: () => void = () => {};
-  export let onLoadGahukuGama: () => void = () => {};
-  export let onLoadTemporalEdges: () => void = () => {};
-  export let onLoadInVS: () => void = () => {};
-  export let onLoadInVSFull: () => void = () => {};
   export let onLoadProject: (project: unknown) => void = () => {};
   export let onSaveProject: () => string | void = () => {};
   export let onClose: () => void = () => {};
 
   let fileMessage = "";
   let fileError = "";
+  let fileErrorDetails = "";
   let projectFileInput: HTMLInputElement | null = null;
+  let newProjectButton: HTMLButtonElement | null = null;
+  let newProjectCancelButton: HTMLButtonElement | null = null;
   let resetExampleButton: HTMLButtonElement | null = null;
   let resetCancelButton: HTMLButtonElement | null = null;
+  let panelElement: HTMLElement | null = null;
+  let panelHeading: HTMLHeadingElement | null = null;
+  let compactViewport = false;
+  let wasOpen = false;
   let showResetConfirmation = false;
+  let showNewProjectConfirmation = false;
+  const workspaceExamples = getGraphExampleCatalog(base).filter((example) => example.opensWorkspaceExample);
+
+  onMount(() => {
+    const mediaQuery = window.matchMedia("(max-width: 600px)");
+    const updateCompactViewport = () => {
+      compactViewport = mediaQuery.matches;
+    };
+    updateCompactViewport();
+    mediaQuery.addEventListener("change", updateCompactViewport);
+    return () => mediaQuery.removeEventListener("change", updateCompactViewport);
+  });
+
+  function isInsideClosedDetailsContent(element: HTMLElement): boolean {
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      if (!(current instanceof HTMLDetailsElement) || current.open) continue;
+      const summary = current.querySelector<HTMLElement>(":scope > summary");
+      if (!summary?.contains(element)) return true;
+    }
+    return false;
+  }
+
+  function isVisibleFocusTarget(element: HTMLElement | null): element is HTMLElement {
+    if (!element?.isConnected || element.getClientRects().length === 0 || isInsideClosedDetailsContent(element)) {
+      return false;
+    }
+
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (
+        current.hidden || current.inert || current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function isPanelTabStop(element: HTMLElement): boolean {
+    if (!element.isConnected || element.getClientRects().length === 0 || isInsideClosedDetailsContent(element)) {
+      return false;
+    }
+
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (
+        current.hidden || current.inert || current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" || style.visibility === "hidden"
+      ) {
+        return false;
+      }
+    }
+
+    return element.tabIndex >= 0;
+  }
+
+  async function restorePanelFocus() {
+    await tick();
+    // The app removes `inert` from the background in a MutationObserver after
+    // this panel closes. Let that observer run before attempting to focus the
+    // control that opened the panel.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (isVisibleFocusTarget(focusReturnTarget)) {
+      focusReturnTarget.focus({ preventScroll: true });
+      return;
+    }
+
+    document.querySelector<HTMLElement>(".app-root .toolbar .toolbar-button:not([disabled])")?.focus({ preventScroll: true });
+  }
+
+  function handlePanelKeydown(event: KeyboardEvent) {
+    if (!open) return;
+
+    if (event.key === "Escape" && !showResetConfirmation) {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab" || !compactViewport || !panelElement) return;
+
+    const focusable = [...panelElement.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    )].filter(isPanelTabStop);
+    if (!focusable.length) {
+      event.preventDefault();
+      panelHeading?.focus({ preventScroll: true });
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+    if (!panelElement.contains(activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus({ preventScroll: true });
+    } else if (event.shiftKey && (activeElement === first || activeElement === panelHeading)) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+    } else if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
+    }
+  }
+
+  $: {
+    if (open && !wasOpen) {
+      wasOpen = true;
+      void tick().then(() => {
+        if (open) panelHeading?.focus({ preventScroll: true });
+      });
+    } else if (!open && wasOpen) {
+      wasOpen = false;
+      void restorePanelFocus();
+    }
+  }
+
+  function clearFileError() {
+    fileError = "";
+    fileErrorDetails = "";
+  }
 
   async function requestResetConfirmation() {
+    showNewProjectConfirmation = false;
     showResetConfirmation = true;
     await tick();
     resetCancelButton?.focus();
+  }
+
+  async function requestNewProjectConfirmation() {
+    showResetConfirmation = false;
+    showNewProjectConfirmation = true;
+    await tick();
+    newProjectCancelButton?.focus();
+  }
+
+  async function cancelNewProjectConfirmation() {
+    showNewProjectConfirmation = false;
+    await tick();
+    newProjectButton?.focus();
+  }
+
+  function handleNewProjectConfirmationKeydown(event: KeyboardEvent) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    void cancelNewProjectConfirmation();
+  }
+
+  async function confirmNewProject() {
+    showNewProjectConfirmation = false;
+    onCreateProject();
+    await tick();
+    newProjectButton?.focus();
   }
 
   async function cancelResetConfirmation() {
@@ -63,7 +228,7 @@
 
   function requestProjectExport() {
     fileMessage = "";
-    fileError = "";
+    clearFileError();
     const status = onSaveProject();
     if (status) fileMessage = status;
   }
@@ -79,17 +244,44 @@
   let draftValidation: GraphInputInspection | null = null;
   let draftValidationPending = false;
   let showAllDraftDiagnostics = false;
+  const DRAFT_DIAGNOSTICS_PAGE_SIZE = 20;
+  let visibleDraftDiagnosticLimit = DRAFT_DIAGNOSTICS_PAGE_SIZE;
+  const ATTRIBUTE_MAPPING_PAGE_SIZE = 20;
+  let visibleNodeAttributeLimit = ATTRIBUTE_MAPPING_PAGE_SIZE;
+  let visibleEdgeAttributeLimit = ATTRIBUTE_MAPPING_PAGE_SIZE;
   let nodeMapping: Record<string, any> = {};
   let edgeMapping: Record<string, any> = {};
   let nodeAttributeAlias = "";
   let nodeAttributePath = "";
   let edgeAttributeAlias = "";
   let edgeAttributePath = "";
+  $: nodeAttributeAddBlocker = !nodeAttributeAlias.trim() && !nodeAttributePath
+    ? "Inserisci un nome e scegli il campo JSON da associare."
+    : !nodeAttributeAlias.trim()
+      ? "Inserisci il nome del nuovo attributo nodo."
+      : !nodeAttributePath
+        ? "Scegli il campo JSON da associare al nuovo attributo nodo."
+        : "";
+  $: edgeAttributeAddBlocker = !edgeAttributeAlias.trim() && !edgeAttributePath
+    ? "Inserisci un nome e scegli il campo JSON da associare."
+    : !edgeAttributeAlias.trim()
+      ? "Inserisci il nome del nuovo attributo arco."
+      : !edgeAttributePath
+        ? "Scegli il campo JSON da associare al nuovo attributo arco."
+        : "";
   const previewPalette = ["#2a9186", "#3978a8", "#8d6bb0", "#c77942", "#568a55", "#b45f72"];
 
   $: draftPreview = draftValidation?.status !== "error"
     ? buildGraphInputPreview(draftValidation?.previewNodes ?? [], draftValidation?.previewLinks ?? [], draftValidation?.edgeCount ?? 0)
     : buildGraphInputPreview([], [], 0);
+  $: additionalDraftDiagnostics = draftValidation?.diagnostics.slice(6) ?? [];
+  $: visibleAdditionalDraftDiagnostics = additionalDraftDiagnostics.slice(0, visibleDraftDiagnosticLimit);
+  $: nodeFieldSearchOptions = nodeFieldPaths.map((path) => ({ value: path, label: path }));
+  $: edgeFieldSearchOptions = edgeFieldPaths.map((path) => ({ value: path, label: path }));
+  $: nodeAttributeEntries = Object.entries(nodeMapping.attributes ?? {}).reverse();
+  $: edgeAttributeEntries = Object.entries(edgeMapping.attributes ?? {}).reverse();
+  $: visibleNodeAttributeEntries = nodeAttributeEntries.slice(0, visibleNodeAttributeLimit);
+  $: visibleEdgeAttributeEntries = edgeAttributeEntries.slice(0, visibleEdgeAttributeLimit);
   $: draftPreviewNodes = draftPreview.nodes.map((node, index, nodes) => {
         const hash = [...node.type].reduce((value, character) => value + character.charCodeAt(0), 0);
         const angle = nodes.length === 1 ? 0 : (Math.PI * 2 * index) / nodes.length - Math.PI / 2;
@@ -132,6 +324,10 @@
 
   function scheduleFieldInspection(text: string) {
     if (inspectionTimer) clearTimeout(inspectionTimer);
+    if (text !== inspectedDatasetText) {
+      visibleNodeAttributeLimit = ATTRIBUTE_MAPPING_PAGE_SIZE;
+      visibleEdgeAttributeLimit = ATTRIBUTE_MAPPING_PAGE_SIZE;
+    }
     inspectionTimer = setTimeout(() => {
       const dataset = parseRecord(text);
       nodeFieldPaths = collectGraphFieldPaths(dataset, "nodes");
@@ -154,6 +350,7 @@
     if (validationTimer) clearTimeout(validationTimer);
     draftValidationPending = true;
     showAllDraftDiagnostics = false;
+    visibleDraftDiagnosticLimit = DRAFT_DIAGNOSTICS_PAGE_SIZE;
     validationTimer = setTimeout(() => {
       draftValidation = inspectGraphInput(config, dataset);
       inspectedConfigValidationText = config;
@@ -163,36 +360,40 @@
     }, 500);
   }
 
+  function showMoreDraftDiagnostics() {
+    visibleDraftDiagnosticLimit += DRAFT_DIAGNOSTICS_PAGE_SIZE;
+  }
+
   function diagnosticTarget(code: string): { id: string; label: string } {
     const normalizedCode = code.toLowerCase();
     if (normalizedCode.includes("node") && normalizedCode.includes("id")) {
-      return { id: "mapping-node-id", label: "Vai al mapping" };
+      return { id: "mapping-node-id", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("node") && normalizedCode.includes("type")) {
-      return { id: "mapping-node-type", label: "Vai al mapping" };
+      return { id: "mapping-node-type", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("endpoint")) {
-      return { id: normalizedCode.includes("target") ? "mapping-edge-target" : "mapping-edge-source", label: "Vai al mapping" };
+      return { id: normalizedCode.includes("target") ? "mapping-edge-target" : "mapping-edge-source", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("edge") && normalizedCode.includes("id")) {
-      return { id: "mapping-edge-id", label: "Vai al mapping" };
+      return { id: "mapping-edge-id", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("edge") && (normalizedCode.includes("identity") || normalizedCode.includes("simple-edge"))) {
-      return { id: "mapping-edge-identity", label: "Vai al mapping" };
+      return { id: "mapping-edge-identity", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("edge") && normalizedCode.includes("type")) {
-      return { id: "mapping-edge-type", label: "Vai al mapping" };
+      return { id: "mapping-edge-type", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("edge") && normalizedCode.includes("direction")) {
-      return { id: "mapping-edge-direction", label: "Vai al mapping" };
+      return { id: "mapping-edge-direction", label: "Vai alla mappatura" };
     }
     if (normalizedCode.includes("config-json") || normalizedCode.includes("config-root") || normalizedCode.includes("graph-config")) {
       return { id: "graph-config", label: "Apri configurazione JSON" };
     }
     if (normalizedCode.includes("capability") || normalizedCode.includes("mapping")) {
-      return { id: "advanced-mapping-summary", label: "Rivedi mapping" };
+      return { id: "advanced-mapping-summary", label: "Rivedi la mappatura" };
     }
-    return { id: "graph-dataset", label: "Apri dataset JSON" };
+    return { id: "graph-dataset", label: "Apri dati del grafo (JSON)" };
   }
 
   function focusDiagnostic(code: string) {
@@ -206,25 +407,22 @@
     target?.focus({ preventScroll: true });
   }
 
-  function fieldOptions(fields: string[], current: unknown): string[] {
-    const value = typeof current === "string" ? current : "";
-    return [...new Set([...(value ? [value] : []), ...fields])];
-  }
-
   function updateMappingField(scope: "node" | "edge", field: string, value: string) {
     const config = parseRecord(configText);
     const dataset = parseRecord(datasetText);
     if (!config) {
-      fileError = "Correggi prima il JSON della configurazione per modificare il mapping.";
+      fileError = "Correggi prima il JSON della configurazione per modificare la mappatura.";
+      fileErrorDetails = "";
       return;
     }
     try {
       const updated = updateGraphFieldMapping(config, dataset, scope, field, value);
       onConfigTextChange(JSON.stringify(updated, null, 2));
-      fileError = "";
-      fileMessage = "Mapping aggiornato. Applica il grafo per ricalcolare la rete.";
+      clearFileError();
+      fileMessage = "Mappatura aggiornata. Applica il grafo per ricalcolare la rete.";
     } catch (error) {
-      fileError = error instanceof Error ? error.message : "Mapping non aggiornato.";
+      fileError = error instanceof Error ? error.message : "Mappatura non aggiornata.";
+      fileErrorDetails = "";
     }
   }
 
@@ -233,15 +431,17 @@
     const dataset = parseRecord(datasetText);
     if (!config) {
       fileError = "Correggi prima il JSON della configurazione per modificare gli attributi.";
+      fileErrorDetails = "";
       return;
     }
     try {
       const updated = updateGraphAttributeMapping(config, dataset, scope, alias, path);
       onConfigTextChange(JSON.stringify(updated, null, 2));
-      fileError = "";
+      clearFileError();
       fileMessage = "Attributo aggiornato. Applica il grafo per ricalcolare le analisi.";
     } catch (error) {
       fileError = error instanceof Error ? error.message : "Attributo non aggiornato.";
+      fileErrorDetails = "";
     }
   }
 
@@ -250,19 +450,22 @@
     const config = parseRecord(configText);
     if (!input.validity.valid) {
       fileError = "Inserisci un limite di calcolo compreso tra 1 e 300 secondi.";
+      fileErrorDetails = "";
       return;
     }
     if (!config) {
       fileError = "Correggi prima il JSON della configurazione per modificare il limite di calcolo.";
+      fileErrorDetails = "";
       return;
     }
     try {
       const updated = setSolverTaskTimeoutSeconds(config, input.valueAsNumber);
       onConfigTextChange(JSON.stringify(updated, null, 2));
-      fileError = "";
+      clearFileError();
       fileMessage = "Limite di calcolo aggiornato. Applica il grafo per usarlo.";
     } catch (error) {
       fileError = error instanceof Error ? error.message : "Limite di calcolo non aggiornato.";
+      fileErrorDetails = "";
     }
   }
 
@@ -271,18 +474,29 @@
     const path = scope === "node" ? nodeAttributePath : edgeAttributePath;
     if (!path) {
       fileError = "Scegli un campo JSON da associare all'attributo.";
+      fileErrorDetails = "";
       return;
     }
     updateAttributeMapping(scope, alias, path);
     if (!fileError) {
       if (scope === "node") {
+        visibleNodeAttributeLimit = Math.max(visibleNodeAttributeLimit, ATTRIBUTE_MAPPING_PAGE_SIZE);
         nodeAttributeAlias = "";
         nodeAttributePath = "";
       } else {
+        visibleEdgeAttributeLimit = Math.max(visibleEdgeAttributeLimit, ATTRIBUTE_MAPPING_PAGE_SIZE);
         edgeAttributeAlias = "";
         edgeAttributePath = "";
       }
     }
+  }
+
+  function showMoreNodeAttributeMappings() {
+    visibleNodeAttributeLimit += ATTRIBUTE_MAPPING_PAGE_SIZE;
+  }
+
+  function showMoreEdgeAttributeMappings() {
+    visibleEdgeAttributeLimit += ATTRIBUTE_MAPPING_PAGE_SIZE;
   }
 
   async function loadJsonFile(event: Event, kind: "dataset" | "config" | "project") {
@@ -290,11 +504,11 @@
     const file = input.files?.[0];
     if (!file) return;
     fileMessage = "";
-    fileError = "";
+    clearFileError();
     try {
       const parsed = await readGraphJsonUpload(file, kind);
       if (kind === "dataset") {
-        onDatasetTextChange(JSON.stringify(parsed, null, 2));
+        onDatasetTextChange(JSON.stringify(parsed, null, 2), file.name.replace(/\.[^.]+$/, ""));
         fileMessage = `Dataset caricato da ${file.name}. Applica il grafo per vedere le modifiche.`;
       } else if (kind === "config") {
         onConfigTextChange(JSON.stringify(parsed, null, 2));
@@ -302,10 +516,24 @@
       } else {
         onLoadProject(parsed);
         fileMessage = `Progetto caricato da ${file.name}.`;
+        // Loading a project remounts the keyed GraphApp. Wait for its global
+        // status listener before announcing the result.
+        await tick();
+        announceWorkbenchStatus(fileMessage);
         onClose();
+        void restorePanelFocus();
       }
     } catch (error) {
-      fileError = error instanceof Error ? error.message : "Impossibile leggere il file JSON.";
+      if (error instanceof SyntaxError) {
+        fileError = "Il file selezionato non contiene JSON valido. Correggi la sintassi e riprova.";
+        fileErrorDetails = error.message;
+      } else if (error instanceof GraphJsonUploadReadError) {
+        fileError = error.message;
+        fileErrorDetails = error.technicalDetails;
+      } else {
+        fileError = error instanceof Error ? error.message : "Impossibile leggere il file JSON.";
+        fileErrorDetails = "";
+      }
     } finally {
       input.value = "";
     }
@@ -317,12 +545,20 @@
   });
 </script>
 
+<svelte:window on:keydown={handlePanelKeydown} />
+
 {#if open}
-  <aside class="json-editor-panel" aria-label="Dati e configurazione del grafo">
+  <aside
+    class="json-editor-panel"
+    role={compactViewport ? "dialog" : "complementary"}
+    aria-modal={compactViewport ? "true" : undefined}
+    aria-labelledby="json-editor-heading"
+    bind:this={panelElement}
+  >
     <div class="json-editor-header">
       <div>
         <p class="eyebrow">KLIQUEASP</p>
-        <h1>Dati e configurazione</h1>
+        <h1 id="json-editor-heading" tabindex="-1" bind:this={panelHeading}>Dati e configurazione</h1>
       </div>
 
       <button
@@ -335,26 +571,95 @@
     </div>
 
     <div class="json-editor-body">
-      <section class="data-actions" aria-label="Apri o esporta dati">
-        <label class="file-button">
-          <input type="file" accept=".json,application/json" on:change={(event) => loadJsonFile(event, "dataset")} />
-          Carica dataset JSON
-        </label>
-        <label class="file-button">
-          <input type="file" accept=".json,application/json" on:change={(event) => loadJsonFile(event, "config")} />
-          Carica configurazione
-        </label>
-        <label class="file-button">
-          <input type="file" accept=".json,application/json" bind:this={projectFileInput} on:change={(event) => loadJsonFile(event, "project")} />
-          Apri progetto
-        </label>
-        <button class="secondary-button" type="button" on:click={requestProjectExport}>
-          Esporta progetto
-        </button>
-        {#if sessionStatus}<p class="session-status" role="status" aria-live="polite">{sessionStatus}</p>{/if}
-        {#if fileMessage}<p class="file-message" role="status" aria-live="polite">{fileMessage}</p>{/if}
-        {#if fileError}<p class="file-error" role="alert">{fileError}</p>{/if}
+      <section class="data-actions" aria-label="Gestisci progetti e dati">
+        <div class="project-management">
+          <div class="project-identity">
+            <label class="project-name-field" for="workbench-project-name">
+              <span>Nome progetto</span>
+              <input
+                id="workbench-project-name"
+                type="text"
+                maxlength={MAX_KLIQUEASP_PROJECT_NAME_LENGTH}
+                autocomplete="off"
+                value={projectName}
+                aria-describedby="project-name-hint"
+                on:input={(event) => onProjectNameChange((event.currentTarget as HTMLInputElement).value)}
+              />
+            </label>
+            <p id="project-name-hint" class="project-name-hint">Nome incluso nel file progetto esportato.</p>
+          </div>
+          <div class="project-file-actions" role="group" aria-label="Azioni progetto">
+            <button class="secondary-button" type="button" bind:this={newProjectButton} on:click={requestNewProjectConfirmation}>Nuovo progetto</button>
+            <label class="file-button">
+              <input type="file" accept=".json,application/json" bind:this={projectFileInput} on:change={(event) => loadJsonFile(event, "project")} />
+              Apri progetto
+            </label>
+            <button class="secondary-button" type="button" on:click={requestProjectExport}>Esporta progetto</button>
+          </div>
+        </div>
+        <div class="source-data-actions" role="group" aria-label="Carica dati e configurazione">
+          <label class="file-button">
+            <input type="file" accept=".json,application/json" on:change={(event) => loadJsonFile(event, "dataset")} />
+            Carica dataset JSON
+          </label>
+          <label class="file-button">
+            <input type="file" accept=".json,application/json" on:change={(event) => loadJsonFile(event, "config")} />
+            Carica configurazione
+          </label>
+        </div>
+        {#if showNewProjectConfirmation}
+          <div
+            class="reset-confirmation"
+            role="group"
+            aria-labelledby="new-project-confirmation-title"
+            aria-describedby="new-project-confirmation-description"
+            aria-live="polite"
+          >
+            <strong id="new-project-confirmation-title">Creare un progetto vuoto?</strong>
+            <span id="new-project-confirmation-description">Nome, dati e configurazione correnti saranno sostituiti. Esporta il progetto per conservarne una copia.</span>
+            <div class="reset-confirmation-actions">
+              <button bind:this={newProjectCancelButton} class="secondary-button" type="button" on:click={cancelNewProjectConfirmation} on:keydown={handleNewProjectConfirmationKeydown}>Annulla</button>
+              <button type="button" on:click={confirmNewProject} on:keydown={handleNewProjectConfirmationKeydown}>Crea progetto vuoto</button>
+            </div>
+          </div>
+        {/if}
+        <p
+          class="session-status"
+          class:has-message={Boolean(sessionStatus.trim())}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >{sessionStatus.trim()}</p>
+        <p
+          class="file-message"
+          class:has-message={Boolean(fileMessage.trim())}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >{fileMessage.trim()}</p>
+        {#if fileError}
+          <div class="file-error">
+            <p role="alert">{fileError}</p>
+            {#if fileErrorDetails}
+              <details>
+                <summary>Dettagli tecnici</summary>
+                <pre>{fileErrorDetails}</pre>
+              </details>
+            {/if}
+          </div>
+        {/if}
         <p class="file-hint">Un progetto contiene dataset e configurazione JSON. Il caricamento dei file singoli li prepara nell'editor; usa <strong>Applica grafo</strong> per aggiornare la rete.</p>
+        <details class="example-list">
+          <summary>Apri un esempio in una nuova scheda</summary>
+          <div>
+            {#each workspaceExamples as example (example.id)}
+              <a class="example-link" href={example.href} target="_blank" rel="noopener">
+                <strong>{example.title}</strong>
+                <small>{example.description}</small>
+              </a>
+            {/each}
+          </div>
+        </details>
       </section>
 
       <section
@@ -362,22 +667,30 @@
         class:error={draftValidation?.status === "error"}
         class:warning={draftValidation?.status === "warning"}
         aria-labelledby="input-validation-title"
-        aria-live="polite"
       >
         <div class="validation-heading">
           <strong id="input-validation-title">Controllo prima dell'applicazione</strong>
-          {#if draftValidationPending}
-            <span>Controllo in corso…</span>
-          {:else if draftValidation?.status === "ready"}
-            <span class="validation-state" role="status">Pronto</span>
-          {:else if draftValidation?.status === "warning"}
-            <span class="validation-state" role="status">Pronto con avvisi</span>
-          {:else if draftValidation?.status === "error"}
-            <span class="validation-state" role="alert">Da correggere</span>
-          {/if}
+          <span
+            class="validation-state"
+            class:has-message={Boolean(draftValidationPending || draftValidation)}
+            class:pending={draftValidationPending}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {#if draftValidationPending}
+              Controllo in corso…
+            {:else if draftValidation?.status === "ready"}
+              Pronto
+            {:else if draftValidation?.status === "warning"}
+              Pronto con avvisi
+            {:else if draftValidation?.status === "error"}
+              Da correggere
+            {/if}
+          </span>
         </div>
         {#if draftValidationPending}
-          <p>Verifico struttura, mapping e collegamenti al termine della modifica.</p>
+          <p>Verifico struttura, mappatura e collegamenti al termine della modifica.</p>
         {:else if draftValidation}
           {#if draftValidation.nodeCount !== null && draftValidation.edgeCount !== null}
             <p>{draftValidation.nodeCount} nodi e {draftValidation.edgeCount} record d'arco nel dataset.</p>
@@ -406,12 +719,12 @@
                 </li>
               {/each}
             </ul>
-            {#if draftValidation.diagnostics.length > 6}
+            {#if additionalDraftDiagnostics.length > 0}
               <details class="more-diagnostics" bind:open={showAllDraftDiagnostics}>
-                <summary>Mostra altre {draftValidation.diagnostics.length - 6} diagnosi</summary>
+                <summary>Mostra altre {additionalDraftDiagnostics.length} diagnosi</summary>
                 {#if showAllDraftDiagnostics}
                   <ul class="validation-list">
-                    {#each draftValidation.diagnostics.slice(6) as diagnostic}
+                    {#each visibleAdditionalDraftDiagnostics as diagnostic}
                       <li class:error={diagnostic.severity === "error"}>
                         <span>{formatGraphDiagnostic(diagnostic)}</span>
                         <button type="button" class="text-button" on:click={() => focusDiagnostic(diagnostic.code)}>
@@ -420,6 +733,13 @@
                       </li>
                     {/each}
                   </ul>
+                  <ResultListPager
+                    total={additionalDraftDiagnostics.length}
+                    visible={visibleAdditionalDraftDiagnostics.length}
+                    pageSize={DRAFT_DIAGNOSTICS_PAGE_SIZE}
+                    label="diagnosi aggiuntive"
+                    showMore={showMoreDraftDiagnostics}
+                  />
                 {/if}
               </details>
             {/if}
@@ -482,59 +802,32 @@
       </section>
 
       <section class="mapping-section" aria-labelledby="mapping-title">
-        <div class="mapping-heading">
-          <h2 id="mapping-title">Mappatura rapida</h2>
-          <button type="button" class="text-button" on:click={() => scheduleFieldInspection(datasetText)}>Rileva campi</button>
-        </div>
+        <h2 id="mapping-title">Mappatura rapida</h2>
         <p>Associa i campi JSON più comuni. Gli altri attributi restano modificabili nell'editor avanzato.</p>
         <div class="mapping-grid">
           <label>ID nodo
-            <select id="mapping-node-id" value={nodeMapping.idField ?? ""} on:change={(event) => updateMappingField("node", "idField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Automatico / radice</option>
-              {#each fieldOptions(nodeFieldPaths, nodeMapping.idField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-node-id" value={nodeMapping.idField ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo ID nodo" emptyOptionLabel="Automatico / radice" on:change={(event) => updateMappingField("node", "idField", event.detail.value)} />
           </label>
           <label>Etichetta nodo
-            <select value={nodeMapping.labelField ?? ""} on:change={(event) => updateMappingField("node", "labelField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">ID nodo</option>
-              {#each fieldOptions(nodeFieldPaths, nodeMapping.labelField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-node-label" value={nodeMapping.labelField ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo etichetta nodo" emptyOptionLabel="ID nodo" on:change={(event) => updateMappingField("node", "labelField", event.detail.value)} />
           </label>
           <label>Tipo nodo
-            <select id="mapping-node-type" value={nodeMapping.typeField ?? ""} on:change={(event) => updateMappingField("node", "typeField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Nessun tipo</option>
-              {#each fieldOptions(nodeFieldPaths, nodeMapping.typeField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-node-type" value={nodeMapping.typeField ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo tipo nodo" emptyOptionLabel="Nessun tipo" on:change={(event) => updateMappingField("node", "typeField", event.detail.value)} />
           </label>
           <label>Gruppo nodo
-            <select value={nodeMapping.groupFields?.[0] ?? ""} on:change={(event) => updateMappingField("node", "groupFields", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Nessun gruppo</option>
-              {#each fieldOptions(nodeFieldPaths, nodeMapping.groupFields?.[0]) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-node-group" value={nodeMapping.groupFields?.[0] ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo gruppo nodo" emptyOptionLabel="Nessun gruppo" on:change={(event) => updateMappingField("node", "groupFields", event.detail.value)} />
           </label>
           <label>Origine arco
-            <select id="mapping-edge-source" value={edgeMapping.sourceField ?? ""} on:change={(event) => updateMappingField("edge", "sourceField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Campo origine</option>
-              {#each fieldOptions(edgeFieldPaths, edgeMapping.sourceField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-edge-source" value={edgeMapping.sourceField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo origine arco" emptyOptionLabel="Campo origine" on:change={(event) => updateMappingField("edge", "sourceField", event.detail.value)} />
           </label>
           <label>Destinazione arco
-            <select id="mapping-edge-target" value={edgeMapping.targetField ?? ""} on:change={(event) => updateMappingField("edge", "targetField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Campo destinazione</option>
-              {#each fieldOptions(edgeFieldPaths, edgeMapping.targetField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-edge-target" value={edgeMapping.targetField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo destinazione arco" emptyOptionLabel="Campo destinazione" on:change={(event) => updateMappingField("edge", "targetField", event.detail.value)} />
           </label>
           <label>ID record arco
-            <select id="mapping-edge-id" value={edgeMapping.idField ?? ""} on:change={(event) => updateMappingField("edge", "idField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Genera ID locali</option>
-              {#each fieldOptions(edgeFieldPaths, edgeMapping.idField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-edge-id" value={edgeMapping.idField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo ID record arco" emptyOptionLabel="Genera ID locali" on:change={(event) => updateMappingField("edge", "idField", event.detail.value)} />
           </label>
           <label>Tipo arco
-            <select id="mapping-edge-type" value={edgeMapping.typeField ?? ""} on:change={(event) => updateMappingField("edge", "typeField", (event.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Nessun tipo</option>
-              {#each fieldOptions(edgeFieldPaths, edgeMapping.typeField) as path}<option value={path}>{path}</option>{/each}
-            </select>
+            <SearchableFieldSelect id="mapping-edge-type" value={edgeMapping.typeField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo tipo arco" emptyOptionLabel="Nessun tipo" on:change={(event) => updateMappingField("edge", "typeField", event.detail.value)} />
           </label>
           <label>Direzione
             <select id="mapping-edge-direction" value={edgeMapping.direction ?? "undirected"} on:change={(event) => updateMappingField("edge", "direction", (event.currentTarget as HTMLSelectElement).value)}>
@@ -568,52 +861,28 @@
             <p>Mappa qui i campi usati da analisi, vincoli e scenari. Mantieni gli alias richiesti dalla configurazione esistente.</p>
             <div class="mapping-grid">
               <label>Ruolo nodo
-                <select value={nodeMapping.roleField ?? ""} on:change={(event) => updateMappingField("node", "roleField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessun ruolo</option>
-                  {#each fieldOptions(nodeFieldPaths, nodeMapping.roleField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-node-role" value={nodeMapping.roleField ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo ruolo nodo" emptyOptionLabel="Nessun ruolo" on:change={(event) => updateMappingField("node", "roleField", event.detail.value)} />
               </label>
               <label>Costo rimozione nodo
-                <select value={nodeMapping.removalCostField ?? ""} on:change={(event) => updateMappingField("node", "removalCostField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessun costo</option>
-                  {#each fieldOptions(nodeFieldPaths, nodeMapping.removalCostField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-node-removal-cost" value={nodeMapping.removalCostField ?? ""} options={nodeFieldSearchOptions} ariaLabel="Cerca il campo costo rimozione nodo" emptyOptionLabel="Nessun costo" on:change={(event) => updateMappingField("node", "removalCostField", event.detail.value)} />
               </label>
               <label>Peso arco
-                <select value={edgeMapping.weightField ?? ""} on:change={(event) => updateMappingField("edge", "weightField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessun peso</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.weightField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-weight" value={edgeMapping.weightField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo peso arco" emptyOptionLabel="Nessun peso" on:change={(event) => updateMappingField("edge", "weightField", event.detail.value)} />
               </label>
               <label>Confidenza arco
-                <select value={edgeMapping.confidenceField ?? ""} on:change={(event) => updateMappingField("edge", "confidenceField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessuna confidenza</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.confidenceField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-confidence" value={edgeMapping.confidenceField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo confidenza arco" emptyOptionLabel="Nessuna confidenza" on:change={(event) => updateMappingField("edge", "confidenceField", event.detail.value)} />
               </label>
               <label>Fonte dell'arco
-                <select value={edgeMapping.provenanceField ?? ""} on:change={(event) => updateMappingField("edge", "provenanceField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessuna fonte</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.provenanceField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-provenance" value={edgeMapping.provenanceField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo fonte arco" emptyOptionLabel="Nessuna fonte" on:change={(event) => updateMappingField("edge", "provenanceField", event.detail.value)} />
               </label>
               <label>Costo rimozione arco
-                <select value={edgeMapping.removalCostField ?? ""} on:change={(event) => updateMappingField("edge", "removalCostField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessun costo</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.removalCostField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-removal-cost" value={edgeMapping.removalCostField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo costo rimozione arco" emptyOptionLabel="Nessun costo" on:change={(event) => updateMappingField("edge", "removalCostField", event.detail.value)} />
               </label>
               <label>Inizio validità arco
-                <select value={edgeMapping.validity?.fromField ?? ""} on:change={(event) => updateMappingField("edge", "validity.fromField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessun inizio</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.validity?.fromField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-validity-from" value={edgeMapping.validity?.fromField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo inizio validità arco" emptyOptionLabel="Nessun inizio" on:change={(event) => updateMappingField("edge", "validity.fromField", event.detail.value)} />
               </label>
               <label>Fine validità arco
-                <select value={edgeMapping.validity?.toField ?? ""} on:change={(event) => updateMappingField("edge", "validity.toField", (event.currentTarget as HTMLSelectElement).value)}>
-                  <option value="">Nessuna fine</option>
-                  {#each fieldOptions(edgeFieldPaths, edgeMapping.validity?.toField) as path}<option value={path}>{path}</option>{/each}
-                </select>
+                <SearchableFieldSelect id="mapping-edge-validity-to" value={edgeMapping.validity?.toField ?? ""} options={edgeFieldSearchOptions} ariaLabel="Cerca il campo fine validità arco" emptyOptionLabel="Nessuna fine" on:change={(event) => updateMappingField("edge", "validity.toField", event.detail.value)} />
               </label>
               <label>Unità numerica degli intervalli
                 <select value={edgeMapping.validity?.numericUnit ?? ""} on:change={(event) => updateMappingField("edge", "validity.numericUnit", (event.currentTarget as HTMLSelectElement).value)}>
@@ -629,45 +898,49 @@
 
             <section class="attribute-mappings" aria-label="Attributi mappati">
               <h3>Attributi nodo</h3>
-              {#each Object.entries(nodeMapping.attributes ?? {}) as [alias, path]}
+              {#each visibleNodeAttributeEntries as [alias, path], attributeIndex (alias)}
                 <div class="attribute-row">
                   <span title={alias}>{alias}</span>
-                  <select aria-label={`Campo per attributo nodo ${alias}`} value={path} on:change={(event) => updateAttributeMapping("node", alias, (event.currentTarget as HTMLSelectElement).value)}>
-                    <option value="">Rimuovi mapping</option>
-                    {#each fieldOptions(nodeFieldPaths, path) as field}<option value={field}>{field}</option>{/each}
-                  </select>
-                  <button type="button" class="remove-attribute" aria-label={`Rimuovi attributo nodo ${alias}`} on:click={() => updateAttributeMapping("node", alias, "")}>×</button>
+                  <SearchableFieldSelect id={`mapping-node-attribute-${attributeIndex}`} value={String(path ?? "")} options={nodeFieldSearchOptions} ariaLabel={`Campo per attributo nodo ${alias}`} emptyOptionLabel="Rimuovi mappatura" on:change={(event) => updateAttributeMapping("node", alias, event.detail.value)} />
+                  <button type="button" class="remove-attribute" aria-label={`Rimuovi attributo nodo ${alias}`} title={`Rimuovi attributo nodo ${alias}`} on:click={() => updateAttributeMapping("node", alias, "")}>×</button>
                 </div>
               {/each}
+              <ResultListPager
+                total={nodeAttributeEntries.length}
+                visible={visibleNodeAttributeEntries.length}
+                pageSize={ATTRIBUTE_MAPPING_PAGE_SIZE}
+                label="attributi nodo"
+                showMore={showMoreNodeAttributeMappings}
+              />
               <div class="attribute-add">
-                <input aria-label="Nome del nuovo attributo nodo" placeholder="Nome attributo" bind:value={nodeAttributeAlias} />
-                <select aria-label="Campo JSON per il nuovo attributo nodo" bind:value={nodeAttributePath}>
-                  <option value="">Scegli campo JSON</option>
-                  {#each nodeFieldPaths as field}<option value={field}>{field}</option>{/each}
-                </select>
-                <button type="button" on:click={() => addAttributeMapping("node")} disabled={!nodeAttributeAlias.trim() || !nodeAttributePath}>Aggiungi</button>
+                <input aria-label="Nome del nuovo attributo nodo" placeholder="Nome attributo" bind:value={nodeAttributeAlias} required />
+                <SearchableFieldSelect id="mapping-node-new-attribute-path" bind:value={nodeAttributePath} options={nodeFieldSearchOptions} ariaLabel="Campo JSON per il nuovo attributo nodo" emptyOptionLabel="Scegli campo JSON" required />
+                <button type="button" aria-describedby={nodeAttributeAddBlocker ? "mapping-node-add-blocker" : undefined} on:click={() => addAttributeMapping("node")} disabled={Boolean(nodeAttributeAddBlocker)}>Aggiungi attributo nodo</button>
+                {#if nodeAttributeAddBlocker}<small id="mapping-node-add-blocker" class="field-note" role="status" aria-live="polite">{nodeAttributeAddBlocker}</small>{/if}
               </div>
             </section>
 
             <section class="attribute-mappings" aria-label="Attributi arco">
               <h3>Attributi arco</h3>
-              {#each Object.entries(edgeMapping.attributes ?? {}) as [alias, path]}
+              {#each visibleEdgeAttributeEntries as [alias, path], attributeIndex (alias)}
                 <div class="attribute-row">
                   <span title={alias}>{alias}</span>
-                  <select aria-label={`Campo per attributo arco ${alias}`} value={path} on:change={(event) => updateAttributeMapping("edge", alias, (event.currentTarget as HTMLSelectElement).value)}>
-                    <option value="">Rimuovi mapping</option>
-                    {#each fieldOptions(edgeFieldPaths, path) as field}<option value={field}>{field}</option>{/each}
-                  </select>
-                  <button type="button" class="remove-attribute" aria-label={`Rimuovi attributo arco ${alias}`} on:click={() => updateAttributeMapping("edge", alias, "")}>×</button>
+                  <SearchableFieldSelect id={`mapping-edge-attribute-${attributeIndex}`} value={String(path ?? "")} options={edgeFieldSearchOptions} ariaLabel={`Campo per attributo arco ${alias}`} emptyOptionLabel="Rimuovi mappatura" on:change={(event) => updateAttributeMapping("edge", alias, event.detail.value)} />
+                  <button type="button" class="remove-attribute" aria-label={`Rimuovi attributo arco ${alias}`} title={`Rimuovi attributo arco ${alias}`} on:click={() => updateAttributeMapping("edge", alias, "")}>×</button>
                 </div>
               {/each}
+              <ResultListPager
+                total={edgeAttributeEntries.length}
+                visible={visibleEdgeAttributeEntries.length}
+                pageSize={ATTRIBUTE_MAPPING_PAGE_SIZE}
+                label="attributi arco"
+                showMore={showMoreEdgeAttributeMappings}
+              />
               <div class="attribute-add">
-                <input aria-label="Nome del nuovo attributo arco" placeholder="Nome attributo" bind:value={edgeAttributeAlias} />
-                <select aria-label="Campo JSON per il nuovo attributo arco" bind:value={edgeAttributePath}>
-                  <option value="">Scegli campo JSON</option>
-                  {#each edgeFieldPaths as field}<option value={field}>{field}</option>{/each}
-                </select>
-                <button type="button" on:click={() => addAttributeMapping("edge")} disabled={!edgeAttributeAlias.trim() || !edgeAttributePath}>Aggiungi</button>
+                <input aria-label="Nome del nuovo attributo arco" placeholder="Nome attributo" bind:value={edgeAttributeAlias} required />
+                <SearchableFieldSelect id="mapping-edge-new-attribute-path" bind:value={edgeAttributePath} options={edgeFieldSearchOptions} ariaLabel="Campo JSON per il nuovo attributo arco" emptyOptionLabel="Scegli campo JSON" required />
+                <button type="button" aria-describedby={edgeAttributeAddBlocker ? "mapping-edge-add-blocker" : undefined} on:click={() => addAttributeMapping("edge")} disabled={Boolean(edgeAttributeAddBlocker)}>Aggiungi attributo arco</button>
+                {#if edgeAttributeAddBlocker}<small id="mapping-edge-add-blocker" class="field-note" role="status" aria-live="polite">{edgeAttributeAddBlocker}</small>{/if}
               </div>
             </section>
           </div>
@@ -697,30 +970,38 @@
 
       <section class="json-editor-section">
         <label for="graph-config">Configurazione JSON</label>
-        <textarea
+        <JsonCodeEditor
           id="graph-config"
-          spellcheck="false"
+          ariaLabel="Configurazione JSON"
           value={configText}
-          on:input={(e) =>
-            onConfigTextChange((e.currentTarget as HTMLTextAreaElement).value)}
-        ></textarea>
+          invalid={errorInput === "configurazione"}
+          describedBy={errorInput === "configurazione" ? "graph-apply-error" : undefined}
+          onValueChange={onConfigTextChange}
+        />
       </section>
 
       <section class="json-editor-section">
-        <label for="graph-dataset">Dataset JSON</label>
-        <textarea
+        <label for="graph-dataset">Dati del grafo (JSON)</label>
+        <JsonCodeEditor
           id="graph-dataset"
-          spellcheck="false"
+          ariaLabel="Dati del grafo (JSON)"
           value={datasetText}
-          on:input={(e) =>
-            onDatasetTextChange((e.currentTarget as HTMLTextAreaElement).value)}
-        ></textarea>
+          invalid={errorInput === "dataset"}
+          describedBy={errorInput === "dataset" ? "graph-apply-error" : undefined}
+          onValueChange={onDatasetTextChange}
+        />
       </section>
 
       {#if errorMessage}
-        <div class="error-box">
+        <div id="graph-apply-error" class="error-box" role="alert">
           <strong>Il grafo non è stato applicato</strong>
           <span>{errorMessage}</span>
+          {#if errorTechnicalDetails}
+            <details>
+              <summary>Dettagli tecnici</summary>
+              <pre>{errorTechnicalDetails}</pre>
+            </details>
+          {/if}
         </div>
       {/if}
     </div>
@@ -754,17 +1035,6 @@
           </div>
         </div>
       {/if}
-      <details class="example-list">
-        <summary>Apri un esempio</summary>
-        <div>
-          <button class="secondary-button" type="button" on:click={onLoadDavis} title="Grafo bipartito Davis Southern Women, mapping schema v2">Davis Southern Women · 32 nodi</button>
-          <button class="secondary-button" type="button" on:click={onLoadKarate} title="Grafo Zachary Karate Club con mapping schema v2">Karate Club · 34 nodi</button>
-          <button class="secondary-button" type="button" on:click={onLoadGahukuGama} title="Rete Gahuku-Gama con segni e triadi firmate">Gahuku-Gama · triadi firmate</button>
-          <button class="secondary-button" type="button" on:click={onLoadTemporalEdges} title="Fixture schema v2 con intervalli temporali sugli archi">Rete temporale · 4 nodi</button>
-          <button class="secondary-button" type="button" on:click={onLoadInVS} title="Finestra inclusiva [28.800, 34.800] s">SocioPatterns InVS · 45 nodi</button>
-          <button class="secondary-button" type="button" on:click={onLoadInVSFull} title="Tutti i contatti della rete InVS">SocioPatterns InVS completo · 92 nodi</button>
-        </div>
-      </details>
     </div>
   </aside>
 {/if}
@@ -785,7 +1055,7 @@
     overflow: hidden;
     background: rgba(15, 23, 42, 0.96);
     color: #e5e7eb;
-    font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font: 13px/1.4 Arial, Helvetica, sans-serif;
     border-right: 1px solid rgba(148, 163, 184, 0.25);
     box-shadow: 14px 0 40px rgba(0, 0, 0, 0.35);
   }
@@ -819,16 +1089,44 @@
     overscroll-behavior: contain;
   }
 
-  .data-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 11px; border: 1px solid rgba(148, 163, 184, .2); border-radius: 11px; background: rgba(30, 41, 59, .62); }
+  .data-actions { display: flex; flex-direction: column; gap: 9px; padding: 11px; border: 1px solid rgba(148, 163, 184, .2); border-radius: 11px; background: rgba(30, 41, 59, .62); }
+  .data-actions > .reset-confirmation { width: 100%; flex: initial; }
+  .project-management { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .project-identity { min-width: 0; }
+  .project-file-actions { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: stretch; gap: 8px; }
+  .project-file-actions :global(button), .project-file-actions .file-button { flex: 1 1 118px; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 8px; font-size: 12px; }
+  .source-data-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding-top: 9px; border-top: 1px solid rgba(148, 163, 184, .16); }
+  .project-name-field { display: grid; gap: 6px; color: #f1f5f9; font-size: 12px; font-weight: 700; }
+  .project-name-field input { width: 100%; min-height: 40px; box-sizing: border-box; padding: 8px 10px; border: 1px solid rgba(148, 163, 184, .42); border-radius: 8px; background: rgba(15, 23, 42, .82); color: #f8fafc; font: inherit; font-size: 14px; font-weight: 500; }
+  .project-name-field input:focus-visible { outline: 3px solid rgba(56, 189, 248, .32); outline-offset: 2px; }
+  .project-name-hint { margin: 5px 0 0; color: #c1ccda; font-size: 11px; line-height: 1.4; }
   .file-button { position: relative; display: inline-flex; justify-content: center; align-items: center; min-height: 36px; padding: 7px 9px; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, .26); border-radius: 8px; background: rgba(148, 163, 184, .12); color: #e2e8f0; cursor: pointer; font-size: 11px; font-weight: 650; text-align: center; }
   .file-button:hover { background: rgba(148, 163, 184, .2); }
   .file-button:focus-within { outline: 3px solid rgba(56, 189, 248, .32); outline-offset: 2px; }
   .file-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .data-actions > :global(button) { min-height: 36px; padding: 7px 9px; border: 1px solid rgba(148, 163, 184, .26); border-radius: 8px; font-size: 11px; }
-  .file-message, .file-error, .file-hint, .session-status { grid-column: 1 / -1; margin: 0; font-size: 11px; line-height: 1.45; }
+  .file-message, .file-error, .file-hint, .session-status { width: 100%; margin: 0; font-size: 11px; line-height: 1.45; }
   .session-status { color: #a7f3d0; }
   .file-message { color: #a7f3d0; }
+  .session-status:not(.has-message), .file-message:not(.has-message) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+    font-size: 0;
+    line-height: 0;
+  }
   .file-error { color: #fecaca; }
+  .file-error p { margin: 0; }
+  .file-error details { color: #fee2e2; }
+  .file-error summary { width: fit-content; cursor: pointer; font-weight: 650; }
+  .file-error summary:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+  .file-error pre { max-height: 120px; margin: 5px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #fecaca; font: inherit; font-size: 10px; }
   .file-hint { color: #aab7c8; }
 
   .input-validation { display: flex; flex-direction: column; gap: 7px; padding: 11px; border: 1px solid rgba(52, 211, 153, .3); border-radius: 11px; background: rgba(6, 78, 59, .28); }
@@ -836,13 +1134,27 @@
   .input-validation.warning { border-color: rgba(251, 191, 36, .48); background: rgba(120, 53, 15, .2); }
   .validation-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; color: #f8fafc; font-size: 11px; }
   .validation-state { flex: 0 0 auto; color: #a7f3d0; font-size: 10px; font-weight: 700; }
+  .validation-state:not(.has-message) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+    font-size: 0;
+    line-height: 0;
+  }
+  .validation-state.pending { color: #cbd5e1; }
   .input-validation.error .validation-state { color: #fecaca; }
   .input-validation.warning .validation-state { color: #fde68a; }
   .input-validation > p { margin: 0; color: #cbd5e1; font-size: 10px; line-height: 1.45; }
   .draft-preview { margin: 2px 0 0; padding: 7px; border: 1px solid rgba(148, 163, 184, .22); border-radius: 8px; background: rgba(2, 6, 23, .28); }
   .draft-preview figcaption { margin-bottom: 4px; color: #e2e8f0; font-size: 10px; font-weight: 700; }
   .draft-preview svg { display: block; width: 100%; max-height: 180px; overflow: visible; }
-  .draft-preview text { fill: #e2e8f0; font: 10px system-ui, sans-serif; }
+  .draft-preview text { fill: #e2e8f0; font: 10px Arial, Helvetica, sans-serif; }
   .draft-preview small { display: block; color: #94a3b8; font-size: 9px; }
   .input-validation .validation-counts { color: #fcd78b; font-weight: 700; }
   .input-validation.error .validation-counts { color: #fecaca; }
@@ -855,13 +1167,11 @@
   .more-diagnostics .validation-list { margin-top: 7px; }
 
   .mapping-section { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid rgba(148, 163, 184, .2); border-radius: 11px; background: rgba(30, 41, 59, .36); }
-  .mapping-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .mapping-heading h2 { margin: 0; color: #f8fafc; font-size: 13px; }
-  .mapping-heading .text-button { padding: 5px 7px; border: 1px solid rgba(148, 163, 184, .24); border-radius: 6px; background: transparent; color: #b8d8d3; font-size: 10px; }
+  .mapping-section > h2 { margin: 0; color: #f8fafc; font-size: 13px; }
   .mapping-section > p { margin: 0; color: #aab7c8; font-size: 10px; line-height: 1.4; }
   .mapping-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .mapping-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: #dbe4ee; font-size: 10px; font-weight: 650; }
-  .mapping-grid select { width: 100%; min-width: 0; min-height: 32px; padding: 5px 7px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 7px; background: #0f172a; color: #e2e8f0; font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .mapping-grid select, :global(.mapping-grid .searchable-node-select input) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px; padding: 5px 7px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 7px; background: #0f172a; color: #e2e8f0; font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .mapping-status { color: #94a3b8; font-size: 10px; }
   .mapping-warning { color: #fcd78b; font-size: 10px; line-height: 1.4; }
   .advanced-mapping { margin-top: 2px; border-top: 1px solid rgba(148, 163, 184, .17); padding-top: 8px; }
@@ -880,8 +1190,9 @@
   .attribute-mappings h3 { margin: 0; color: #dbe4ee; font-size: 11px; }
   .attribute-row, .attribute-add { display: grid; grid-template-columns: minmax(70px, .7fr) minmax(0, 1.4fr) 30px; gap: 6px; align-items: center; }
   .attribute-row > span { overflow: hidden; color: #c8d4e1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-  .attribute-row select, .attribute-add select, .attribute-add input { width: 100%; min-width: 0; min-height: 31px; box-sizing: border-box; padding: 5px 6px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 7px; background: #0f172a; color: #e2e8f0; font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :global(.attribute-row .searchable-node-select input), :global(.attribute-add .searchable-node-select input), .attribute-add input { width: 100%; min-width: 0; min-height: 31px; box-sizing: border-box; padding: 5px 6px; border: 1px solid rgba(148, 163, 184, .3); border-radius: 7px; background: #0f172a; color: #e2e8f0; font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .attribute-add { grid-template-columns: minmax(72px, .7fr) minmax(0, 1.4fr) auto; }
+  .attribute-add .field-note { grid-column: 1 / -1; margin: 0; color: #aab7c8; font-size: 10px; line-height: 1.4; }
   .attribute-add button { min-height: 31px; padding: 5px 7px; border-radius: 7px; font-size: 10px; }
   .attribute-add button:disabled { opacity: .48; cursor: not-allowed; }
   .remove-attribute { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; border-radius: 7px; background: rgba(148, 163, 184, .12); color: #fecaca; font-size: 18px; }
@@ -898,37 +1209,6 @@
     font-size: 13px;
     font-weight: 700;
     color: #f8fafc;
-  }
-
-  textarea {
-    width: 100%;
-    min-height: 96px;
-    height: auto;
-    flex: 1 1 96px;
-    resize: vertical;
-    box-sizing: border-box;
-    padding: 12px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    border-radius: 10px;
-    outline: none;
-    background: #020617;
-    color: #e5e7eb;
-    font-family:
-      ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      Monaco,
-      Consolas,
-      "Liberation Mono",
-      "Courier New",
-      monospace;
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  textarea:focus {
-    border-color: #38bdf8;
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
   }
 
   .error-box {
@@ -972,10 +1252,13 @@
     min-height: 34px;
   }
 
-  .example-list { width: 100%; }
+  .example-list { width: 100%; padding-top: 7px; border-top: 1px solid rgba(148, 163, 184, .16); }
   .example-list summary { display: inline-flex; align-items: center; min-height: 35px; padding: 0 10px; border-radius: 8px; background: rgba(148, 163, 184, .12); color: #dbe4ee; cursor: pointer; font-size: 11px; font-weight: 650; }
   .example-list > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }
-  .example-list button { min-height: 34px; font-size: 10px; text-align: left; }
+  .example-link { display: grid; gap: 4px; min-height: 52px; box-sizing: border-box; padding: 8px; border: 1px solid rgba(148, 163, 184, .2); border-radius: 8px; background: rgba(148, 163, 184, .08); color: #e5e7eb; text-decoration: none; }
+  .example-link:hover { border-color: rgba(56, 189, 248, .4); background: rgba(148, 163, 184, .14); }
+  .example-link strong { font-size: 10px; }
+  .example-link small { color: #aab7c8; font-size: 9px; line-height: 1.35; }
 
   button {
     border: none;
@@ -1005,7 +1288,10 @@
 
   @media (max-width: 520px) {
     .json-editor-panel { width: 100vw; padding: 14px; }
-    .data-actions { grid-template-columns: 1fr 1fr; }
+    .project-management { grid-template-columns: minmax(0, 1fr); }
+    .project-file-actions { justify-content: stretch; }
+    .project-file-actions > * { flex: 1 1 118px; }
+    .source-data-actions { grid-template-columns: 1fr; }
     .example-list > div { grid-template-columns: 1fr; }
     .mapping-grid { grid-template-columns: 1fr; }
     .attribute-row, .attribute-add { grid-template-columns: 1fr 30px; }

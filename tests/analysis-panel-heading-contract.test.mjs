@@ -11,14 +11,14 @@ const components = {
 };
 
 test("il pannello clique è una regione nominata dal titolo visibile", () => {
-  assert.match(components.solver, /<section class="solver-panel" aria-labelledby="solver-panel-title">/);
+  assert.match(components.solver, /<section\s+class="solver-panel"[\s\S]*?aria-labelledby="solver-panel-title"/);
   assert.match(components.solver, /<h3 id="solver-panel-title">Risultati clique<\/h3>/);
 });
 
 test("analisi strutturale e integrità collegano il nome della regione al titolo", () => {
-  assert.match(components.structural, /<section class="structural-panel" aria-labelledby="structural-panel-title">/);
+  assert.match(components.structural, /<section\s+class="structural-panel"[\s\S]*?aria-labelledby="structural-panel-title"/);
   assert.match(components.structural, /<h3 id="structural-panel-title">Analisi strutturale<\/h3>/);
-  assert.match(components.integrity, /<section class="integrity-panel" aria-labelledby="integrity-panel-title">/);
+  assert.match(components.integrity, /<section\s+class="integrity-panel"[\s\S]*?aria-labelledby="integrity-panel-title"/);
   assert.match(components.integrity, /<h3 id="integrity-panel-title">Integrità del grafo<\/h3>/);
 });
 

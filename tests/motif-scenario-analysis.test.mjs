@@ -106,9 +106,20 @@ test("finite motif CSV names the assumed worlds and avoids probability language"
     graphDirection: "directed",
     timelineWindow: "1900–1920",
     minimumEdgeConfidence: 0.7,
-    viewFilters: { types: ["person"], groups: ["north", "south"] }
+    viewFilters: {
+      types: ["person"],
+      groups: ["north", "south"],
+      degreeFilters: { excludeIsolated: true }
+    }
   }));
   const csv = buildProvenanceScenarioMotifCsv(comparison);
+  assert.deepEqual(comparison.queryScope.viewFilters.degreeFilters, {
+    excludeIsolated: true,
+    excludeWithoutIncoming: false,
+    excludeWithoutOutgoing: false
+  });
+  assert.match(csv, /view_degree_filters_json/);
+  assert.match(csv, /excludeIsolated"":true/);
   assert.match(csv, /"record_type","motif_id","motif_label","role_names"/);
   assert.match(csv, /"finite-exhaustive-worlds","directed","researchers"/);
   assert.match(csv, /"brave-only","1","2","true"/);
@@ -165,9 +176,11 @@ test("finite motif CSV preserves scenario IDs and filter values containing the d
   ], queryScope({ viewFilters: { types: ["person|research"], groups: ["group|north", "south"] } }));
 
   const csv = buildProvenanceScenarioMotifCsv(comparison);
-  assert.match(csv, /"view_types_json","view_groups_json"/);
+  assert.match(csv, /"view_types_json","view_groups_json","view_degree_filters_json"/);
   assert.match(csv, /"worlds_present_json","worlds_absent_json"/);
   assert.ok(csv.includes('"[""person|research""]","[""group|north"",""south""]"'));
+  assert.match(csv, /view_degree_filters_json/);
+  assert.match(csv, /excludeIsolated"":false/);
   assert.ok(csv.includes('"[""world|one""]","[""world-two""]"'));
 });
 

@@ -65,6 +65,28 @@ test("gli scenari di provenienza applicano policy any/all e gestiscono gli archi
   assert.equal(filterLinksByProvenanceScenario(links, undefined).length, links.length);
 });
 
+test("un alias JSON __proto__ attraversa mapping, grafo normalizzato e fatti ASP come dato", () => {
+  const graph = normalizeGraphData({
+    nodes: [{ id: "node-1", label: "Nodo", score: 7 }],
+    edges: []
+  }, {
+    schemaVersion: 2,
+    graphMapping: {
+      node: {
+        idField: "$.id",
+        attributes: Object.fromEntries([["__proto__", "$.score"]])
+      },
+      edge: {}
+    }
+  });
+
+  assert.equal(graph.valid, true, JSON.stringify(graph.diagnostics));
+  assert.equal(Object.hasOwn(graph.nodes[0].analysis.attributes, "__proto__"), true);
+  assert.equal(graph.nodes[0].analysis.attributes["__proto__"], 7);
+  assert.match(buildAspFactsFromGraph(graph).facts, /node_attribute\(1,"__proto__",7\)\./);
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
 test("il parser temporale applica il contratto comune e rifiuta date invalide o ambigue", () => {
   assert.equal(parseGraphTimeValue("2024"), 2024);
   assert.equal(parseGraphTimeValue("2024-02-29"), Date.parse("2024-02-29"));
@@ -393,7 +415,7 @@ test("schema v2 mappa tipi e conserva la direzione dichiarata", async () => {
     {
       available: false,
       missing: ["edgeIntervals"],
-      reasons: ["mappare intervalli validi e ordinati in un unico dominio temporale su tutti gli archi con graphMapping.edge.validity"]
+      reasons: ["In Dati → Campi opzionali e attributi, associa inizio e fine di ogni arco; gli intervalli devono essere validi e usare lo stesso dominio temporale."]
     }
   );
 
@@ -1099,7 +1121,7 @@ test("mapping incompleti o ambigui non vengono accettati in silenzio", () => {
     {
       available: false,
       missing: ["edgeTypes"],
-      reasons: ["mappare un tipo per ogni arco con graphMapping.edge.typeField"]
+      reasons: ["In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni arco."]
     }
   );
 

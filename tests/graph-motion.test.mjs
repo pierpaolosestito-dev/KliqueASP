@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getGraphMotionSettings, getGraphTransitionDuration, getInitialGraphCameraDistance } from "../src/lib/kliqueasp/graph/graphMotion.ts";
+import { getGraphFitZoomFactor, getGraphMotionSettings, getGraphTransitionDuration, getInitialGraphCameraDistance } from "../src/lib/kliqueasp/graph/graphMotion.ts";
 
 test("preserves the existing 3D layout and camera motion by default", () => {
   assert.deepEqual(getGraphMotionSettings(false), {
@@ -28,10 +28,22 @@ test("rejects invalid camera transition durations", () => {
   assert.throws(() => getGraphTransitionDuration(Number.NaN, true), RangeError);
 });
 
-test("starts larger graphs farther away while preserving the small-graph camera", () => {
-  assert.equal(getInitialGraphCameraDistance(3), 220);
-  assert.equal(getInitialGraphCameraDistance(8), 220);
-  assert.equal(getInitialGraphCameraDistance(34), 454);
+test("starts graphs at a readable scale and increases camera distance with graph size", () => {
+  assert.equal(getInitialGraphCameraDistance(3), 180);
+  assert.equal(getInitialGraphCameraDistance(8), 180);
+  assert.equal(getInitialGraphCameraDistance(34), 371);
   assert.ok(getInitialGraphCameraDistance(100) > getInitialGraphCameraDistance(34));
-  assert.equal(getInitialGraphCameraDistance(Number.NaN), 220);
+  assert.equal(getInitialGraphCameraDistance(Number.NaN), 180);
+});
+
+test("screen-space graph fitting enlarges underfilled graphs and caps the correction", () => {
+  assert.equal(getGraphFitZoomFactor(0.4, 0.5), 1.25);
+  assert.equal(getGraphFitZoomFactor(0.1, 0.2), 1.25);
+  assert.ok(Math.abs(getGraphFitZoomFactor(0.3, 0.6) - (0.68 / 0.6)) < 1e-9);
+});
+
+test("screen-space graph fitting never zooms in past the safe viewport margin", () => {
+  assert.equal(getGraphFitZoomFactor(0.75, 0.2), 1);
+  assert.equal(getGraphFitZoomFactor(0.4, 0.68), 1);
+  assert.equal(getGraphFitZoomFactor(Number.NaN, 0.2), 1);
 });

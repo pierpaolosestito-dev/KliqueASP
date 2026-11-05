@@ -15,6 +15,8 @@ const typedPathCounterfactualPanel = await readFile(new URL("../src/lib/kliqueas
 const workerMemoryReadout = await readFile(new URL("../src/lib/kliqueasp/components/WorkerMemoryReadout.svelte", import.meta.url), "utf8");
 const counterfactualConfigHint = await readFile(new URL("../src/lib/kliqueasp/components/CounterfactualConfigHint.svelte", import.meta.url), "utf8");
 const structuralGraphApp = await readFile(new URL("../src/lib/kliqueasp/GraphApp.svelte", import.meta.url), "utf8");
+const sandboxPage = await readFile(new URL("../src/routes/Sandbox/+page.svelte", import.meta.url), "utf8");
+const homePage = await readFile(new URL("../src/routes/+page.svelte", import.meta.url), "utf8");
 const graph2DExportPanel = await readFile(new URL("../src/lib/kliqueasp/components/Graph2DExportPanel.svelte", import.meta.url), "utf8");
 const analysisErrorMessage = await readFile(new URL("../src/lib/kliqueasp/components/AnalysisErrorMessage.svelte", import.meta.url), "utf8");
 const analysisErrorPanels = await Promise.all([
@@ -27,6 +29,23 @@ const analysisErrorPanels = await Promise.all([
   readFile(new URL("../src/lib/kliqueasp/components/StructuralCompletionCounterfactualPanel.svelte", import.meta.url), "utf8"),
   readFile(new URL("../src/lib/kliqueasp/components/TypedPathCounterfactualPanel.svelte", import.meta.url), "utf8")
 ]);
+
+test("the home page metadata uses the same Italian graph-analysis language as the interface", () => {
+  assert.match(homePage, /name="description"\s+content="Esplora la struttura dei tuoi grafi, analizza le relazioni e porta con te i risultati\."/);
+  assert.doesNotMatch(homePage, /interactive graph reasoning environment/i);
+});
+
+test("k-core number export uses a concise Italian label", () => {
+  assert.match(structuralPanel, /Esporta numeri di core \(CSV\)/);
+  assert.doesNotMatch(structuralPanel, /Esporta core number CSV/i);
+});
+
+test("2D export controls and graph-scope messages consistently use Italian wording", () => {
+  assert.match(graph2DExportPanel, /aria-label="Chiudi esportazione 2D" title="Chiudi esportazione 2D"/);
+  assert.match(graph2DExportPanel, /aria-label="Opzioni di esportazione 2D"/);
+  assert.match(infoPanel, /L'analisi e le esportazioni restano riferite all'intero grafo filtrato/);
+  assert.match(structuralGraphApp, /Analisi ed esportazioni usano l'intera proiezione filtrata/);
+});
 
 test("community topology counterfactual uses concise Italian graph-analysis language", () => {
   const titleStart = structuralPanel.indexOf('aria-labelledby="community-topology-counterfactual-title"');
@@ -41,9 +60,22 @@ test("community topology counterfactual uses concise Italian graph-analysis lang
   assert.doesNotMatch(topologySection, /edge edit|Cerca il costo minimo con ASP|Clingo cerca gli edit|infeasible/i);
 });
 
-test("project dirty state distinguishes browser session saving from project export", () => {
-  assert.match(structuralGraphApp, /class="toolbar-export-status" role="status" title="La sessione è salvata nel browser\. Esporta il progetto per creare un file riapribile\."\s*>Modifiche da esportare<\/span>/);
-  assert.doesNotMatch(structuralGraphApp, /Modifiche non salvate|Progetto modificato/);
+test("community topology no-candidate errors use Italian instead of implementation terminology", () => {
+  assert.match(structuralGraphApp, /structuralCommunityTopologyCounterfactualError = "Nessuna modifica di arco configurata è applicabile al gruppo e alla proiezione visibile correnti\."/);
+  assert.doesNotMatch(structuralGraphApp, /"[^"\n]*edge edit/i);
+});
+
+test("community-constraint diagnosis summarizes its cost and non-mutating scope concisely", () => {
+  assert.match(structuralPanel, /<p>Elenca le sospensioni di costo totale minimo per categoria \(peso predefinito 1\)\. Non modifica i dati e non stabilisce quali vincoli siano errati\.<\/p>/);
+  assert.doesNotMatch(structuralPanel, /Ogni elemento elencato è una regola che si potrebbe sospendere/);
+});
+
+test("the 2D export affordance reflects whether an analysis result is available", () => {
+  assert.match(structuralGraphApp, /class="toolbar-button export-action desktop-toolbar-control" class:result-ready=\{analysisResultsAvailable\}/);
+  assert.match(structuralGraphApp, /class="export-action" class:result-ready=\{analysisResultsAvailable\}/);
+  assert.match(structuralGraphApp, /Esporta il grafo 2D con il risultato corrente/);
+  assert.match(structuralGraphApp, /Esporta la proiezione corrente del grafo in 2D/);
+  assert.doesNotMatch(structuralGraphApp, /Modifiche da esportare|Modifiche non salvate|Progetto modificato/);
 });
 
 test("2D selected-result export labels its subset consistently in the dialog and SVG", () => {
@@ -56,21 +88,35 @@ test("motif and graph-image controls describe results without ASP implementation
   const motifMarkup = motifPanel.slice(motifPanel.indexOf("</script>") + "</script>".length).split("<style>")[0];
   const graph2DMarkup = graph2DExportPanel.slice(graph2DExportPanel.indexOf("</script>") + "</script>".length).split("<style>")[0];
 
-  assert.match(motifMarkup, /\n\s*Motivo\s*\n\s*<select bind:value=\{selectedTemplateIndex\}/);
+  assert.match(motifMarkup, /\n\s*Motivo\s*\n\s*<SearchableNodeSelect\s+id="motif-analysis-template"\s+bind:value=\{selectedTemplateIndex\}/);
+  assert.match(motifMarkup, /ariaLabel="Cerca un motivo configurato"/);
   assert.match(motifMarkup, /istanza del motivo/);
   assert.match(motifMarkup, /Motivi e gruppi disponibili dipendono dalla configurazione/);
   assert.doesNotMatch(motifMarkup, />\s*Template\s*</);
   assert.doesNotMatch(motifMarkup, /\btestimone\b|\btestimoni\b/i);
+  assert.doesNotMatch(motifMarkup, /·\s*witness:/i);
 
   assert.match(graph2DMarkup, /<strong>Solo risultato selezionato<\/strong>/);
   assert.match(graph2DExportPanel, /"Risultato selezionato"/);
   assert.doesNotMatch(graph2DMarkup, /\btestimone\b|\btestimoni\b/i);
 });
 
+test("technical disclosures keep predicate identifiers and use Italian field labels", () => {
+  assert.match(motifPanel, /dati di ingresso: \{signedTriadContract\.inputPredicates\.join/);
+  assert.match(solverPanel, /<strong>Dati di ingresso:<\/strong> \{cliqueMembershipQueryContract\.inputPredicates\.join/);
+  assert.match(structuralPanel, /Predicati ASP di ingresso:/);
+  assert.match(structuralPanel, /<strong>Dati di ingresso:<\/strong> \{supportingQuery\.inputPredicates\.join/);
+  assert.match(structuralPanel, /ID scenario: \{provenanceDominatingSetScenarioWhyNot\.scenarioId\}/);
+  assert.doesNotMatch(motifPanel + solverPanel + structuralPanel, /Scenario ID:|<strong>Input:<\/strong>|input: \{signedTriadContract/);
+});
+
 test("a new typed path step asks for its edge type before allowing execution", () => {
   assert.match(structuralPanel, /if \(task === "typedPath" && pathEdgeTypeSequence\.length === 0\) \{\s*pathEdgeTypeSequence = \[""\];\s*\}/);
   assert.match(structuralPanel, /pathEdgeTypeSequence = \[\.\.\.pathEdgeTypeSequence, ""\]/);
   assert.match(structuralPanel, /pathEdgeTypeSequence\.some\(\(edgeType\) => !availableEdgeTypes\.includes\(edgeType\)\)/);
+  assert.match(structuralPanel, /\$: availableEdgeTypeSearchOptions = availableEdgeTypes\.map\(\(edgeType\) => \(\{ value: edgeType, label: edgeType \}\)\)/);
+  assert.match(structuralPanel, /id=\{`typed-path-edge-type-\$\{index\}`\}[\s\S]*?options=\{availableEdgeTypeSearchOptions\}[\s\S]*?ariaLabel=\{`Cerca il tipo d'arco per il passo \$\{index \+ 1\}`\}[\s\S]*?on:change=\{\(event\) => updatePathTypeStep\(index, event\.detail\.value\)\}/);
+  assert.match(structuralPanel, /function updatePathTypeStep\(index: number, value: string\)/);
   assert.match(structuralPanel, /function removePathTypeStep\(index: number\) \{\s*if \(pathEdgeTypeSequence\.length <= 1\) return;/);
   assert.match(structuralPanel, /\{#if pathEdgeTypeSequence\.length > 1\}/);
   const runButtonStart = structuralPanel.indexOf('class="run"');
@@ -80,8 +126,8 @@ test("a new typed path step asks for its edge type before allowing execution", (
 });
 
 test("edge mapping placeholders use the same Italian terms as their visible field labels", () => {
-  assert.match(jsonEditor, /<label>Origine arco\s*<select id="mapping-edge-source"[\s\S]*?<option value="">Campo origine<\/option>/);
-  assert.match(jsonEditor, /<label>Destinazione arco\s*<select id="mapping-edge-target"[\s\S]*?<option value="">Campo destinazione<\/option>/);
+  assert.match(jsonEditor, /<label>Origine arco\s*<SearchableFieldSelect id="mapping-edge-source"[\s\S]*?emptyOptionLabel="Campo origine"/);
+  assert.match(jsonEditor, /<label>Destinazione arco\s*<SearchableFieldSelect id="mapping-edge-target"[\s\S]*?emptyOptionLabel="Campo destinazione"/);
   assert.doesNotMatch(jsonEditor, /Campo (?:source|target)/);
 });
 
@@ -125,6 +171,15 @@ test("visible motif diagnostics and structural exports use Italian names", () =>
   assert.doesNotMatch(structuralPanel, /Esporta certificato why-not|Esporta why-not dello scenario/);
 });
 
+test("temporal motif diagnostics describe required relations without English pattern jargon", () => {
+  const motifMarkup = motifPanel.slice(motifPanel.indexOf("</script>") + "</script>".length).split("<style>")[0];
+  assert.match(motifMarkup, /temporalmente attive più relazioni richieste/);
+  assert.match(motifMarkup, /relazioni senza intervalli validi/);
+  assert.match(motifMarkup, /rende attive contemporaneamente più relazioni/);
+  assert.match(motifMarkup, /Ordine invertito tra relazioni/);
+  assert.doesNotMatch(motifMarkup, /(?<![A-Za-z])patterns?(?![A-Za-z])/i);
+});
+
 test("temporal path diagnostics and optional engine details use Italian graph-analysis terms", () => {
   assert.match(structuralPanel, /cammino temporale con ripetizioni di lunghezza massima/);
   assert.match(structuralPanel, /Gli inizi di validità dei record scelti sono non decrescenti lungo il percorso; gli intervalli possono sovrapporsi\./);
@@ -136,7 +191,7 @@ test("temporal path diagnostics and optional engine details use Italian graph-an
 });
 
 test("graph context panels avoid exposing implementation jargon in primary copy", () => {
-  assert.match(infoPanel, /L'analisi e gli export restano riferiti all'intero grafo filtrato/);
+  assert.match(infoPanel, /L'analisi e le esportazioni restano riferite all'intero grafo filtrato/);
   assert.doesNotMatch(infoPanel, /Proiezione ASP/);
   assert.match(contextualPanel, /Configura i tipi di nodi focali/);
   assert.doesNotMatch(contextualPanel, /graphAnalysis\.contextualClique|Solver in esecuzione/);
@@ -188,8 +243,11 @@ test("structural and toolbar copy explains comparisons without solver terminolog
   assert.match(structuralPanel, /Ogni k-plex soddisfa il vincolo/);
   assert.match(structuralPanel, /Calcolo in corso/);
   assert.doesNotMatch(structuralPanel, /Enumerazione<\/span>|Solver in esecuzione|Ogni modello soddisfa il k-plex/);
-  assert.match(structuralGraphApp, /Analisi ed export usano l'intera proiezione filtrata/);
-  assert.match(structuralGraphApp, /Confronta la clique massima in ogni scenario/);
+  assert.match(structuralGraphApp, /Analisi ed esportazioni usano l'intera proiezione filtrata/);
+  assert.match(structuralGraphApp, /Confronta le clique di cardinalità massima di ogni scenario; mostra solo confronti completi\./);
+  assert.match(structuralGraphApp, /<details class="clique-comparison-details">\s*<summary>Dettagli del confronto<\/summary>/);
+  assert.match(structuralGraphApp, /Usa la stessa finestra temporale, gli stessi filtri e la soglia di confidenza\. Il limite di calcolo è condiviso; se il tempo scade, il confronto si interrompe senza mostrare risultati parziali\./);
+  assert.match(structuralGraphApp, /\.clique-comparison-details summary:focus-visible/);
   assert.doesNotMatch(structuralGraphApp, /ASP, risultati ed export|Confronto brave\/cautious|Confronta tutti gli scenari dichiarati con ASP/);
   assert.match(structuralGraphApp, /Per confrontare gli scenari, dichiarali come insieme finito ed esaustivo/);
   assert.match(structuralGraphApp, /Per confrontare le triadi, dichiara gli scenari come insieme finito ed esaustivo/);
@@ -243,8 +301,18 @@ test("clique, k-plex, k-core, and typed-path explanations use Italian graph term
   assert.doesNotMatch(structuralCompletionPanel, /Evidenzia i round|Witness che certifica/i);
 });
 
+test("dynamic community-pair progress labels and missing node types use Italian", () => {
+  assert.match(structuralGraphApp, /function getCommunityPairConstraintLabel\(kind: "together" \| "separate"\): string \{\s*return kind === "together" \? "vincolo di co-appartenenza" : "vincolo di separazione";/);
+  assert.match(structuralGraphApp, /ottimo con il \$\{getCommunityPairConstraintLabel\(kind\)\}/);
+  assert.doesNotMatch(structuralGraphApp, /must-link|cannot-link/i);
+  assert.match(structuralGraphApp, /tipo: node\.type \?\? "non specificato"/);
+  assert.doesNotMatch(structuralGraphApp, /tipo: node\.type \?\? "unknown"/i);
+});
+
 test("typed-path counterfactual explains repeated-node routes without English walk labels", () => {
-  assert.match(typedPathCounterfactualPanel, /cammino temporale con ripetizioni/);
+  assert.match(typedPathCounterfactualPanel, /Diagnosi temporale nel grafo massimo dichiarato/);
+  assert.match(typedPathCounterfactualPanel, /La meta è raggiungibile solo ripetendo nodi; non esiste un cammino semplice/);
+  assert.match(typedPathCounterfactualPanel, /La sequenza completa non raggiunge la meta, ma alcuni prefissi intermedi sono possibili/);
   assert.match(typedPathCounterfactualPanel, /Prefisso massimo raggiungibile · \{whyNot\.maximumPrefixLength\} passi · \{whyNot\.walk\.nodeIds\.length\} nodi/);
   assert.match(typedPathCounterfactualPanel, /temporalSemanticsLabel\(whyNot\.temporalSemantics\)/);
   assert.doesNotMatch(typedPathCounterfactualPanel, /(?:come walk|walk temporale|walk completa|Walk massima|ogni walk)/i);
@@ -253,7 +321,10 @@ test("typed-path counterfactual explains repeated-node routes without English wa
 
 test("k-plex summaries describe missing ties with correct singular and plural forms", () => {
   assert.match(structuralPanel, /describeKPlexMissingTieAllowance\(Number\(parameter\)\)/);
+  assert.match(structuralPanel, /describeNonAdjacencyScope\(\)/);
+  assert.match(structuralPanel, /countForm\(Math\.max\(0, Number\(parameter\) - 1\), "coppia", "coppie"\)/);
   assert.doesNotMatch(structuralPanel, /non più di \{Math\.max\(0, Number\(parameter\) - 1\)\} membri/);
+  assert.doesNotMatch(structuralPanel, /parameter\) - 1\)\} coppie/);
 });
 
 test("separator summaries distinguish solution count from the selected witness size", () => {
@@ -274,6 +345,43 @@ test("analysis errors use a concise message with optional technical details", ()
   assert.match(typedPathCounterfactualPanel, /\{:else if whyNotError\}\s*<AnalysisErrorMessage message=\{whyNotError\} \/>/);
 });
 
+test("the clique solver fallback error is Italian before shared error presentation", () => {
+  assert.match(structuralGraphApp, /solverError = result\.Error \|\| "Errore del worker clingo\."/);
+  assert.match(structuralGraphApp, /Error: e\.message \|\| "Errore del worker clingo\."/);
+  assert.doesNotMatch(structuralGraphApp, /"Clingo worker error"/i);
+  assert.doesNotMatch(structuralGraphApp, /"Clingo error"/i);
+});
+
+test("invalid configuration and dataset JSON use Italian summaries with optional parser details", () => {
+  assert.match(sandboxPage, /parseGraphJsonTexts\(configText, datasetText\)/);
+  assert.match(sandboxPage, /errorMessage = error\.message/);
+  assert.match(sandboxPage, /errorTechnicalDetails = error\.technicalDetails/);
+  assert.doesNotMatch(sandboxPage, /errorMessage = error\?\.message \?\? "Invalid JSON"/);
+  assert.match(jsonEditor, /<div id="graph-apply-error" class="error-box" role="alert">[\s\S]*?<summary>Dettagli tecnici<\/summary>[\s\S]*?<pre>\{errorTechnicalDetails\}<\/pre>/);
+});
+
+test("the empty graph next step uses concise Italian data and mapping labels", () => {
+  assert.match(structuralGraphApp, /Carica i dati del grafo da un file JSON o apri un progetto; controlla i campi riconosciuti e applica la rete/);
+  assert.match(structuralGraphApp, /La mappatura rapida riconosce gli ID e gli estremi pi\u00f9 comuni/);
+  assert.match(jsonEditor, /<label for="graph-dataset">Dati del grafo \(JSON\)<\/label>/);
+});
+
+test("weighted edge cuts explain cost mapping with visible field names", () => {
+  assert.match(structuralPanel, /Minimizza la somma dei costi di rimozione degli archi/);
+  assert.match(structuralPanel, /In Dati, apri Mappatura avanzata e associa "Costo rimozione arco" a un campo con un intero positivo per ogni arco/);
+  assert.doesNotMatch(structuralPanel, /graphMapping\.edge\.removalCostField/);
+});
+
+test("integrity repair configuration paths stay optional and the primary guidance stays in Italian", () => {
+  const repairStart = integrityPanel.indexOf("<strong>Proposta minima non configurata</strong>");
+  const repairEnd = integrityPanel.indexOf("</div>", repairStart);
+  assert.ok(repairStart >= 0 && repairEnd > repairStart);
+  const repairHint = integrityPanel.slice(repairStart, repairEnd);
+  assert.match(repairHint, /aggiungi le azioni candidate nell'editor JSON avanzato/);
+  assert.match(repairHint, /<details>[\s\S]*?<summary>Percorso del campo nella configurazione JSON<\/summary>[\s\S]*?<code>graphIntegrity\.repairSuggestions<\/code>/);
+  assert.doesNotMatch(repairHint.slice(0, repairHint.indexOf("<details>")), /graphIntegrity\.repairSuggestions/);
+});
+
 test("counterfactual results explain their status without solver jargon", () => {
   assert.match(structuralCompletionPanel, /non è possibile ottenere un k-plex di valore \{whyNot\.targetS\}/);
   assert.match(structuralCompletionPanel, /non è possibile ottenere un k-core con soglia \{kCoreWhyNot\.targetK\}/);
@@ -291,6 +399,13 @@ test("counterfactual results explain their status without solver jargon", () => 
   assert.match(contextualPanel, /Mostra tutti i gruppi massimi/);
   assert.match(contextualPanel, /gruppi massimi elencati/);
   assert.doesNotMatch(contextualPanel, /gruppi massimi enumerati/i);
+});
+
+test("structural counterfactual parsing failures use concise Italian messages", () => {
+  assert.match(structuralGraphApp, /structuralKPlexCounterfactualError = "Il risultato non è interpretabile e non è stato mostrato\."/);
+  assert.match(structuralGraphApp, /structuralKCoreCounterfactualError = "Il risultato non è interpretabile e non è stato mostrato\."/);
+  assert.match(structuralGraphApp, /structuralKCoreMembershipCounterfactualError = "Non è stato possibile verificare tutte le modifiche a costo minimo per includere il nodo selezionato nel k-core; i risultati parziali non vengono mostrati\."/);
+  assert.match(structuralGraphApp, /structuralKCoreMembershipCounterfactualError = "La proposta non è stata verificata e non è stata mostrata\."/);
 });
 
 test("integrity implementation metadata stays behind an optional technical disclosure", () => {
@@ -315,7 +430,7 @@ test("the 3D graph navigation hint is localized", () => {
 });
 
 test("the configured typeface is inherited by the graph workspace and analysis panels", () => {
-  assert.match(structuralGraphApp, /\.app-root \{[\s\S]*?font-family: var\(--body-font, system-ui, sans-serif\)/);
+  assert.match(structuralGraphApp, /\.app-root \{[\s\S]*?font-family: var\(--body-font, Arial, Helvetica, sans-serif\)/);
 });
 
 test("the node card uses Italian labels for its built-in graph fields", () => {
@@ -323,4 +438,8 @@ test("the node card uses Italian labels for its built-in graph fields", () => {
   assert.match(infoPanel, /active_from: "Attivo dal"/);
   assert.match(infoPanel, /active_to: "Attivo fino al"/);
   assert.doesNotMatch(infoPanel, /<strong>Degree:<\/strong>/);
+});
+test("typed-motif evidence copy uses grammatical Italian for its mapping description", () => {
+  assert.match(motifPanel, /Tipi e intervalli seguono la mappatura e lo schema del motivo/);
+  assert.doesNotMatch(motifPanel, /Tipi e intervalli seguono il mappatura/);
 });

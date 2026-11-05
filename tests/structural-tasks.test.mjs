@@ -3544,7 +3544,7 @@ test("modularity communities require an explicitly usable undirected projection"
     getGraphTaskRequirements("communities")
   );
   assert.equal(directedRequirements.available, false);
-  assert.match(directedRequirements.reasons.join(" "), /mapping corrente dichiara archi diretti/);
+  assert.match(directedRequirements.reasons.join(" "), /Direzione.*Non orientato.*Dati.*Mappatura rapida/);
 });
 
 test("la separazione ASP delle componenti conserva punteggio e tutti gli ottimi, anche con isolati e pesi nulli", async () => {

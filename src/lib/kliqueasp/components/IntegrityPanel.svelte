@@ -3,18 +3,25 @@
   import { formatItalianNumber } from "../graph/formatItalianNumber.ts";
   import { csvCell, downloadCsvText } from "../csvExport";
   import AnalysisErrorMessage from "./AnalysisErrorMessage.svelte";
+  import AnalysisCompletionStatus from "./AnalysisCompletionStatus.svelte";
   import SolverDiagnosticsDetails from "./SolverDiagnosticsDetails.svelte";
+  import AnalysisProjectionScopeSummary from "./AnalysisProjectionScopeSummary.svelte";
+  import { DEFAULT_ANALYSIS_PROJECTION_SCOPE, type AnalysisProjectionScope } from "../graph/analysisProjectionScope.ts";
   import ResultListPager from "./ResultListPager.svelte";
   import ProgressiveList from "./ProgressiveList.svelte";
   import { summarizeEdgeProvenance } from "../graph/structuralTasks";
   import { getOwnRecordValue } from "../graph/recordUtils";
   import { getIntegrityViolationLabel } from "../graph/integrityViolationLabels.ts";
   import { getGraphTaskContract, getTaskEnumerationDescription } from "../graph/graphTaskContracts";
+  import { displayNodeResultLabel } from "../graph/nodeResultLabel.ts";
   import type { ClingoInvocationStats, ClingoInvocationTiming, WorkerWasmMemoryStats } from "../workerDiagnostics";
   import type { IntegrityRepairProposal, IntegrityViolation } from "../graph/integrityTask";
 
   export let open = false;
+  export let compactModal = false;
   export let running = false;
+  export let analysisScope: AnalysisProjectionScope = { ...DEFAULT_ANALYSIS_PROJECTION_SCOPE, usesVisibleProjection: false };
+  export let completionLabel = "";
   export let requirementsAvailable = true;
   export let requirementReasons: string[] = [];
   export let onOpenData: () => void = () => {};
@@ -27,7 +34,10 @@
   export let repairRequirementReasons: string[] = [];
   export let repairRunning = false;
   export let repairError = "";
+  export let repairOutcomeMessage = "";
   export let repairProposal: IntegrityRepairProposal | null = null;
+  export let nodeLabelById: Record<string, string> = {};
+  export let sourceIdByNodeId: Record<string, string> = {};
   export let edgeProvenanceBySourceId: Record<string, string> = {};
   export let edgeProvenanceReferencesBySourceId: Record<string, string[]> = {};
   export let workerWasmMemoryStats: WorkerWasmMemoryStats | null = null;
@@ -44,12 +54,14 @@
   let visibleViolationLimit = violationPageSize;
   let visibleRepairActionLimit = repairActionPageSize;
   let previousViolations = violations;
+  let selectedViolationKey = "";
   let expandedViolationIndex: number | null = null;
   let repairProposalDetailsOpen = false;
   let previousRepairProposal = repairProposal;
   $: if (violations !== previousViolations) {
     previousViolations = violations;
     visibleViolationLimit = violationPageSize;
+    selectedViolationKey = "";
     expandedViolationIndex = null;
   }
   $: visibleViolations = violations.slice(0, visibleViolationLimit);
@@ -92,6 +104,10 @@
     return value === undefined ? "assente" : JSON.stringify(value);
   }
 
+  function displayResultNode(nodeId: string): string {
+    return displayNodeResultLabel(nodeId, nodeLabelById, sourceIdByNodeId);
+  }
+
   function buildRepairActions(proposal: IntegrityRepairProposal | null): { description: string; highlightEdgeId?: string }[] {
     if (!proposal) return [];
 
@@ -101,21 +117,21 @@
       actions.push({ description: `Rimuovere l’arco ${edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""} · costo ${proposal.edgeCosts?.[edgeId] ?? "?"}` });
     }
     for (const candidate of proposal.nodeAttributes ?? []) {
-      actions.push({ description: `Assegnare ${candidate.attribute} = ${JSON.stringify(candidate.value)} al nodo ${candidate.nodeId} · costo ${candidate.cost}` });
+      actions.push({ description: `Assegnare ${candidate.attribute} = ${JSON.stringify(candidate.value)} al nodo ${displayResultNode(candidate.nodeId)} · costo ${candidate.cost}` });
     }
     for (const candidate of proposal.edgeAttributes ?? []) {
       const provenance = edgeProvenance(candidate.edgeId);
       actions.push({ description: `Assegnare ${candidate.attribute} = ${JSON.stringify(candidate.value)} all’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""} · costo ${candidate.cost}` });
     }
     for (const candidate of proposal.nodeAttributeReplacements ?? []) {
-      actions.push({ description: `Sostituire ${candidate.attribute} del nodo ${candidate.nodeId}: ${JSON.stringify(candidate.expectedValue)} → ${JSON.stringify(candidate.value)} · costo ${candidate.cost}` });
+      actions.push({ description: `Sostituire ${candidate.attribute} del nodo ${displayResultNode(candidate.nodeId)}: ${JSON.stringify(candidate.expectedValue)} → ${JSON.stringify(candidate.value)} · costo ${candidate.cost}` });
     }
     for (const candidate of proposal.edgeAttributeReplacements ?? []) {
       const provenance = edgeProvenance(candidate.edgeId);
       actions.push({ description: `Sostituire ${candidate.attribute} dell’arco ${candidate.edgeId}${provenance ? ` · fonte dichiarata: ${provenance}` : ""}: ${JSON.stringify(candidate.expectedValue)} → ${JSON.stringify(candidate.value)} · costo ${candidate.cost}` });
     }
     for (const candidate of proposal.nodeTypeReplacements ?? []) {
-      actions.push({ description: `Correggere il tipo del nodo ${candidate.nodeId}: ${candidate.expectedType} → ${candidate.newType} · costo ${candidate.cost}` });
+      actions.push({ description: `Correggere il tipo del nodo ${displayResultNode(candidate.nodeId)}: ${candidate.expectedType} → ${candidate.newType} · costo ${candidate.cost}` });
     }
     for (const candidate of proposal.edgeTypeReplacements ?? []) {
       const provenance = edgeProvenance(candidate.edgeId);
@@ -155,6 +171,15 @@
   function violationEdgeIds(violation: IntegrityViolation): string[] {
     if (violation.edgeIds?.length) return violation.edgeIds;
     return violation.subjectId && edgeSubjectKinds.has(violation.kind) ? [violation.subjectId] : [];
+  }
+
+  function integrityViolationKey(violation: IntegrityViolation): string {
+    return JSON.stringify(violation);
+  }
+
+  function highlightViolation(violation: IntegrityViolation) {
+    selectedViolationKey = integrityViolationKey(violation);
+    dispatch("highlight", violation);
   }
 
   function exportResults() {
@@ -280,14 +305,23 @@
 </script>
 
 {#if open}
-  <section class="integrity-panel" aria-labelledby="integrity-panel-title">
+  <section
+    class="integrity-panel"
+    role={compactModal ? "dialog" : undefined}
+    aria-modal={compactModal ? "true" : undefined}
+    aria-labelledby="integrity-panel-title"
+    tabindex="-1"
+  >
     <header>
       <div>
         <h3 id="integrity-panel-title">Integrità del grafo</h3>
-        <p>Verifica i vincoli dichiarati sul grafo importato completo dopo l'eventuale scenario di provenienza selezionato. I filtri visivi e temporali non si applicano; nessuna correzione viene eseguita.</p>
+        <p>Verifica i vincoli dichiarati; le proposte di riparazione restano ipotetiche e non modificano il grafo.</p>
       </div>
-      <button type="button" class="close" aria-label="Chiudi" on:click={() => dispatch("close")}>×</button>
+      <button type="button" class="close" aria-label="Chiudi pannello di integrità" title="Chiudi pannello di integrità" on:click={() => dispatch("close")}>×</button>
     </header>
+
+    <AnalysisProjectionScopeSummary scope={analysisScope} />
+    <AnalysisCompletionStatus label={completionLabel} />
 
     {#if integrityDiagnosisContract && integrityRepairContract}
       <details class="asp-contract">
@@ -314,14 +348,18 @@
     {/if}
 
     {#if !requirementsAvailable}
-      <div class="requirements" role="status" aria-live="polite">
+      <div id="integrity-check-readiness" class="requirements" role="status" aria-live="polite">
         <strong>Controllo non disponibile</strong>
-        <ul>{#each requirementReasons as reason}<li>{reason}</li>{/each}</ul>
-        <button type="button" on:click={onOpenData}>Apri Dati e mapping</button>
+        <div class="requirement-reasons">
+          <ProgressiveList items={requirementReasons} label="prerequisiti mancanti" let:item>
+            <div>{item}</div>
+          </ProgressiveList>
+        </div>
+        <button type="button" on:click={onOpenData}>Apri Dati e configurazione</button>
       </div>
     {/if}
 
-    <button type="button" class="run" on:click={() => dispatch("run")} disabled={running || !requirementsAvailable}>
+    <button type="button" class="run" on:click={() => dispatch("run")} aria-describedby={!requirementsAvailable ? "integrity-check-readiness" : undefined} disabled={running || !requirementsAvailable}>
       {running ? "Verifica in esecuzione…" : "Esegui verifica"}
     </button>
 
@@ -331,6 +369,15 @@
 
     {#if repairError}
       <AnalysisErrorMessage message={repairError} />
+    {/if}
+
+    {#if repairOutcomeMessage}
+      <div class="repair-outcome" role="status" aria-live="polite">
+        <strong>Esito della riparazione</strong>
+        <p>{repairOutcomeMessage}</p>
+        <small>La ricerca è stata completata: nessuna delle azioni autorizzate risolve tutti i vincoli.</small>
+        <button type="button" on:click={onOpenData}>Rivedi le azioni candidate</button>
+      </div>
     {/if}
 
     {#if hasRun && !error}
@@ -356,7 +403,12 @@
       <ul class="results">
         {#each visibleViolations as violation, index}
           <li>
-            <button type="button" class="violation" on:click={() => dispatch("highlight", violation)}>
+            <button
+              type="button"
+              class="violation"
+              aria-pressed={selectedViolationKey === integrityViolationKey(violation)}
+              on:click={() => highlightViolation(violation)}
+            >
               <span class="title">{index + 1}. {getIntegrityViolationLabel(violation.kind)}</span>
               {#if violation.subjectId}<span>ID: {violation.subjectId}</span>{/if}
               <span>{violation.nodeIds.length} nodi · {violationEdgeIds(violation).length} archi coinvolti</span>
@@ -372,7 +424,7 @@
                   {#if violation.nodeIds.length}
                     <strong>Nodi coinvolti · {violation.nodeIds.length}</strong>
                     <ProgressiveList items={violation.nodeIds} resetKey={violation} label="nodi della violazione" let:item>
-                      <span>{item}</span>
+                      <span>{displayResultNode(item)}</span>
                     </ProgressiveList>
                   {/if}
                   {#if violationEdgeIds(violation).length}
@@ -407,20 +459,28 @@
 
     {#if hasRun && !error && violations.length > 0}
       {#if repairEnabled}
-        <button type="button" class="run repair-run" on:click={() => dispatch("repair")} disabled={running || repairRunning || !repairRequirementsAvailable}>
+        <button type="button" class="run repair-run" on:click={() => dispatch("repair")} aria-describedby={!repairRequirementsAvailable ? "integrity-repair-readiness" : undefined} disabled={running || repairRunning || !repairRequirementsAvailable}>
           {repairRunning ? "Ricerca proposta minima…" : "Calcola proposta minima"}
         </button>
         {#if !repairRequirementsAvailable}
-          <div class="requirements repair-requirements" role="status" aria-live="polite">
+          <div id="integrity-repair-readiness" class="requirements repair-requirements" role="status" aria-live="polite">
             <strong>Proposta di riparazione non disponibile</strong>
-            <ul>{#each repairRequirementReasons as reason}<li>{reason}</li>{/each}</ul>
-            <button type="button" on:click={onOpenData}>Apri Dati e mapping</button>
+            <div class="requirement-reasons">
+              <ProgressiveList items={repairRequirementReasons} label="prerequisiti della riparazione" let:item>
+                <div>{item}</div>
+              </ProgressiveList>
+            </div>
+            <button type="button" on:click={onOpenData}>Apri Dati e configurazione</button>
           </div>
         {/if}
       {:else}
         <div class="requirements repair-requirements" role="status">
           <strong>Proposta minima non configurata</strong>
-          <p>Aggiungi azioni candidate in graphIntegrity.repairSuggestions per calcolare il costo minimo di una riparazione.</p>
+          <p>Per calcolare il costo minimo della riparazione, aggiungi le azioni candidate nell'editor JSON avanzato.</p>
+          <details>
+            <summary>Percorso del campo nella configurazione JSON</summary>
+            <code>graphIntegrity.repairSuggestions</code>
+          </details>
           <button type="button" on:click={onOpenData}>Apri Dati e configurazione</button>
         </div>
       {/if}
@@ -471,9 +531,13 @@
     color: #713f12;
   }
 
-  .requirements ul {
+  .requirements .requirement-reasons {
+    display: grid;
+    gap: 3px;
+    max-height: 140px;
     margin: 5px 0 8px;
-    padding-left: 18px;
+    overflow: auto;
+    overflow-wrap: anywhere;
   }
 
   .requirements button {
@@ -520,7 +584,7 @@
     background: var(--solver-bg);
     box-shadow: var(--solver-shadow);
     color: #0f172a;
-    font: 13px/1.45 system-ui, sans-serif;
+    font: 13px/1.45 Arial, Helvetica, sans-serif;
   }
 
   header,
@@ -600,6 +664,27 @@
     overflow-wrap: anywhere;
   }
 
+  .repair-outcome {
+    display: grid;
+    gap: 4px;
+    padding: 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #f8fafc;
+    color: #334155;
+  }
+
+  .repair-outcome p { margin: 0; }
+  .repair-outcome button {
+    justify-self: start;
+    padding: 6px 8px;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+  }
+
   .repair-proposal button {
     margin: 4px 5px 4px 0;
     padding: 6px 8px;
@@ -648,6 +733,12 @@
 
   .violation:hover {
     background: #ffedd5;
+  }
+
+  .violation[aria-pressed="true"] {
+    background: #ffedd5;
+    outline: 2px solid #9a3412;
+    outline-offset: -2px;
   }
 
   .violation-evidence {

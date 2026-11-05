@@ -91,6 +91,12 @@ test("selecting a result witness clears overlays from the previously selected an
     assert.match(getEventHandlerBlock(structural, eventName), /clearGraph2DOverlay\(\)/,
       `StructuralAnalysisPanel ${eventName} must clear the previous 2D overlay`);
   }
+  const structuralMembershipHandler = graphApp.slice(
+    graphApp.indexOf("  function highlightProvenanceStructuralScenarioMembership("),
+    graphApp.indexOf("\n  function ", graphApp.indexOf("  function highlightProvenanceStructuralScenarioMembership(") + 1)
+  );
+  assert.match(structuralMembershipHandler, /clearGraph2DOverlay\(\)/,
+    "structural scenario membership selection must clear the previous 2D overlay");
 
   const contextualClique = graphApp.slice(
     graphApp.indexOf("  function highlightContextualClique("),
@@ -122,4 +128,20 @@ test("the 2D export restores projection mode when a new analysis has no selected
   assert.match(graph2DExportPanel, /resolveGraph2DModeOnOpen\(mode, highlightedNodeIds\.length > 0 \|\| highlightedEdgeIds\.length > 0\)/);
   assert.match(graph2DExportPanel, /resultKind === "aggregate" \? "Elementi evidenziati" : "Risultato selezionato"/);
   assert.match(graphApp, /resultKind=\{graph2DPanelSummary\.kind\}/);
+});
+
+test("closing an analysis drawer preserves its task label for the next 2D export", () => {
+  const closeStart = graphApp.indexOf("  function closeAnalysisPanel(");
+  const closeEnd = graphApp.indexOf("\n  function ", closeStart + 1);
+  const closeBody = graphApp.slice(closeStart, closeEnd);
+  assert.match(closeBody, /activeAnalysisPanel\(\) === panel[\s\S]*?graph2DPanelSummary\.resultLabel !== "Proiezione corrente"[\s\S]*?graph2DOverlayResultLabel = graph2DPanelSummary\.resultLabel[\s\S]*?graph2DOverlayCompletionLabel = graph2DPanelSummary\.completionLabel \?\? ""/);
+
+  const resetStart = graphApp.indexOf("  function clearGraph2DOverlay() {");
+  const resetEnd = graphApp.indexOf("\n  function ", resetStart + 1);
+  const resetBody = graphApp.slice(resetStart, resetEnd);
+  assert.match(resetBody, /graph2DOverlayResultLabel = ""/);
+  assert.match(resetBody, /graph2DOverlayCompletionLabel = ""/);
+
+  assert.match(graphApp, /overlay: graph2DOverlayResultLabel[\s\S]*?resultLabel: graph2DOverlayResultLabel[\s\S]*?completionLabel: graph2DOverlayCompletionLabel/);
+  assert.match(graphApp, /resultLabel=\{graph2DResultLabel\}/);
 });

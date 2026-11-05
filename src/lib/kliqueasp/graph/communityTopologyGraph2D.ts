@@ -102,6 +102,6 @@ export function buildCommunityTopologyGraph2DOverlay(
     edgeAnnotations,
     hypotheticalLinks,
     resultLabel: `Scenario di modularit\u00e0 \u00b7 ${relationLabel} \u00b7 ${result.selectedEdits.length} modifiche`,
-    completionLabel: `Costo minimo verificato \u00b7 ${result.testedEditSets} ipotesi esaminate`
+    completionLabel: `Costo minimo verificato \u00b7 una proposta tra eventuali pari merito \u00b7 ${result.testedEditSets} ipotesi esaminate`
   };
 }

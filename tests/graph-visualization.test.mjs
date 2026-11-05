@@ -3,11 +3,13 @@ import test from "node:test";
 import psychologyDataset from "../src/lib/kliqueasp/data/my-dataset.json" with { type: "json" };
 import psychologyGraphConfig from "../src/lib/kliqueasp/config/graph.config.json" with { type: "json" };
 import {
+  buildGraphDisplayLinkCurves,
   formatGraphDisplayEdgeTypeTooltip,
   formatGraphDisplayLinkTooltip,
   getGraphDisplayEdgeTypeColor,
   getGraphDisplayEdgeTypeLegend,
   getGraphDisplayEdgeType,
+  getGraphDisplayNodeTypeLegend,
   getGraphDisplayLinkColor,
   getGraphNeighborhoodNodeIds,
   graphDisplayLinkMatchesIdentities,
@@ -15,8 +17,57 @@ import {
 } from "../src/lib/kliqueasp/graph/graphVisualization.ts";
 import { normalizeGraphData } from "../src/lib/kliqueasp/graph/graphModel.ts";
 import { getStructuralEdgeIdentity } from "../src/lib/kliqueasp/graph/structuralTasks.ts";
+import { readFile } from "node:fs/promises";
 
 const identity = (link) => getStructuralEdgeIdentity(link);
+const graphApp = await readFile(new URL("../src/lib/kliqueasp/GraphApp.svelte", import.meta.url), "utf8");
+
+test("parallel graph records use distinct stable 3D lanes without changing source links", () => {
+  const reciprocalLinks = [
+    { source: "a", target: "b", sourceId: "ab", analysis: { direction: "directed" } },
+    { source: "b", target: "a", sourceId: "ba", analysis: { direction: "directed" } }
+  ];
+  const originalLinks = structuredClone(reciprocalLinks);
+  const reciprocalCurves = buildGraphDisplayLinkCurves(reciprocalLinks);
+  const reciprocalValues = reciprocalLinks.map((link) => reciprocalCurves.get(link));
+  assert.ok(reciprocalValues.every((value) => value && value.curvature !== 0));
+  const curveSideOffsets = reciprocalLinks.map((link, index) =>
+    (link.source === "a" ? -1 : 1) * reciprocalValues[index].curvature
+  );
+  assert.equal(curveSideOffsets[0], -curveSideOffsets[1],
+    "gli archi opposti devono curvare su lati distinti anche se usano la stessa coppia ordinata");
+
+  const sameDirectionLinks = [
+    { source: "a", target: "b", sourceId: "ab-1" },
+    { source: "a", target: "b", sourceId: "ab-2" }
+  ];
+  const sameDirectionCurves = buildGraphDisplayLinkCurves(sameDirectionLinks);
+  assert.equal(new Set(sameDirectionLinks.map((link) => sameDirectionCurves.get(link)?.curvature)).size, 2);
+  assert.deepEqual(reciprocalLinks, originalLinks, "la geometria di presentazione non deve mutare i record sorgente");
+});
+
+test("a single self-loop is visible and parallel self-loops occupy separate rotations", () => {
+  const singleLoop = { source: "a", target: "a", sourceId: "loop-1" };
+  const singleCurve = buildGraphDisplayLinkCurves([singleLoop]).get(singleLoop);
+  assert.equal(singleCurve?.curvature, 0.45);
+  assert.equal(singleCurve?.rotation, 0);
+
+  const parallelLoops = [
+    { source: "a", target: "a", sourceId: "loop-1" },
+    { source: "a", target: "a", sourceId: "loop-2" },
+    { source: "a", target: "a", sourceId: "loop-3" }
+  ];
+  const curves = buildGraphDisplayLinkCurves(parallelLoops);
+  const values = parallelLoops.map((link) => curves.get(link));
+  assert.ok(values.every((value) => value?.curvature === 0.45));
+  assert.equal(new Set(values.map((value) => value?.rotation)).size, parallelLoops.length);
+});
+
+test("the 3D renderer applies computed curve lanes to the currently displayed links", () => {
+  assert.match(graphApp, /graphDisplayLinkCurves = buildGraphDisplayLinkCurves\(displayLinks\)/);
+  assert.match(graphApp, /linkCurvature\(\(link: GraphDisplayLink\) => graphDisplayLinkCurves\.get\(link\)\?\.curvature \?\? 0\)/);
+  assert.match(graphApp, /linkCurveRotation\(\(link: GraphDisplayLink\) => graphDisplayLinkCurves\.get\(link\)\?\.rotation \?\? 0\)/);
+});
 
 test("colori e legenda degli archi usano soltanto tipi presenti e colori dichiarati", () => {
   const links = [
@@ -63,6 +114,50 @@ test("il caso Psicologia colora le due etichette d'arco letterali senza alterare
     graph.links.find((link) => link.analysis?.type === "person-place"),
     colors
   ), "#f472b6");
+  assert.deepEqual(getGraphDisplayNodeTypeLegend(graph.nodes, psychologyGraphConfig.nodeTypes), [
+    { type: "person", label: "person", color: "#38bdf8" },
+    { type: "place", label: "place", color: "#22c55e" }
+  ]);
+});
+
+test("la legenda dei nodi usa solo tipi presenti, eredita il colore predefinito e protegge le chiavi JSON", () => {
+  const styles = JSON.parse('{"default":{"color":"#334155"},"constructor":{"color":"#f59e0b"},"place":{"size":8}}');
+  const nodes = [
+    { id: "1", type: "place" },
+    { id: "2", type: "constructor" },
+    { id: "3", type: "__proto__" },
+    { id: "4", analysis: { type: "person" } },
+    { id: "5" },
+    { id: "6", type: "place" }
+  ];
+
+  assert.deepEqual(getGraphDisplayNodeTypeLegend(nodes, styles), [
+    { type: "__proto__", label: "__proto__", color: "#334155" },
+    { type: "constructor", label: "constructor", color: "#f59e0b" },
+    { type: "person", label: "person", color: "#334155" },
+    { type: "place", label: "place", color: "#334155" },
+    { type: "default", label: "Senza tipo", color: "#334155" }
+  ]);
+  assert.deepEqual(getGraphDisplayNodeTypeLegend(nodes, null), []);
+  assert.deepEqual(getGraphDisplayNodeTypeLegend([{ type: "person" }], { person: {} }), []);
+});
+
+test("il colore predefinito dei nodi resta distinguibile dallo sfondo del canvas", () => {
+  const color = psychologyGraphConfig.nodeTypes.default.color;
+  const background = psychologyGraphConfig.graph.backgroundColor;
+  const luminance = (hex) => {
+    const channels = hex.match(/[0-9a-f]{2}/gi).map((value) => parseInt(value, 16) / 255);
+    const [r, g, b] = channels.map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    );
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const foregroundLuminance = luminance(color);
+  const backgroundLuminance = luminance(background);
+  const contrast = (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+
+  assert.ok(contrast >= 3, `Il contrasto dei nodi predefiniti e' ${contrast.toFixed(2)}:1.`);
 });
 
 test("colori degli archi rispettano chiavi JSON riservate senza ereditare dal prototipo", () => {

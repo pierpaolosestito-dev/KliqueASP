@@ -1104,7 +1104,7 @@ export function getTaskEnumerationDescription(
   context: GraphTaskEnumerationContext = {}
 ): string {
   const enumeration = resolveTaskEnumeration(task, context);
-  if (!enumeration) return "modalita di enumerazione non dichiarata dal contratto";
+  if (!enumeration) return "Modalità di calcolo non dichiarata per questa analisi.";
 
   if (enumeration === "maximal") {
     const minimumSize = Number.isSafeInteger(context.minimumCliqueSize) && context.minimumCliqueSize! >= 0
@@ -1139,9 +1139,9 @@ export function getTaskEnumerationDescription(
     "one-proven-temporal-prefix-optimum": "un prefisso temporale ottimo con obiettivo provato",
     "one-route-witness": "un cammino testimone per la sequenza tipizzata richiesta",
     "all-distinct-role-assignments": "enumerazione completa degli assegnamenti distinti del template",
-    "one-proven-lexicographic-optimum": "un near-match ottimo secondo le priorit\u00e0 lessicografiche ASP",
+    "one-proven-lexicographic-optimum": "un risultato parziale ottimo secondo l’ordine delle priorità dichiarate",
     "one-proven-minimum-cost-completion": "una proposta di costo minimo provata sui candidati configurati",
-    "single-query-aggregate": "conteggio aggregato esatto da una query ASP completa",
+    "single-query-aggregate": "conteggio aggregato esatto con calcolo completo",
     "complete-disjoint-partition-sum": "somma esatta solo dopo il completamento di tutte le partizioni disgiunte",
     "all-violations-complete": "enumerazione completa di tutte le violazioni dichiarate",
     "one-proven-minimum-cost-proposal": "una proposta minima con ottimalit\u00e0 provata",

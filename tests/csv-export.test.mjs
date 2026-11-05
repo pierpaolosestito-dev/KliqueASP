@@ -197,7 +197,7 @@ test("clique witness CSV looks up provenance using own source-ID properties", ()
   }]);
 });
 
-test("CSV download keeps its object URL valid through the anchor click", async () => {
+test("CSV download marks UTF-8 for spreadsheet apps and keeps its object URL valid through the anchor click", async () => {
   const { CSV_DOWNLOAD_REQUESTED_EVENT, downloadCsvText } = await import("../src/lib/kliqueasp/csvExport.ts");
   const originalCreate = URL.createObjectURL;
   const originalRevoke = URL.revokeObjectURL;
@@ -253,8 +253,8 @@ test("CSV download keeps its object URL valid through the anchor click", async (
     assert.equal(capturedBlob.type, "text/csv;charset=utf-8;");
     assert.deepEqual(
       Buffer.from(await capturedBlob.arrayBuffer()),
-      Buffer.from(certificateCsv, "utf8"),
-      "il Blob passato al browser contiene i byte UTF-8 del certificato CSV serializzato"
+      Buffer.from(`\uFEFF${certificateCsv}`, "utf8"),
+      "il Blob scaricato inizia con la firma UTF-8 e conserva il certificato CSV serializzato"
     );
     assert.deepEqual(calls.map(([name]) => name), ["create", "append", "click", "remove", "defer"]);
     deferredRevoke();

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { buildKliqueAspProject } from "../src/lib/kliqueasp/graph/projectFile.ts";
-import { readGraphJsonUpload } from "../src/lib/kliqueasp/graph/graphJsonUpload.ts";
+import { GraphJsonUploadReadError, readGraphJsonUpload } from "../src/lib/kliqueasp/graph/graphJsonUpload.ts";
+
+const jsonEditor = await readFile(new URL("../src/lib/kliqueasp/components/JsonEditor.svelte", import.meta.url), "utf8");
 
 function mockFile(text) {
   return { text: async () => text };
@@ -28,5 +31,19 @@ test("project uploads validate the project envelope and graph data", async () =>
 
 test("malformed JSON and read failures stay visible to the caller", async () => {
   await assert.rejects(readGraphJsonUpload(mockFile("{"), "dataset"), SyntaxError);
-  await assert.rejects(readGraphJsonUpload({ text: async () => { throw new Error("read failed"); } }, "dataset"), /read failed/);
+  await assert.rejects(
+    readGraphJsonUpload({ text: async () => { throw new Error("read failed"); } }, "dataset"),
+    (error) => {
+      assert.ok(error instanceof GraphJsonUploadReadError);
+      assert.equal(error.message, "Non è stato possibile leggere il file JSON. Selezionalo di nuovo o verifica che sia accessibile.");
+      assert.equal(error.technicalDetails, "read failed");
+      return true;
+    }
+  );
+});
+
+test("JSON editor gives malformed uploads an Italian summary and hides parser details on request", () => {
+  assert.match(jsonEditor, /error instanceof SyntaxError\) \{\s*fileError = "Il file selezionato non contiene JSON valido\. Correggi la sintassi e riprova\."/);
+  assert.match(jsonEditor, /<p role="alert">\{fileError\}<\/p>[\s\S]*?<summary>Dettagli tecnici<\/summary>[\s\S]*?<pre>\{fileErrorDetails\}<\/pre>/);
+  assert.match(jsonEditor, /error instanceof GraphJsonUploadReadError/);
 });

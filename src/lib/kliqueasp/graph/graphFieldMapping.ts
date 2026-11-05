@@ -3,6 +3,15 @@ type MappingConfig = Record<string, any>;
 
 export const GRAPH_FIELD_DISCOVERY_SAMPLE_LIMIT = 40;
 
+const NODE_MAPPING_FIELDS = new Set([
+  "idField", "labelField", "typeField", "roleField", "groupFields", "removalCostField"
+]);
+const EDGE_MAPPING_FIELDS = new Set([
+  "idField", "sourceField", "targetField", "typeField", "direction", "identity",
+  "weightField", "removalCostField", "confidenceField", "provenanceField"
+]);
+const EDGE_VALIDITY_FIELDS = new Set(["validity.fromField", "validity.toField", "validity.numericUnit"]);
+
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -112,6 +121,11 @@ export function updateGraphFieldMapping(
   field: string,
   value: string
 ): MappingConfig {
+  if (scope !== "node" && scope !== "edge") throw new TypeError("Seleziona una mappatura valida.");
+  const isSupportedField = scope === "node"
+    ? NODE_MAPPING_FIELDS.has(field)
+    : EDGE_MAPPING_FIELDS.has(field) || EDGE_VALIDITY_FIELDS.has(field);
+  if (!isSupportedField) throw new TypeError("Il campo di mappatura selezionato non è supportato.");
   const { config, node, edge } = prepareGraphMapping(configInput, dataset);
   const mapping = scope === "node" ? node : edge;
   if (field === "groupFields") {
@@ -152,12 +166,15 @@ export function updateGraphAttributeMapping(
   path: string
 ): MappingConfig {
   const cleanAlias = alias.trim();
+  if (scope !== "node" && scope !== "edge") throw new TypeError("Seleziona una mappatura valida.");
   if (!cleanAlias) throw new TypeError("Inserisci un nome per l'attributo.");
   const { config, node, edge } = prepareGraphMapping(configInput, dataset);
   const mapping = scope === "node" ? node : edge;
-  const attributes = isRecord(mapping.attributes) ? { ...mapping.attributes } : {};
-  if (path) attributes[cleanAlias] = path;
-  else delete attributes[cleanAlias];
+  const existingEntries = isRecord(mapping.attributes) ? Object.entries(mapping.attributes) : [];
+  const retainedEntries = existingEntries.filter(([name]) => name !== cleanAlias);
+  const attributes = Object.fromEntries(path
+    ? [...retainedEntries, [cleanAlias, path]]
+    : retainedEntries);
   if (Object.keys(attributes).length) mapping.attributes = attributes;
   else delete mapping.attributes;
   config.graphMapping = {

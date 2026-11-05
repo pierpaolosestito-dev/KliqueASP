@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { getNonOverlappingGraphNodeLabelIds } from "../src/lib/kliqueasp/graph/nodeLabelLayout.ts";
+import { getNonOverlappingGraphNodeLabelIds, getReadableGraphNodeLabelSize } from "../src/lib/kliqueasp/graph/nodeLabelLayout.ts";
 
 const graphApp = await readFile(new URL("../src/lib/kliqueasp/GraphApp.svelte", import.meta.url), "utf8");
 
@@ -38,27 +38,62 @@ test("ignora dimensioni non valide e ID duplicati senza bloccare le etichette vi
   assert.deepEqual([...visibleIds], ["altro", "nodo"]);
 });
 
+test("non colloca le etichette sopra i controlli e gli overlay della vista", () => {
+  const labels = getNonOverlappingGraphNodeLabelIds([
+    { id: "sotto-toolbar", x: 30, y: 30, width: 40, height: 12 },
+    { id: "libera", x: 140, y: 30, width: 40, height: 12 }
+  ], 7, 48, [
+    { id: "toolbar", x: 30, y: 30, width: 70, height: 40 }
+  ]);
+
+  assert.deepEqual([...labels], ["libera"]);
+});
+
+test("mantiene la proporzione del testo e ingrandisce le etichette piccole alla scala d'insieme", () => {
+  const size = getReadableGraphNodeLabelSize(18, 8, 4, 0.5);
+
+  assert.deepEqual(size, { width: 128, height: 32, scaleFactor: 4 });
+  assert.ok(size.height * 0.5 >= 16);
+});
+
+test("limita l'ingrandimento e ignora misure non valide senza produrre scale non finite", () => {
+  assert.deepEqual(getReadableGraphNodeLabelSize(18, 8, 4, 0.01), {
+    width: 256,
+    height: 64,
+    scaleFactor: 8
+  });
+  assert.deepEqual(getReadableGraphNodeLabelSize(Number.NaN, Number.NaN, Number.NaN, Number.NaN), {
+    width: 12,
+    height: 5,
+    scaleFactor: 1
+  });
+});
+
 test("il grafo aggiorna l'anti-sovrapposizione mentre si muovono vista e puntatore", () => {
-  assert.match(graphApp, /getNonOverlappingGraphNodeLabelIds\(candidates, 7\)/);
+  assert.match(graphApp, /getNonOverlappingGraphNodeLabelIds\(\s*candidates,\s*7,\s*48,/);
   assert.match(graphApp, /nodeLabelLayoutInterval = setInterval\(refreshNodeLabelLayout, 160\)/);
   assert.match(graphApp, /onNodeHover\(\(node: any\) =>/);
   assert.match(graphApp, /clearInterval\(nodeLabelLayoutInterval\)/);
-  assert.match(graphApp, /I nomi vicini si alternano per evitare sovrapposizioni/);
+  assert.doesNotMatch(graphApp, /class="label-layout-hint"/);
 });
 
-test("Adatta alla rete lascia margine per nodi, etichette e toolbar sovrapposta", () => {
+test("Adatta alla rete corregge il fit conservando margine per nodi, etichette e toolbar", () => {
   assert.match(graphApp, /const graphViewFitPadding = 32/);
-  assert.match(graphApp, /const graphViewFitScale = 1\.1/);
   const fitHelper = graphApp.match(/function fitGraphToView\(\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
   assert.match(fitHelper, /\.zoomToFit\(graphTransitionDuration\(0\), graphViewFitPadding\)/);
-  assert.match(fitHelper, /cameraPosition\.x \* graphViewFitScale/);
-  assert.match(fitHelper, /cameraPosition\.y \* graphViewFitScale/);
-  assert.match(fitHelper, /cameraPosition\.z \* graphViewFitScale/);
+  assert.match(fitHelper, /camera\.updateMatrixWorld\(true\)/);
+  assert.match(fitHelper, /new THREE\.Vector3\(x, y, z\)\.project\(camera\)/);
+  assert.match(fitHelper, /getGraphFitZoomFactor\(maxAbsScreenX, maxAbsScreenY\)/);
+  assert.match(fitHelper, /cameraPosition\.x \/ zoomFactor/);
+  assert.match(fitHelper, /cameraPosition\.y \/ zoomFactor/);
+  assert.match(fitHelper, /cameraPosition\.z \/ zoomFactor/);
+  assert.doesNotMatch(graphApp, /graphViewFitScale/);
 });
 
 test("mantiene leggibili le etichette e usa un ingombro prudente per evitare contatti visivi", () => {
-  assert.match(graphApp, /font: "22px sans-serif"/);
+  assert.match(graphApp, /font: "22px Arial, Helvetica, sans-serif"/);
   assert.match(graphApp, /scale: \[14, 6\]/);
-  assert.match(graphApp, /width: labelWidth \* pixelsPerWorldUnit \* 1\.15/);
-  assert.match(graphApp, /height: labelHeight \* pixelsPerWorldUnit \* 1\.2/);
+  assert.match(graphApp, /getReadableGraphNodeLabelSize\(/);
+  assert.match(graphApp, /width: labelSize\.width \* pixelsPerWorldUnit \* 1\.15/);
+  assert.match(graphApp, /height: labelSize\.height \* pixelsPerWorldUnit \* 1\.2/);
 });

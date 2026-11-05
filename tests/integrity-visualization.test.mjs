@@ -60,5 +60,5 @@ test("does not fabricate a graph witness for a global constraint violation", () 
   assert.deepEqual(result.nodeIds, []);
   assert.deepEqual(result.edgeIds, []);
   assert.equal(result.hasWitness, false);
-  assert.match(result.resultLabel, /nessun witness grafico/);
+  assert.match(result.resultLabel, /nessun testimone nel grafo/);
 });

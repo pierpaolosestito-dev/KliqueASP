@@ -1,6 +1,6 @@
 import type { Graph2DMode } from "./graph2dExport.ts";
 
-export const GRAPH2D_OBJECT_URL_REVOKE_DELAY_MS = 1_000;
+export const GRAPH2D_OBJECT_URL_REVOKE_DELAY_MS = 30_000;
 
 export function buildGraph2DDownloadFilename(
   mode: Graph2DMode,

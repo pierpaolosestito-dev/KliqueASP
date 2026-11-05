@@ -1,10 +1,33 @@
 import { serializeCsv } from "../csvExport.ts";
-import type { DominatingSetCoverageWitness, KPlexCompletionWhyNot, KCoreCompletionWhyNot, KCoreMembershipCompletionWhyNot, KPlexWitnessExplanation, KCoreSupportingPair, MaximalKPlexWitnessExplanation, ModularityPartition, TypedPathCounterfactualProposal, TypedPathStaticCounterfactualWhyNot, TypedPathTemporalNoRouteCertificate, TypedPathTemporalResult } from "./structuralTasks.ts";
+import type { NodeDegreeProjectionFilters } from "./nodeDegreeProjection.ts";
+import type { DominatingSetCoverageWitness, KPlexCompletionWhyNot, KCoreCompletionWhyNot, KCoreMembershipCompletionWhyNot, KPlexWitnessExplanation, KCoreSupportingPair, MaximalKPlexWitnessExplanation, MinimumHopPathMinimalityCertificate, ModularityPartition, TypedPathCounterfactualProposal, TypedPathStaticCounterfactualWhyNot, TypedPathTemporalNoRouteCertificate, TypedPathTemporalResult } from "./structuralTasks.ts";
 import type { KPlexMaximumMembershipDiagnosis } from "./kplexMembershipDiagnosis.ts";
 import { formatScaledDecimal } from "./exactDecimal.ts";
 
 export type StructuralEdgeProvenanceSummary = (edgeIdentities: string[]) => string;
 export type StructuralEdgeEvidenceBuilder = (edgeIdentities: string[]) => unknown[];
+
+/** Exports the bounded-reachability certificate that proves a selected path is shortest. */
+export function buildMinimumHopPathMinimalityCsv(
+  certificate: MinimumHopPathMinimalityCertificate,
+  sourceIdByNodeId: Record<string, string>
+): string {
+  const rows: unknown[][] = [["path_length", "reachable_with_at_most", "node_id"]];
+  for (const layer of certificate.reachableByDepth) {
+    for (const nodeId of layer.nodeIds) {
+      rows.push([
+        certificate.pathLength,
+        layer.depth,
+        sourceIdByNodeId[nodeId] ?? nodeId
+      ]);
+    }
+  }
+  if (certificate.pathLength === 0) {
+    // An empty ID at bound -1 represents the empty reachable set; never put prose in node_id.
+    rows.push([0, -1, ""]);
+  }
+  return serializeCsv(rows);
+}
 
 /** Exports an ASP why-not membership diagnosis for a maximum-cardinality s-plex. */
 export function buildKPlexMaximumMembershipDiagnosisCsv(
@@ -856,7 +879,7 @@ export interface ProvenanceScenarioDominatingSetInfeasibilityCsvOptions {
   targetGroup?: string;
   confidenceThreshold?: number | null;
   timelineWindow?: string;
-  viewFilters?: { types: string[]; groups: string[] };
+  viewFilters?: { types: string[]; groups: string[]; degreeFilters?: Partial<NodeDegreeProjectionFilters> };
 }
 
 /** Exports one verified infeasible scenario with the projection filters needed to read its why-not witness. */
@@ -875,7 +898,7 @@ export function buildProvenanceScenarioDominatingSetInfeasibilityCsv({
 }: ProvenanceScenarioDominatingSetInfeasibilityCsvOptions): string {
   const rows: unknown[][] = [[
     "record_type", "scenario_id", "scenario_label", "scenario_sources", "target_node_id", "target_node_label",
-    "candidate_group", "target_group", "confidence_threshold", "timeline_window", "type_filters", "group_filters", "why_not"
+    "candidate_group", "target_group", "confidence_threshold", "timeline_window", "type_filters", "group_filters", "degree_filters_json", "why_not"
   ]];
   for (const nodeId of [...new Set(uncoverableTargetNodeIds)].sort()) {
     rows.push([
@@ -891,6 +914,11 @@ export function buildProvenanceScenarioDominatingSetInfeasibilityCsv({
       timelineWindow,
       JSON.stringify(viewFilters.types),
       JSON.stringify(viewFilters.groups),
+      JSON.stringify({
+        excludeIsolated: viewFilters.degreeFilters?.excludeIsolated === true,
+        excludeWithoutIncoming: viewFilters.degreeFilters?.excludeWithoutIncoming === true,
+        excludeWithoutOutgoing: viewFilters.degreeFilters?.excludeWithoutOutgoing === true
+      }),
       "nessun candidato eleggibile coincide con il target o gli è adiacente nella proiezione dello scenario"
     ]);
   }

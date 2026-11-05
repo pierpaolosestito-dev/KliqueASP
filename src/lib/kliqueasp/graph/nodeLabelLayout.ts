@@ -7,11 +7,56 @@ export type GraphNodeLabelCandidate = {
   priority?: number;
 };
 
+export type GraphNodeLabelSize = {
+  width: number;
+  height: number;
+  scaleFactor: number;
+};
+
+/** Keeps static graph labels readable at overview scale while preserving each texture's aspect ratio. */
+export function getReadableGraphNodeLabelSize(
+  configuredWidth: number,
+  configuredHeight: number,
+  textureAspect: number,
+  pixelsPerWorldUnit: number,
+  minimumScreenHeight = 16,
+  maximumScaleFactor = 8
+): GraphNodeLabelSize {
+  const safeHeight = Number.isFinite(configuredHeight) && configuredHeight > 0 ? configuredHeight : 5;
+  const safeWidth = Number.isFinite(configuredWidth) && configuredWidth > 0 ? configuredWidth : 12;
+  const safeAspect = Number.isFinite(textureAspect) && textureAspect > 0
+    ? textureAspect
+    : safeWidth / safeHeight;
+  const safePixelsPerWorldUnit = Number.isFinite(pixelsPerWorldUnit) && pixelsPerWorldUnit > 0
+    ? pixelsPerWorldUnit
+    : 0;
+  const safeMinimumScreenHeight = Number.isFinite(minimumScreenHeight) && minimumScreenHeight > 0
+    ? minimumScreenHeight
+    : 16;
+  const safeMaximumScaleFactor = Number.isFinite(maximumScaleFactor) && maximumScaleFactor >= 1
+    ? maximumScaleFactor
+    : 8;
+  const width = Math.max(safeWidth, safeHeight * safeAspect);
+  const scaleFactor = safePixelsPerWorldUnit > 0
+    ? Math.max(1, Math.min(
+      safeMaximumScaleFactor,
+      safeMinimumScreenHeight / (safeHeight * safePixelsPerWorldUnit)
+    ))
+    : 1;
+
+  return {
+    width: width * scaleFactor,
+    height: safeHeight * scaleFactor,
+    scaleFactor
+  };
+}
+
 /** Chooses a stable subset of graph labels whose screen-space boxes do not collide. */
 export function getNonOverlappingGraphNodeLabelIds(
   candidates: GraphNodeLabelCandidate[],
   minimumGap = 6,
-  bucketSize = 48
+  bucketSize = 48,
+  reservedAreas: GraphNodeLabelCandidate[] = []
 ): Set<string> {
   const safeGap = Number.isFinite(minimumGap) ? Math.max(0, minimumGap) : 6;
   const safeBucketSize = Number.isFinite(bucketSize) ? Math.max(16, bucketSize) : 48;
@@ -29,6 +74,11 @@ export function getNonOverlappingGraphNodeLabelIds(
   const visibleIds = new Set<string>();
   const seenIds = new Set<string>();
   const acceptedByCell = new Map<string, GraphNodeLabelCandidate[]>();
+  const safeReservedAreas = reservedAreas.filter((area) =>
+    Number.isFinite(area.x) && Number.isFinite(area.y) &&
+    Number.isFinite(area.width) && area.width > 0 &&
+    Number.isFinite(area.height) && area.height > 0
+  );
 
   for (const candidate of ordered) {
     if (seenIds.has(candidate.id)) continue;
@@ -40,7 +90,10 @@ export function getNonOverlappingGraphNodeLabelIds(
     const maxCellX = Math.floor((candidate.x + halfWidth) / safeBucketSize);
     const minCellY = Math.floor((candidate.y - halfHeight) / safeBucketSize);
     const maxCellY = Math.floor((candidate.y + halfHeight) / safeBucketSize);
-    let overlaps = false;
+    let overlaps = safeReservedAreas.some((area) =>
+      Math.abs(candidate.x - area.x) < (candidate.width + area.width) / 2 + safeGap &&
+      Math.abs(candidate.y - area.y) < (candidate.height + area.height) / 2 + safeGap
+    );
 
     for (let cellX = minCellX; cellX <= maxCellX && !overlaps; cellX += 1) {
       for (let cellY = minCellY; cellY <= maxCellY && !overlaps; cellY += 1) {

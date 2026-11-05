@@ -17,3 +17,9 @@ test("induced graph edges are visibly identified as context rather than analysis
   assert.match(panel, /scene\.links\.some\(\(link\) => link\.contextOnly\)/);
   assert.match(panel, /Linee puntinate: relazioni osservate fra i nodi del risultato, non parte dell'evidenza restituita dall'analisi/);
 });
+
+test("oversized 2D export actions reference the visible size limit and next step", () => {
+  assert.match(panel, /id="graph2d-export-size-blocker" class="warning" role="status" aria-live="polite"/);
+  assert.match(panel, /exportBlockerDescriptionIds = \[[\s\S]*?exportTooLarge \? "graph2d-export-size-blocker"/);
+  assert.equal((panel.match(/aria-describedby=\{exportBlockerDescriptionIds\}/g) ?? []).length, 2);
+});

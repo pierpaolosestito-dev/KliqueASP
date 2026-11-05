@@ -1,4 +1,11 @@
 import { serializeCsv } from "../csvExport.ts";
+import type { NodeDegreeProjectionFilters } from "./nodeDegreeProjection.ts";
+
+type ScenarioViewFiltersInput = {
+  types?: readonly string[];
+  groups?: readonly string[];
+  degreeFilters?: Partial<NodeDegreeProjectionFilters>;
+};
 
 export type ProvenanceScenarioWorldAssumption = "declared-projections" | "finite-exhaustive-worlds";
 
@@ -133,6 +140,15 @@ export interface ProvenanceScenarioKCoreComparison {
 
 function compareIds(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function serializeViewDegreeFilters(viewFilters: ScenarioViewFiltersInput): string {
+  const filters = viewFilters.degreeFilters ?? {};
+  return JSON.stringify({
+    excludeIsolated: filters.excludeIsolated === true,
+    excludeWithoutIncoming: filters.excludeWithoutIncoming === true,
+    excludeWithoutOutgoing: filters.excludeWithoutOutgoing === true
+  });
 }
 
 function normalizeNodeSet(nodeIds: unknown): string[] | null {
@@ -329,16 +345,17 @@ export function buildProvenanceScenarioCliqueCsv(
   selectedGroup = "",
   confidenceThreshold: number | null = null,
   timelineWindow = "",
-  viewFilters: { types?: readonly string[]; groups?: readonly string[] } = {}
+  viewFilters: ScenarioViewFiltersInput = {}
 ): string {
   const viewTypeFilters = JSON.stringify([...(viewFilters.types ?? [])].sort(compareIds));
   const viewGroupFilters = JSON.stringify([...(viewFilters.groups ?? [])].sort(compareIds));
+  const viewDegreeFilters = serializeViewDegreeFilters(viewFilters);
   const exhaustiveWorlds = comparison.worldAssumption === "finite-exhaustive-worlds";
   const header = [
     "record_type", "scenario_id", "scenario_label", "candidate_nodes_in_scenario",
     "projected_edges", "maximum_clique_size", "maximum_clique_count", "solver_time_ms",
     "selected_group", "confidence_threshold", "timeline_window",
-    "view_type_filters_json", "view_group_filters_json", "node_id", "node_label",
+    "view_type_filters_json", "view_group_filters_json", "view_degree_filters_json", "node_id", "node_label",
     "scenario_support_count", "scenario_ids_json", "optimal_answer_set_count",
     "total_optimal_answer_set_count", "membership_status", "projected_nodes",
     "candidate_scenario_count", "candidate_scenario_ids_json"
@@ -350,7 +367,7 @@ export function buildProvenanceScenarioCliqueCsv(
       "scenario", scenario.scenarioId, scenario.scenarioLabel,
       scenario.candidateNodeCount ?? "", scenario.linksCount, scenario.maximumCliqueSize,
       scenario.maximumCliqueCount, scenario.timeMs.toFixed(2), selectedGroup,
-      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       "", "", "", "", "", "", "", scenario.nodesCount, "", ""
     ];
     if (exhaustiveWorlds) row.push("finite-exhaustive-worlds", "");
@@ -359,7 +376,7 @@ export function buildProvenanceScenarioCliqueCsv(
   for (const membership of comparison.memberships) {
     const row: unknown[] = [
       "node_membership", "", "", "", "", "", "", "", selectedGroup,
-      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
       membership.scenarioSupportCount, JSON.stringify(membership.scenarioIds),
       membership.optimalAnswerSetCount, membership.totalOptimalAnswerSetCount,
@@ -643,16 +660,17 @@ export function buildProvenanceScenarioKCoreCsv(
   selectedGroup = "",
   confidenceThreshold: number | null = null,
   timelineWindow = "",
-  viewFilters: { types?: readonly string[]; groups?: readonly string[] } = {}
+  viewFilters: ScenarioViewFiltersInput = {}
 ): string {
   const viewTypeFilters = JSON.stringify([...(viewFilters.types ?? [])].sort(compareIds));
   const viewGroupFilters = JSON.stringify([...(viewFilters.groups ?? [])].sort(compareIds));
+  const viewDegreeFilters = serializeViewDegreeFilters(viewFilters);
   const exhaustiveWorlds = comparison.worldAssumption === "finite-exhaustive-worlds";
   const header: unknown[] = [
     "record_type", "scenario_id", "scenario_label", "k", "degree_mode",
     "candidate_nodes", "projected_nodes", "projected_edges", "core_size", "solver_time_ms",
     "selected_group", "confidence_threshold", "timeline_window",
-    "view_type_filters_json", "view_group_filters_json",
+    "view_type_filters_json", "view_group_filters_json", "view_degree_filters_json",
     "node_id", "node_label", "candidate_scenario_count", "candidate_scenario_ids_json",
     "scenario_support_count", "scenario_ids_json", "membership_status"
   ];
@@ -663,7 +681,7 @@ export function buildProvenanceScenarioKCoreCsv(
       "scenario", scenario.scenarioId, scenario.scenarioLabel,
       comparison.k, comparison.degreeMode,
       scenario.candidateNodeCount, scenario.nodesCount, scenario.linksCount, scenario.coreSize, scenario.timeMs.toFixed(2),
-      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       "", "", "", "", "", "", "", ""
     ];
     if (exhaustiveWorlds) row.push("finite-exhaustive-worlds", "");
@@ -673,7 +691,7 @@ export function buildProvenanceScenarioKCoreCsv(
     const row: unknown[] = [
       "node_membership", "", "", comparison.k, comparison.degreeMode,
       "", "", "", "", "", selectedGroup, confidenceThreshold ?? "", timelineWindow,
-      viewTypeFilters, viewGroupFilters,
+      viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
       membership.candidateScenarioSupportCount, JSON.stringify(membership.candidateScenarioIds),
       membership.scenarioSupportCount, JSON.stringify(membership.scenarioIds),
@@ -702,17 +720,18 @@ export function buildProvenanceScenarioKPlexCsv(
   selectedGroup = "",
   confidenceThreshold: number | null = null,
   timelineWindow = "",
-  viewFilters: { types?: readonly string[]; groups?: readonly string[] } = {}
+  viewFilters: ScenarioViewFiltersInput = {}
 ): string {
   const viewTypeFilters = JSON.stringify([...(viewFilters.types ?? [])].sort(compareIds));
   const viewGroupFilters = JSON.stringify([...(viewFilters.groups ?? [])].sort(compareIds));
+  const viewDegreeFilters = serializeViewDegreeFilters(viewFilters);
   const exhaustiveWorlds = comparison.worldAssumption === "finite-exhaustive-worlds";
   const header: unknown[] = [
     "record_type", "scenario_id", "scenario_label", "s", "candidate_nodes",
     "projected_nodes", "projected_edges", "maximum_k_plex_size", "maximum_k_plex_count",
     "maximum_k_plex_node_ids_json", "solver_time_ms", "selected_group",
     "confidence_threshold", "timeline_window", "view_type_filters_json",
-    "view_group_filters_json", "node_id", "node_label",
+    "view_group_filters_json", "view_degree_filters_json", "node_id", "node_label",
     "candidate_scenario_count", "candidate_scenario_ids_json", "scenario_support_count",
     "scenario_ids_json", "optimal_answer_set_count", "total_optimal_answer_set_count",
     "membership_status"
@@ -725,7 +744,7 @@ export function buildProvenanceScenarioKPlexCsv(
       scenario.candidateNodeCount, scenario.nodesCount, scenario.linksCount,
       scenario.maximumKPlexSize, scenario.maximumKPlexCount,
       JSON.stringify(scenario.maximumKPlexNodeIds), scenario.timeMs.toFixed(2),
-      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       "", "", "", "", "", "", "", "", ""
     ];
     if (exhaustiveWorlds) row.push("finite-exhaustive-worlds", "");
@@ -734,7 +753,7 @@ export function buildProvenanceScenarioKPlexCsv(
   for (const membership of comparison.memberships) {
     const row: unknown[] = [
       "node_membership", "", "", comparison.s, "", "", "", "", "", "", "",
-      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
       membership.candidateScenarioSupportCount, JSON.stringify(membership.candidateScenarioIds),
       membership.scenarioSupportCount, JSON.stringify(membership.scenarioIds),
@@ -972,16 +991,17 @@ export function buildProvenanceScenarioComponentsCsv(
   selectedGroup = "",
   confidenceThreshold: number | null = null,
   timelineWindow = "",
-  viewFilters: { types?: readonly string[]; groups?: readonly string[] } = {}
+  viewFilters: ScenarioViewFiltersInput = {}
 ): string {
   const viewTypeFilters = JSON.stringify([...(viewFilters.types ?? [])].sort(compareIds));
   const viewGroupFilters = JSON.stringify([...(viewFilters.groups ?? [])].sort(compareIds));
+  const viewDegreeFilters = serializeViewDegreeFilters(viewFilters);
   const exhaustiveWorlds = comparison.worldAssumption === "finite-exhaustive-worlds";
   const header: unknown[] = [
     "record_type", "task", "target_node_id", "target_node_label", "scenario_id", "scenario_label",
     "projected_nodes", "candidate_nodes", "projected_edges", "component_count",
     "target_eligible", "target_component_size", "solver_time_ms", "selected_group",
-    "confidence_threshold", "timeline_window", "view_type_filters_json", "view_group_filters_json",
+    "confidence_threshold", "timeline_window", "view_type_filters_json", "view_group_filters_json", "view_degree_filters_json",
     "node_id", "node_label", "candidate_scenario_count", "candidate_scenario_ids_json",
     "comparable_scenario_count", "comparable_scenario_ids_json", "same_component_scenario_count",
     "same_component_scenario_ids_json", "separate_component_scenario_ids_json",
@@ -996,7 +1016,7 @@ export function buildProvenanceScenarioComponentsCsv(
       scenario.scenarioId, scenario.scenarioLabel, scenario.projectedNodeCount,
       scenario.candidateNodeCount, scenario.linksCount, scenario.componentCount,
       scenario.targetEligible, scenario.targetComponentSize, scenario.timeMs.toFixed(2),
-      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      selectedGroup, confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       "", "", "", "", "", "", "", "", "", "", ""
     ];
     if (exhaustiveWorlds) row.push("finite-exhaustive-worlds", "");
@@ -1007,7 +1027,7 @@ export function buildProvenanceScenarioComponentsCsv(
       "node_membership", comparison.task, comparison.targetNodeId,
       nodeLabels[comparison.targetNodeId] ?? comparison.targetNodeId,
       "", "", "", "", "", "", "", "", "", selectedGroup,
-      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters,
+      confidenceThreshold ?? "", timelineWindow, viewTypeFilters, viewGroupFilters, viewDegreeFilters,
       membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
       membership.candidateScenarioCount, JSON.stringify(membership.candidateScenarioIds),
       membership.comparableScenarioCount, JSON.stringify(membership.comparableScenarioIds),
@@ -1248,16 +1268,17 @@ export function buildProvenanceScenarioDominatingSetCsv(
   nodeLabels: Record<string, string> = {},
   confidenceThreshold: number | null = null,
   timelineWindow = "",
-  viewFilters: { types?: readonly string[]; groups?: readonly string[] } = {}
+  viewFilters: ScenarioViewFiltersInput = {}
 ): string {
   const viewTypeFilters = JSON.stringify([...(viewFilters.types ?? [])].sort(compareIds));
   const viewGroupFilters = JSON.stringify([...(viewFilters.groups ?? [])].sort(compareIds));
+  const viewDegreeFilters = serializeViewDegreeFilters(viewFilters);
   const exhaustiveWorlds = comparison.worldAssumption === "finite-exhaustive-worlds";
   const header: unknown[] = [
     "record_type", "scenario_id", "scenario_label", "projected_nodes", "candidate_nodes", "target_nodes",
     "projected_edges", "minimum_set_size", "minimum_set_count", "solver_time_ms", "candidate_group",
     "target_group", "confidence_threshold", "timeline_window", "view_type_filters_json",
-    "view_group_filters_json", "node_id", "node_label", "candidate_scenario_count",
+    "view_group_filters_json", "view_degree_filters_json", "node_id", "node_label", "candidate_scenario_count",
     "candidate_scenario_ids_json", "optimal_scenario_count", "optimal_scenario_ids_json",
     "selected_minimum_set_count", "total_comparable_minimum_set_count",
     "selected_in_every_comparable_minimum_set", "selected_in_every_scenario_minimum_set"
@@ -1270,7 +1291,7 @@ export function buildProvenanceScenarioDominatingSetCsv(
       scenario.candidateNodeCount, scenario.targetNodeCount, scenario.linksCount,
       scenario.minimumSetSize, scenario.minimumSetCount, scenario.timeMs.toFixed(2),
       comparison.candidateGroup, comparison.targetGroup, confidenceThreshold ?? "", timelineWindow,
-      viewTypeFilters, viewGroupFilters, "", "", "", "", "", "", "", "", "", ""
+      viewTypeFilters, viewGroupFilters, viewDegreeFilters, "", "", "", "", "", "", "", "", "", ""
     ];
     if (exhaustiveWorlds) row.push("finite-exhaustive-worlds", "");
     rows.push(row);
@@ -1279,7 +1300,7 @@ export function buildProvenanceScenarioDominatingSetCsv(
     const row: unknown[] = [
       "node_membership", "", "", "", "", "", "", "", "", "",
       comparison.candidateGroup, comparison.targetGroup, confidenceThreshold ?? "", timelineWindow,
-      viewTypeFilters, viewGroupFilters, membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
+      viewTypeFilters, viewGroupFilters, viewDegreeFilters, membership.nodeId, nodeLabels[membership.nodeId] ?? membership.nodeId,
       membership.candidateScenarioCount, JSON.stringify(membership.candidateScenarioIds),
       membership.optimalScenarioCount, JSON.stringify(membership.optimalScenarioIds),
       membership.selectedMinimumSetCount, membership.totalComparableMinimumSetCount,

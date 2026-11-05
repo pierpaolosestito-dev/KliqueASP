@@ -4,6 +4,7 @@
   import {
     filterSearchableNodeOptions,
     describeSearchableNodeResults,
+    getSearchableOptionsWithCurrentValue,
     getNextSearchableNodeOptionPage,
     getNextEnabledNodeOptionIndex,
     getActiveNodeOptionScrollAdjustment,
@@ -15,8 +16,15 @@
   export let options: SearchableNodeOption[] = [];
   export let ariaLabel = "Cerca un nodo";
   export let placeholder = "Cerca un nodo…";
+  export let includeEmptyOption = false;
+  export let emptyOptionLabel = "";
+  export let emptyMessage = "Nessun nodo disponibile.";
+  export let noResultsMessage = "Nessun nodo corrisponde alla ricerca.";
+  export let singularResultLabel = "nodo trovato";
+  export let pluralResultLabel = "nodi trovati";
   export let required = false;
   export let disabled = false;
+  export let disabledDescriptionId: string | undefined = undefined;
 
   const dispatch = createEventDispatcher();
   const pageSize = 30;
@@ -26,14 +34,27 @@
   let visibleLimit = pageSize;
   let rootElement: HTMLDivElement;
 
-  $: selectedOption = options.find((option) => option.value === value);
-  $: matchingOptions = filterSearchableNodeOptions(options, query);
+  $: searchableOptions = getSearchableOptionsWithCurrentValue(
+    options,
+    value,
+    includeEmptyOption && (options.length > 0 || value) ? emptyOptionLabel : ""
+  );
+  $: selectedOption = searchableOptions.find((option) => option.value === value);
+  $: matchingOptions = filterSearchableNodeOptions(searchableOptions, query);
   $: visibleOptions = matchingOptions.slice(0, visibleLimit);
+  $: countedMatchingOptions = matchingOptions.filter((option) => option.countable !== false);
+  $: countedVisibleOptions = visibleOptions.filter((option) => option.countable !== false);
+  $: hasSearchableResults = countedMatchingOptions.length > 0;
   $: resultAnnouncement = open
-    ? describeSearchableNodeResults(query, matchingOptions.length, visibleOptions.length)
+    ? describeSearchableNodeResults(query, countedMatchingOptions.length, countedVisibleOptions.length, {
+        emptyMessage,
+        noResultsMessage,
+        singularResultLabel,
+        pluralResultLabel
+      })
     : "";
   $: listboxId = `${id}-options`;
-  $: activeOptionId = open && activeIndex >= 0 && activeIndex < visibleOptions.length
+  $: activeOptionId = open && hasSearchableResults && activeIndex >= 0 && activeIndex < visibleOptions.length
     ? `${id}-option-${activeIndex}`
     : undefined;
 
@@ -72,8 +93,21 @@
     query = (event.currentTarget as HTMLInputElement).value;
     open = true;
     visibleLimit = pageSize;
-    const firstPage = filterSearchableNodeOptions(options, query).slice(0, pageSize);
+    const firstPage = filterSearchableNodeOptions(searchableOptions, query).slice(0, pageSize);
     activeIndex = getNextEnabledNodeOptionIndex(firstPage, -1, 1);
+    revealActiveOption();
+  }
+
+  function clearSearchQuery() {
+    query = "";
+    open = true;
+    visibleLimit = pageSize;
+    activeIndex = getNextEnabledNodeOptionIndex(
+      filterSearchableNodeOptions(searchableOptions, "").slice(0, pageSize),
+      -1,
+      1
+    );
+    rootElement?.querySelector("input")?.focus();
     revealActiveOption();
   }
 
@@ -141,14 +175,16 @@
   }
 </script>
 
-<div class="searchable-node-select" bind:this={rootElement}>
+<div class="searchable-node-select" bind:this={rootElement} on:focusout={handleBlur}>
   <input
+    id={id}
     type="search"
     role="combobox"
     aria-label={ariaLabel}
     aria-required={required}
+    aria-describedby={disabledDescriptionId}
     aria-expanded={open}
-    aria-controls={open && matchingOptions.length > 0 ? listboxId : undefined}
+    aria-controls={open && hasSearchableResults && visibleOptions.length > 0 ? listboxId : undefined}
     aria-activedescendant={activeOptionId}
     aria-autocomplete="list"
     autocomplete="off"
@@ -157,7 +193,7 @@
     {disabled}
     on:click={openOptions}
     on:input={updateQuery}
-    on:blur={handleBlur}
+
     on:keydown={handleKeydown}
   />
   <p class="visually-hidden" aria-live="polite" aria-atomic="true">{resultAnnouncement}</p>
@@ -166,7 +202,7 @@
   {/if}
 
   {#if open}
-    {#if visibleOptions.length > 0}
+    {#if visibleOptions.length > 0 && hasSearchableResults}
       <div class="option-list" id={listboxId} role="listbox" aria-label={`Risultati per ${ariaLabel}`}>
         {#each visibleOptions as option, index (`${option.value}-${index}`)}
           <button
@@ -183,15 +219,23 @@
           >{option.label}</button>
         {/each}
       </div>
-      {#if matchingOptions.length > visibleOptions.length}
+      {#if countedMatchingOptions.length > countedVisibleOptions.length}
         <button class="show-more" type="button" on:mousedown|preventDefault on:click={showMore}>
-          Mostra altri {Math.min(pageSize, matchingOptions.length - visibleOptions.length)} · {matchingOptions.length} risultati
+          Mostra altri {Math.min(pageSize, countedMatchingOptions.length - countedVisibleOptions.length)} · {countedMatchingOptions.length} risultati
         </button>
       {/if}
     {:else}
       <p class="empty-options">
-        {query.trim() ? "Nessun nodo corrisponde alla ricerca." : "Nessun nodo disponibile."}
+        {query.trim() ? noResultsMessage : emptyMessage}
       </p>
+      {#if query.trim()}
+        <button
+          class="clear-search"
+          type="button"
+          on:mousedown|preventDefault
+          on:click={clearSearchQuery}
+        >Cancella ricerca</button>
+      {/if}
     {/if}
   {/if}
 </div>
@@ -242,4 +286,18 @@
   .option-list button:hover, .option-list button.active, .show-more:hover { background: #edf5f7; }
   .option-list button.disabled { color: #8995a3; cursor: not-allowed; }
   .show-more { width: 100%; margin-top: 0.2rem; color: #176b80; font-size: 0.8rem; }
+  .clear-search {
+    justify-self: start;
+    min-height: 32px;
+    margin: 0 0 0.2rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.35rem;
+    background: #fff;
+    color: #176b80;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .clear-search:hover { background: #edf5f7; }
 </style>

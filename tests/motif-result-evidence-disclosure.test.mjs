@@ -6,7 +6,13 @@ const panel = await readFile(new URL("../src/lib/kliqueasp/components/MotifAnaly
 const provenanceReferences = await readFile(new URL("../src/lib/kliqueasp/components/ProvenanceReferences.svelte", import.meta.url), "utf8");
 
 function summaryButtonFor(dispatchName) {
-  const match = panel.match(new RegExp(`<button type="button" class="match" on:click=\\{\\(\\) => dispatch\\("${dispatchName}", [^}]+\\)\\}>([\\s\\S]*?)<\\/button>`));
+  const action = {
+    highlightCounterfactual: /highlightCounterfactual\(proposal, index\)/,
+    highlight: /highlightMatch\(match, index\)/,
+    highlightNearMatch: /highlightNearMatch\(nearMatch, index\)/
+  }[dispatchName];
+  assert.ok(action, `an explicit summary action exists for ${dispatchName}`);
+  const match = panel.match(new RegExp(`<button type="button" class="match"[^>]*on:click=\\{\\(\\) => ${action.source}\\}>([\\s\\S]*?)<\\/button>`));
   assert.ok(match, `the ${dispatchName} result keeps a dedicated highlight button`);
   return match[1];
 }

@@ -9,7 +9,7 @@ const header = headerStart >= 0 && headerEnd > headerStart ? source.slice(header
 
 test("typed-motif induced edge types use a compact summary and progressive disclosure", () => {
   assert.notEqual(header, "", "intestazione del pannello motivi non trovata");
-  assert.match(header, /controllo del motivo considera \$\{selectedInducedEdgeTypes\.length\}/);
+  assert.match(header, /controlli indotti su \$\{selectedInducedEdgeTypes\.length\}/);
   assert.match(header, /<details class="induced-edge-types">[\s\S]*?<summary>Tipi di arco controllati/);
   assert.match(header, /<ProgressiveList items=\{selectedInducedEdgeTypes\} label="tipi di arco"/);
   assert.doesNotMatch(header, /selectedInducedEdgeTypes\.join\(/,

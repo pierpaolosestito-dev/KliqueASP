@@ -55,7 +55,7 @@
     "root": "#facc15",
     "neighbor": "#60a5fa",
     "preview": "#7dd3fc",
-    "default": "#334155",
+    "default": "#64748b",
     "clique": "#7dd3fc",
     "edgeTypes": {
       "person-person": "#38bdf8",
@@ -72,7 +72,7 @@
       "scale": 8
     },
     "label": {
-      "font": "26px sans-serif",
+      "font": "26px Arial, Helvetica, sans-serif",
       "scale": [18, 8],
       "offsetY": -10
     }
@@ -274,7 +274,7 @@
   "body": {
     "background": "#f8fafc",
     "textColor": "#0f172a",
-    "fontFamily": "system-ui, sans-serif"
+    "fontFamily": "Arial, Helvetica, sans-serif"
   },
 
   "toolbar": {
@@ -339,7 +339,7 @@
   "clique": "#7dd3fc"
 },
   "default": {
-    "color": "#334155",
+    "color": "#64748b",
     "icon": "assets/PsychologyHistoryGraph/icon.png"
   },
 

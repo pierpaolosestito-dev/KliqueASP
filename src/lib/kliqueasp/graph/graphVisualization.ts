@@ -13,6 +13,24 @@ export interface GraphEdgeTypeLegendEntry {
   color: string;
 }
 
+export interface GraphNodeTypeLegendEntry {
+  type: string;
+  label: string;
+  color: string;
+}
+
+export interface GraphNodeTypeSummaryEntry {
+  type: string;
+  label: string;
+  count: number;
+}
+
+export type GraphDisplayNode = {
+  type?: unknown;
+  analysis?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type GraphDisplayIdentity = (link: GraphDisplayLink) => string;
 export type NeighborhoodDirection = "weak" | "outgoing" | "incoming";
 
@@ -28,6 +46,11 @@ export type AggregatedGraphDisplayLink = GraphDisplayLink & {
   visualSourceEdgeIdentities: string[];
 };
 
+export type GraphDisplayLinkCurve = {
+  curvature: number;
+  rotation: number;
+};
+
 function endpointId(value: unknown): string {
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (value && typeof value === "object" && "id" in value) {
@@ -35,6 +58,47 @@ function endpointId(value: unknown): string {
     if (typeof id === "string" || typeof id === "number") return String(id);
   }
   return "";
+}
+
+/**
+ * Gives parallel records stable, separate lanes in the 3D renderer without
+ * adding presentation metadata to the graph data or its edge identities.
+ */
+export function buildGraphDisplayLinkCurves(
+  links: readonly GraphDisplayLink[]
+): WeakMap<GraphDisplayLink, GraphDisplayLinkCurve> {
+  const groups = new Map<string, Array<{ link: GraphDisplayLink; source: string; target: string }>>();
+  for (const link of links) {
+    const source = endpointId(link.source);
+    const target = endpointId(link.target);
+    if (!source || !target) continue;
+    const key = JSON.stringify([source, target].sort());
+    const group = groups.get(key) ?? [];
+    group.push({ link, source, target });
+    groups.set(key, group);
+  }
+
+  const curves = new WeakMap<GraphDisplayLink, GraphDisplayLinkCurve>();
+  for (const group of groups.values()) {
+    if (group[0].source === group[0].target) {
+      group.forEach(({ link }, index) => curves.set(link, {
+        curvature: 0.45,
+        rotation: group.length === 1 ? 0 : (2 * Math.PI * index) / group.length
+      }));
+      continue;
+    }
+
+    const maximumLane = Math.max(0.5, (group.length - 1) / 2);
+    group.forEach(({ link, source, target }, index) => {
+      const canonicalLane = (index - (group.length - 1) / 2) / maximumLane;
+      const canonicalDirection = source <= target ? 1 : -1;
+      curves.set(link, {
+        curvature: canonicalLane * canonicalDirection * 0.28,
+        rotation: 0
+      });
+    });
+  }
+  return curves;
 }
 
 /** Returns the mapped relation label without assigning it a domain meaning. */
@@ -77,6 +141,64 @@ export function getGraphDisplayEdgeTypeLegend(
       const color = getGraphDisplayEdgeTypeColor({ source: "", target: "", analysis: { type } }, colorsByType);
       return color ? [{ type, color }] : [];
     });
+}
+
+/** Builds a legend for node types that are both present and styled in the current projection. */
+export function getGraphDisplayNodeTypeLegend(
+  nodes: readonly GraphDisplayNode[],
+  stylesByType: unknown
+): GraphNodeTypeLegendEntry[] {
+  if (!Array.isArray(nodes) || !stylesByType || typeof stylesByType !== "object" || Array.isArray(stylesByType)) {
+    return [];
+  }
+
+  const styles = stylesByType as Record<string, unknown>;
+  const entries = new Map<string, GraphNodeTypeLegendEntry>();
+  for (const node of nodes) {
+    const analysisType = node?.analysis?.type;
+    const rawType = typeof analysisType === "string" && analysisType.trim() !== ""
+      ? analysisType.trim()
+      : node?.type;
+    const hasType = typeof rawType === "string" && rawType.trim() !== "";
+    const type = hasType ? String(rawType).trim() : "default";
+    const configuredStyle = Object.prototype.hasOwnProperty.call(styles, type) ? styles[type] : undefined;
+    const inheritedDefaultStyle = type !== "default" && Object.prototype.hasOwnProperty.call(styles, "default")
+      ? styles.default
+      : undefined;
+    const style = configuredStyle && typeof configuredStyle === "object" && !Array.isArray(configuredStyle)
+      ? configuredStyle as Record<string, unknown>
+      : undefined;
+    const defaultStyle = inheritedDefaultStyle && typeof inheritedDefaultStyle === "object" && !Array.isArray(inheritedDefaultStyle)
+      ? inheritedDefaultStyle as Record<string, unknown>
+      : undefined;
+    const configuredColor = typeof style?.color === "string" ? style.color.trim() : "";
+    const defaultColor = typeof defaultStyle?.color === "string" ? defaultStyle.color.trim() : "";
+    const color = configuredColor || defaultColor;
+    if (!color || entries.has(type)) continue;
+    entries.set(type, { type, label: hasType ? type : "Senza tipo", color });
+  }
+
+  return [...entries.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+/** Counts node types in the current projection, including types without a configured color. */
+export function getGraphNodeTypeSummary(nodes: readonly GraphDisplayNode[]): GraphNodeTypeSummaryEntry[] {
+  const counts = new Map<string, number>();
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const analysisType = node?.analysis?.type;
+    const rawType = typeof analysisType === "string" && analysisType.trim() !== ""
+      ? analysisType.trim()
+      : node?.type;
+    const type = typeof rawType === "string" && rawType.trim() !== "" ? rawType.trim() : "default";
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([type, count]) => ({
+      type,
+      label: type === "default" ? "Senza tipo" : type,
+      count
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, "it"));
 }
 
 /** Plain-text tooltip content for a typed display edge. */

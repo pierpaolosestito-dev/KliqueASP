@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 2,
+  "features": {
+    "filters": true,
+    "timeline": true,
+    "labelVisibilityToggle": true,
+    "nodeLabelsVisibleByDefault": false
+  },
+  "timeline": {
+    "start": 2021,
+    "end": 2027,
+    "debounceMs": 140
+  },
+  "nodeTypes": {
+    "person": {
+      "color": "#38bdf8"
+    },
+    "unit": {
+      "color": "#f59e0b"
+    },
+    "project": {
+      "color": "#c084fc"
+    }
+  },
+  "colors": {
+    "edgeTypes": {
+      "social-tie": "#38bdf8",
+      "mentoring": "#f59e0b",
+      "collaboration": "#22c55e",
+      "member-of": "#a78bfa",
+      "participates-in": "#ec4899"
+    }
+  },
+  "graphMapping": {
+    "node": {
+      "idField": "$.id",
+      "labelField": "$.label",
+      "typeField": "$.type",
+      "roleField": "$.roles[*]",
+      "groupFields": [
+        "$.groups[*]"
+      ],
+      "removalCostField": "$.removalCost",
+      "attributes": {
+        "discipline": "$.discipline",
+        "careerStage": "$.careerStage",
+        "qualityStatus": "$.qualityStatus",
+        "registryCode": "$.registryCode"
+      }
+    },
+    "edge": {
+      "idField": "$.id",
+      "sourceField": "$.source",
+      "targetField": "$.target",
+      "typeField": "$.type",
+      "direction": "undirected",
+      "identity": "multigraph",
+      "validity": {
+        "fromField": "$.validFrom",
+        "toField": "$.validTo"
+      },
+      "weightField": "$.weight",
+      "removalCostField": "$.cutCost",
+      "confidenceField": "$.confidence",
+      "confidenceRange": {
+        "min": 0,
+        "max": 1
+      },
+      "provenanceField": "$.provenance",
+      "attributes": {
+        "polarity": "$.polarity",
+        "channel": "$.channel",
+        "eventRef": "$.eventRef"
+      }
+    }
+  },
+  "graphIntegrity": {
+    "requireNodeTypes": true,
+    "requireEdgeTypes": true,
+    "allowedNodeTypes": [
+      "person",
+      "unit",
+      "project"
+    ],
+    "allowedEdgeTypes": [
+      "social-tie",
+      "mentoring",
+      "collaboration",
+      "member-of",
+      "participates-in"
+    ],
+    "requiredEdgeIntervals": [
+      "social-tie",
+      "mentoring",
+      "collaboration",
+      "member-of",
+      "participates-in"
+    ],
+    "edgeTypeDomains": [
+      {
+        "edgeType": "mentoring",
+        "sourceNodeTypes": [
+          "person"
+        ],
+        "targetNodeTypes": [
+          "person"
+        ]
+      },
+      {
+        "edgeType": "member-of",
+        "sourceNodeTypes": [
+          "person"
+        ],
+        "targetNodeTypes": [
+          "unit"
+        ]
+      },
+      {
+        "edgeType": "participates-in",
+        "sourceNodeTypes": [
+          "person"
+        ],
+        "targetNodeTypes": [
+          "project"
+        ]
+      }
+    ],
+    "requiredNodeAttributes": [
+      {
+        "nodeType": "person",
+        "attributes": [
+          "discipline",
+          "careerStage",
+          "qualityStatus",
+          "registryCode"
+        ]
+      }
+    ],
+    "requiredEdgeAttributes": [
+      {
+        "edgeType": "social-tie",
+        "attributes": [
+          "polarity",
+          "channel",
+          "eventRef"
+        ]
+      }
+    ],
+    "nodeAttributeDomains": [
+      {
+        "nodeType": "person",
+        "attribute": "careerStage",
+        "allowedValues": [
+          "early",
+          "mid",
+          "senior"
+        ]
+      },
+      {
+        "nodeType": "person",
+        "attribute": "qualityStatus",
+        "allowedValues": [
+          "verified",
+          "reviewed"
+        ]
+      }
+    ],
+    "edgeAttributeDomains": [
+      {
+        "edgeType": "social-tie",
+        "attribute": "polarity",
+        "allowedValues": [
+          -1,
+          1
+        ]
+      }
+    ],
+    "uniqueNodeAttributes": [
+      {
+        "nodeType": "person",
+        "attribute": "registryCode"
+      }
+    ],
+    "uniqueEdgeAttributes": [
+      {
+        "edgeType": "social-tie",
+        "attribute": "eventRef"
+      }
+    ],
+    "cardinalities": [
+      {
+        "nodeType": "person",
+        "edgeType": "member-of",
+        "incidence": "any",
+        "min": 1,
+        "max": 2
+      }
+    ],
+    "repairSuggestions": {
+      "nodeAttributeReplacements": [
+        {
+          "nodeId": "person-001",
+          "attribute": "qualityStatus",
+          "expectedValue": "unverified",
+          "value": "verified",
+          "cost": 1
+        }
+      ],
+      "edgeTypeReplacements": [
+        {
+          "edgeId": "synthetic-membership-mismatch",
+          "expectedType": "member-of",
+          "newType": "participates-in",
+          "cost": 1
+        }
+      ]
+    }
+  },
+  "graphAnalysis": {
+    "motifs": [
+      {
+        "id": "mentoring-pair",
+        "label": "Mentoring tra un ricercatore senior e uno early-career",
+        "roles": {
+          "mentor": {
+            "nodeTypes": [
+              "person"
+            ],
+            "attributes": {
+              "careerStage": "senior"
+            }
+          },
+          "mentee": {
+            "nodeTypes": [
+              "person"
+            ],
+            "attributes": {
+              "careerStage": "early"
+            }
+          }
+        },
+        "edges": [
+          {
+            "sourceRole": "mentor",
+            "targetRole": "mentee",
+            "edgeType": "mentoring",
+            "attributes": {
+              "polarity": 1
+            }
+          }
+        ]
+      },
+      {
+        "id": "ordered-research-chain",
+        "label": "Due collaborazioni in ordine temporale",
+        "roles": {
+          "first": {
+            "nodeTypes": [
+              "person"
+            ]
+          },
+          "middle": {
+            "nodeTypes": [
+              "person"
+            ]
+          },
+          "last": {
+            "nodeTypes": [
+              "person"
+            ]
+          }
+        },
+        "edges": [
+          {
+            "sourceRole": "first",
+            "targetRole": "middle",
+            "edgeType": "social-tie"
+          },
+          {
+            "sourceRole": "middle",
+            "targetRole": "last",
+            "edgeType": "social-tie"
+          }
+        ],
+        "temporal": {
+          "semantics": "orderedByStart",
+          "strict": true
+        }
+      }
+    ],
+    "motifCount": {
+      "partitionSize": 8,
+      "maxDurationMs": 300000
+    },
+    "communities": {
+      "useEdgeWeights": true,
+      "resolution": 1,
+      "mustLink": [
+        [
+          "person-001",
+          "person-002"
+        ]
+      ],
+      "cannotLink": [
+        [
+          "person-001",
+          "person-073"
+        ]
+      ],
+      "attributeBounds": [
+        {
+          "attribute": "careerStage",
+          "value": "early",
+          "minPerCommunity": 1
+        }
+      ],
+      "topologyCounterfactuals": {
+        "edgeEdits": [
+          {
+            "id": "join-research-units",
+            "action": "add",
+            "sourceNodeId": "person-001",
+            "targetNodeId": "person-073",
+            "cost": 2,
+            "weight": 2
+          },
+          {
+            "id": "remove-first-social-record",
+            "action": "remove",
+            "edgeId": "synthetic-edge-00001",
+            "cost": 1
+          }
+        ]
+      }
+    },
+    "provenanceScenarios": {
+      "scenarios": [
+        {
+          "id": "fieldwork",
+          "label": "Rilievi sul campo",
+          "sources": [
+            "synthetic-fieldwork-2024"
+          ]
+        },
+        {
+          "id": "project-log",
+          "label": "Registri di progetto",
+          "sources": [
+            "synthetic-project-log-2025"
+          ]
+        },
+        {
+          "id": "all-sources",
+          "label": "Tutte le fonti sintetiche",
+          "sources": [
+            "synthetic-fieldwork-2024",
+            "synthetic-project-log-2025",
+            "synthetic-interviews-2026"
+          ]
+        }
+      ],
+      "unattributedEdges": "exclude",
+      "worldAssumption": "finite-exhaustive-worlds"
+    },
+    "counterfactuals": {
+      "edgeAdditions": [
+        {
+          "id": "candidate-cross-unit-social-tie",
+          "sourceNodeId": "person-001",
+          "targetNodeId": "person-073",
+          "edgeType": "social-tie",
+          "cost": 2,
+          "attributes": {
+            "polarity": 1,
+            "channel": "counterfactual"
+          },
+          "validity": {
+            "from": 2026,
+            "to": 2027
+          }
+        }
+      ]
+    },
+    "contextualClique": {
+      "focusNodeTypes": [
+        "person"
+      ],
+      "contextNodeTypes": [
+        "unit"
+      ],
+      "edgeTypes": [
+        "member-of"
+      ],
+      "minimumSize": 3
+    },
+    "signedTriads": {
+      "attribute": "polarity",
+      "positiveValues": [
+        1
+      ],
+      "negativeValues": [
+        -1
+      ],
+      "edgeTypes": [
+        "social-tie",
+        "collaboration"
+      ]
+    }
+  }
+}

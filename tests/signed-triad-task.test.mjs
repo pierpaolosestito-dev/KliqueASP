@@ -310,7 +310,9 @@ test("il filtro opzionale per edge type restringe la rete firmata e mantiene il 
     new Set(["polarity"])
   );
   assert.equal(noMappedType.available, false);
-  assert.match(noMappedType.reasons.join(" "), /richiede graphMapping\.edge\.typeField/);
+  assert.match(noMappedType.reasons.join(" "), /In Dati.*Mappatura rapida.*tipo di ogni arco/);
+  assert.doesNotMatch(noMappedType.reasons.join(" "), /graphMapping\.|graphAnalysis\./,
+    "i prerequisiti mostrati nel pannello non devono esporre chiavi della configurazione JSON");
 
   const facts = buildAspFactsFromGraph(graph);
   const result = await (await createClingoWasmRunner()).run(

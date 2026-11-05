@@ -20,14 +20,17 @@ test("case study validates the fetched graph and passes it unchanged to GraphApp
   assert.match(route, /!Array\.isArray\(data\.nodes\)/);
   assert.match(route, /!Array\.isArray\(data\.edges\)/);
   assert.match(route, /import\("\$lib\/kliqueasp\/GraphApp\.svelte"\)/);
-  assert.match(route, /<svelte:component this=\{GraphAppComponent\} \{graphConfig\} \{graphData\} \/>/);
+  assert.match(route, /<svelte:component this=\{GraphAppComponent\} \{graphConfig\} \{graphData\} workspaceNavigationHref=\{workspaceHref\} \/>/);
   assert.match(route, /Promise\.all\(\[[\s\S]*fetch\(graphDataUrl\)[\s\S]*import\(/);
 });
 
 test("case study exposes accessible loading, error, and retry states", () => {
   assert.match(route, /role="status" aria-live="polite"/);
   assert.match(route, /role="alert"/);
-  assert.match(route, /onclick=\{loadGraphData\}/);
+  assert.match(route, /onclick=\{loadGraphData\}>Riprova<\/button>/);
+  assert.doesNotMatch(route, /onclick=\{loadGraphData\} disabled=/,
+    "the retry action leaves the error branch while loading is announced in the status branch");
+  assert.match(route, /loadError = "";[\s\S]*?\{:else\}[\s\S]*?<main class="dataset-state" role="status" aria-live="polite">/);
   assert.match(route, /Caricamento del grafo del caso psicologi/);
   assert.match(route, /Non è stato possibile preparare il caso studio/);
 });

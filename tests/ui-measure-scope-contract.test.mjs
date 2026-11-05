@@ -21,8 +21,15 @@ test("modularity reports its resolution, weighting, and graph population", () =>
 test("triad proportions state which complete classified triangles form each denominator", () => {
   assert.match(motifs, /La quota è calcolata solo sui triangoli completi classificati nella proiezione corrente/);
   assert.match(motifs, /\{scenario\.commonTriads\} triangoli classificati in tutti gli scenari · quota bilanciata sul nucleo comune/);
-  assert.match(motifs, /La prima quota usa i triangoli completi classificati nello scenario[\s\S]*?La quota sul nucleo comune usa soltanto gli stessi ID di triade, classificati in tutti gli scenari/);
-  assert.match(motifs, /Le triadi assenti dall'unione osservata restano non classificate, non sbilanciate/);
+  const summary = "<summary>Come leggere quote e classificazioni</summary>";
+  const summaryStart = motifs.indexOf(summary);
+  const disclosureStart = motifs.lastIndexOf('<details class="scenario-interpretation">', summaryStart);
+  const disclosureEnd = motifs.indexOf("</details>", summaryStart);
+  assert.ok(disclosureStart >= 0 && disclosureEnd > summaryStart, "triad metric definitions should remain in a disclosure");
+  const disclosure = motifs.slice(disclosureStart, disclosureEnd + "</details>".length);
+  assert.match(disclosure, /La prima quota usa i triangoli completi classificati in ciascuno scenario[\s\S]*?La quota sul nucleo comune usa soltanto gli stessi ID di triade, classificati in tutti gli scenari/);
+  assert.match(disclosure, /Le triadi assenti dall'unione osservata restano non classificate/);
+  assert.match(motifs, /<small>\u201cNon classificata\u201d non significa \u201cnon bilanciata\u201d\.<\/small>/);
 });
 
 test("scenario membership counts show their scenario and optimum denominators", () => {

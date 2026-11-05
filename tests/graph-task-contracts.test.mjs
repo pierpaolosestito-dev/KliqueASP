@@ -1606,7 +1606,7 @@ test("i task ignoti non leggono il prototipo del registro e le modalità mostran
   assert.match(getTaskEnumerationDescription("graphIntegrity"), /tutte le violazioni dichiarate/);
   assert.match(getTaskEnumerationDescription("minimumIntegrityRepair"), /ottimalità provata/);
   assert.match(getTaskEnumerationDescription("signedTriads"), /triangoli con tre dyadi firmate coerenti/);
-  assert.match(getTaskEnumerationDescription("typedMotifNearMatch"), /ottimo secondo le priorità lessicografiche/);
+  assert.match(getTaskEnumerationDescription("typedMotifNearMatch"), /risultato parziale ottimo secondo l’ordine delle priorità dichiarate/);
   assert.match(GRAPH_TASK_CONTRACTS.typedMotifNearMatch.querySemantics, /intervalli assenti o invalidi sono diagnostica del task, non una condizione che lo disabilita/i);
   assert.match(getTaskEnumerationDescription("motifCompletionCounterfactual"), /costo minimo provata sui candidati configurati/);
   assert.deepEqual(GRAPH_TASK_CONTRACTS.typedMotif.supportedEnumeration, ["all-distinct-role-assignments"]);
@@ -1664,5 +1664,5 @@ test("ogni protocollo di enumerazione dichiarato si risolve e produce una descri
   }
 
   assert.equal(resolveTaskEnumeration("unknown"), null);
-  assert.equal(getTaskEnumerationDescription("unknown"), "modalita di enumerazione non dichiarata dal contratto");
+  assert.equal(getTaskEnumerationDescription("unknown"), "Modalità di calcolo non dichiarata per questa analisi.");
 });

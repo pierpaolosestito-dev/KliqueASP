@@ -3,12 +3,13 @@
 
   export let description: string;
   export let actionLabel = "Apri Dati e configurazione";
+  export let descriptionId: string | undefined = undefined;
 
   const dispatch = createEventDispatcher();
 </script>
 
 <div class="counterfactual-config-hint">
-  <small>{description}</small>
+  <small id={descriptionId} role={descriptionId ? "status" : undefined} aria-live={descriptionId ? "polite" : undefined}>{description}</small>
   <details>
     <summary>Percorso del campo nella configurazione JSON</summary>
     <code>graphAnalysis.counterfactuals.edgeAdditions</code>

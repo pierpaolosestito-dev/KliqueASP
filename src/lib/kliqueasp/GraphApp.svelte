@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  type AnalysisPanelKind = "clique" | "structural" | "integrity" | "motif" | "provenance";
   import { base } from "$app/paths";
   import * as THREE from "three";
+  import { displayMappedTimelineRange } from "./graph/temporalDisplay";
   import { forceManyBody, forceCenter, forceLink, forceCollide } from "d3-force-3d";
   import TimelineSlider from "./components/TimelineSlider.svelte";
   import ResultListPager from "./components/ResultListPager.svelte";
   import { deepMergeConfig } from "./config/deepMergeConfig";
+  import { getUserFacingConfigurationError } from "./graph/configurationErrorCopy";
   import InfoPanel from "./components/InfoPanel.svelte";
   import HistoryPanel from "./components/HistoryPanel.svelte";
   import SolverPanel from "./components/SolverPanel.svelte";
@@ -16,13 +19,17 @@
   import DownloadAnnouncement from "./components/DownloadAnnouncement.svelte";
   import {
     buildGraph2DAnalysisSummary,
+    buildGraph2DAbsenceLinks,
+    buildGraph2DCounterfactualEvidenceEdgeIdentities,
     buildGraph2DHypotheticalEdgeAnnotations,
     buildGraph2DHypotheticalLinks,
+    buildGraph2DPathAnnotations,
     type Graph2DEdgeAnnotation,
     type Graph2DLinkInput,
     type Graph2DNodeInput
   } from "./graph/graph2dExport.ts";
   import { buildGraph2DCliqueResultLabel } from "./graph/graph2DCliqueSummary.ts";
+  import { getCliqueTaskLabel } from "./graph/cliqueTaskCopy.ts";
   import {
     buildGraph2DOptimizationCompletionLabel,
     buildGraph2DStructuralCompletionLabel,
@@ -34,10 +41,26 @@
   } from "./graph/graph2DAnalysisOutcome.ts";
   import { buildGraph2DStructuralResultLabel } from "./graph/graph2DStructuralSummary.ts";
   import { buildGraph2DDominatingSetCoverageOverlay } from "./graph/graph2DDominatingSet.ts";
+  import {
+    buildProvenanceScenarioCliqueMembershipGraph2DOverlay,
+    buildProvenanceScenarioStructuralMembershipGraph2DAnnotation
+  } from "./graph/provenanceScenarioGraph2D.ts";
+  import { buildSeparatorGraph2DOverlay } from "./graph/separatorGraph2D.ts";
   import { buildGraphWitnessStatus } from "./graph/graphWitnessStatus.ts";
   import { getGraphLinkOpacity } from "./graph/graphLinkOpacity.ts";
-  import { getGraphMotionSettings, getGraphTransitionDuration, getInitialGraphCameraDistance } from "./graph/graphMotion.ts";
-  import { getNonOverlappingGraphNodeLabelIds } from "./graph/nodeLabelLayout.ts";
+  import { getGraphFitZoomFactor, getGraphMotionSettings, getGraphTransitionDuration, getInitialGraphCameraDistance } from "./graph/graphMotion.ts";
+  import { getNonOverlappingGraphNodeLabelIds, getReadableGraphNodeLabelSize } from "./graph/nodeLabelLayout.ts";
+  import { getGraphNodeHighlightScaleFactor, getGraphNodeHighlightState } from "./graph/nodeHighlightState.ts";
+  import {
+    getGraphNodeSearchMatchScore,
+    getGraphSearchSuggestionId,
+    getGraphSearchSuggestionLabel,
+    getNextGraphSearchSuggestionIndex,
+    normalizeGraphNodeSearchQuery
+  } from "./graph/graphNodeSearch.ts";
+  import GraphNodeDirectory from "./components/GraphNodeDirectory.svelte";
+  import { buildGraphNodeDirectoryEntries } from "./graph/nodeDirectory.ts";
+  import { getGraphExampleCatalog } from "./graph/exampleCatalog";
   import ProvenanceScenarioAnalysisPanel from "./components/ProvenanceScenarioAnalysisPanel.svelte";
   import {
     getClingoInvocationOptions,
@@ -61,10 +84,15 @@
     normalizeProvenanceReferences
   } from "./graph/provenance";
   import { projectVisibleNodeIds } from "./graph/visibleNodeProjection";
+  import { filterNodeIdsByDegree } from "./graph/nodeDegreeProjection.ts";
+  import type { GraphViewFilterSnapshot } from "./graph/graphViewFilters.ts";
   import {
+    buildGraphDisplayLinkCurves,
     formatGraphDisplayEdgeTypeTooltip,
     formatGraphDisplayLinkTooltip,
     getGraphDisplayEdgeTypeLegend,
+    getGraphDisplayNodeTypeLegend,
+    getGraphNodeTypeSummary,
     getGraphDisplayLinkColor,
     getGraphNeighborhoodNodeIds,
     graphDisplayLinkMatchesIdentities,
@@ -75,7 +103,8 @@
   } from "./graph/graphVisualization";
   import {
     filterLinksByTemporalWindow,
-    isTimelineControlAvailable
+  isTimelineControlAvailable,
+  resolveInitialTemporalWindow
   } from "./graph/temporalProjection";
   import {
     getDeclaredNodeTimelineConfig,
@@ -83,10 +112,11 @@
     isDeclaredNodeAlwaysVisible
   } from "./graph/configuredNodeSemantics";
   import { normalizeNodeTypeConfigStyles } from "./graph/nodeTypeConfig";
-  import { summarizeAnalysisReadiness } from "./graph/analysisReadiness";
+  import { describeCliqueAnalysisMenuBlocker, describeMissingRepairAttributeMappings, summarizeAnalysisReadiness } from "./graph/analysisReadiness";
   import { buildIntegrityViolationVisualization } from "./graph/integrityVisualization.ts";
   import { buildIntegrityRepairVisualization } from "./graph/integrityRepairVisualization.ts";
   import {
+    analysisStateHasResult,
     filterWorkbenchHistoryForNodeIds,
     MAX_WORKBENCH_ANALYSIS_ARCHIVE_CHARS,
     MAX_WORKBENCH_HISTORY_ENTRIES,
@@ -207,6 +237,10 @@
     type TypedMotifCounterfactual
   } from "./graph/motifTask";
   import {
+    buildTypedMotifGraph2DAnnotations,
+    buildTypedMotifNearMatchGraph2DAnnotations
+  } from "./graph/typedMotifGraph2D.ts";
+  import {
     resolveTypedMotifCountPartitionDomain,
     resolveTypedMotifCountPartitionSettings,
     runTypedMotifCountPartitions,
@@ -297,6 +331,7 @@
     validateCommunityConfiguration,
     resolveCommunityAttributeBounds,
     getStructuralEdgeIdentity,
+    mapSourceEdgeIdsToStructuralIdentities,
     getStructuralSolverOptions,
     hasCompleteModelEnumeration,
     hasCompleteOptimalModelEnumeration,
@@ -368,8 +403,12 @@
     nodes: [],
     edges: []
   };
+  export let datasetIsComplete = true;
+  export let incrementalDatasetUpdates = false;
   export let forceEasterEgg: boolean = false;
   export let nodeLabelsVisible: boolean = true;
+  export let workspaceNavigationHref = "";
+  const graphExampleCatalog = getGraphExampleCatalog(base);
   let nodeLabelLayoutVisibleIds: Set<string> | null = null;
   let nodeLabelLayoutInterval: ReturnType<typeof setInterval> | null = null;
   let hoveredGraphNodeId: string | null = null;
@@ -395,6 +434,7 @@
   export let JsonEditor: any = null;
   export let jsonEditorProps: any = {};
   let jsonEditorComponent: { openProjectPicker?: () => void } | null = null;
+  let jsonEditorFocusReturnTarget: HTMLElement | null = null;
   // ---------------------------------------------------------------------------
   // DEFAULT CONFIG
   // ---------------------------------------------------------------------------
@@ -432,7 +472,7 @@
       root: "#facc15",
       neighbor: "#60a5fa",
       preview: "#7dd3fc",
-      default: "#334155",
+      default: "#64748b",
       clique: "#7dd3fc"
     },
 
@@ -445,7 +485,7 @@
         scale: 8
       },
       label: {
-        font: "22px sans-serif",
+        font: "22px Arial, Helvetica, sans-serif",
         scale: [14, 6],
         offsetY: -10
       }
@@ -655,7 +695,7 @@
       body: {
         background: "#f8fafc",
         textColor: "#0f172a",
-        fontFamily: "system-ui, sans-serif"
+        fontFamily: "Arial, Helvetica, sans-serif"
       },
 
       toolbar: {
@@ -721,7 +761,7 @@
       },
 
       default: {
-        color: "#334155",
+        color: "#64748b",
         icon: "assets/PsychologyHistoryGraph/icon.png"
       },
 
@@ -797,6 +837,13 @@
     RAW_CONFIG
   );
 
+  function getConfiguredTimelineWindow() {
+    return resolveInitialTemporalWindow(
+      { start: Number(GRAPH_CONFIG.timeline.start), end: Number(GRAPH_CONFIG.timeline.end) },
+      GRAPH_CONFIG.timeline.initialWindow
+    );
+  }
+
   GRAPH_CONFIG.nodeTypes = normalizeNodeTypeConfigStyles(GRAPH_CONFIG.nodeTypes);
 
   const UI = GRAPH_CONFIG.ui;
@@ -812,9 +859,8 @@
   // possono disabilitare esplicitamente il comportamento con `false`.
   const fitGraphToViewEnabled = GRAPH_CONFIG.features?.fitGraphToView !== false;
   const graphViewFitPadding = 32;
-  // zoomToFit targets the full canvas, including the area covered by the toolbar.
-  // Move the camera back slightly so topmost nodes and labels remain visible below it.
-  const graphViewFitScale = 1.1;
+  // zoomToFit conservatively uses the full 3D bounds. A bounded screen-space
+  // correction below uses spare canvas area while retaining room for labels.
   const integrityConfigured = Object.prototype.hasOwnProperty.call(RAW_CONFIG, "graphIntegrity");
   const motifTemplates: GraphMotifTemplate[] = Array.isArray(GRAPH_CONFIG.graphAnalysis?.motifs)
     ? GRAPH_CONFIG.graphAnalysis.motifs
@@ -873,6 +919,7 @@
 
   let container: HTMLDivElement;
   let graph3D: any;
+  let graphDisplayLinkCurves = new WeakMap<GraphDisplayLink, { curvature: number; rotation: number }>();
   let reducedMotionPreference = false;
   let motionPreferenceQuery: MediaQueryList | null = null;
   let motionPreferenceChangeHandler: (() => void) | null = null;
@@ -891,6 +938,8 @@
 
   // ---------------- STATE ----------------
   let data: any = null;
+  $: graphNodeTypeLegend = getGraphDisplayNodeTypeLegend(data?.nodes ?? [], GRAPH_CONFIG.nodeTypes);
+  $: graphNodeTypeSummary = getGraphNodeTypeSummary(data?.nodes ?? []);
   $: graphEdgeTypeLegend = getGraphDisplayEdgeTypeLegend(data?.links ?? [], edgeTypeColors);
   const GRAPH_EDGE_TYPE_LEGEND_PAGE_SIZE = 16;
   let previousGraphEdgeTypeLegend: typeof graphEdgeTypeLegend | null = null;
@@ -902,20 +951,33 @@
   $: visibleGraphEdgeTypeEntries = graphEdgeTypeLegend.slice(0, visibleGraphEdgeTypeLimit);
   let graphDisplayLinkCount = 0;
   let originalData: any = null;
+  let lastIncrementalGraphData: any = null;
+  let lastIncrementalDatasetComplete = datasetIsComplete;
+  let incrementalGraphDatasetInitialized = false;
   let graphDiagnostics: GraphDiagnostic[] = [];
   let graphDirection: "undirected" | "directed" = "undirected";
   let graphSchemaVersion = 1;
   let graphCapabilities: GraphCapabilities = {};
   let timelineControlEnabled = false;
-  $: timelineControlEnabled = isTimelineControlAvailable(
-    GRAPH_CONFIG.features?.timeline === true,
-    Boolean(originalData?.nodes?.some((node: any) => hasTimelineConfig(node))),
-    graphCapabilities.edgeIntervals?.available === true
-  );
+  let showTimelineControl = true;
+  $: timelineControlEnabled = datasetIsComplete && isTimelineControlAvailable(
+      GRAPH_CONFIG.features?.timeline === true,
+      Boolean(originalData?.nodes?.some((node: any) => hasTimelineConfig(node))),
+      graphCapabilities.edgeIntervals?.available === true
+    );
+  $: if (incrementalDatasetUpdates && incrementalGraphDatasetInitialized &&
+    (graphData !== lastIncrementalGraphData || datasetIsComplete !== lastIncrementalDatasetComplete)) {
+    syncIncrementalGraphDataset();
+  }
   $: cliqueDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
     getGraphTaskRequirements("clique") ?? []
   );
+  $: cliqueAnalysisMenuBlocker = describeCliqueAnalysisMenuBlocker({
+    workerStatus: clingoWorkerStatus,
+    dataAvailable: cliqueDataReadiness.available,
+    dataReasons: cliqueDataReadiness.reasons
+  });
   $: kPlexDataReadiness = checkGraphTaskRequirements(
     graphCapabilities,
     getGraphTaskRequirements("kPlex") ?? []
@@ -976,12 +1038,12 @@
     const reasons: string[] = [];
     const constraints = GRAPH_CONFIG.graphIntegrity;
     if (graphSchemaVersion !== 2) {
-      reasons.push("La verifica richiede schemaVersion: 2 e mapping semantici espliciti.");
+      reasons.push("La verifica richiede una configurazione aggiornata del grafo (schema 2) e la mappatura dei campi usati dalle regole.");
     }
     if (!integrityConfigured) {
-      reasons.push("Dichiara regole graphIntegrity nella configurazione.");
+      reasons.push("Aggiungi almeno una regola di qualità dei dati nell'editor JSON avanzato.");
     } else if (!constraints || typeof constraints !== "object" || Array.isArray(constraints)) {
-      reasons.push("graphIntegrity deve essere un oggetto di configurazione valido.");
+      reasons.push("La configurazione delle regole di qualità dei dati deve essere un oggetto JSON valido.");
     } else {
       const ruleKeys = [
         "requireNodeTypes", "requireEdgeTypes", "allowedNodeTypes", "allowedEdgeTypes",
@@ -993,7 +1055,7 @@
         const value = (constraints as Record<string, unknown>)[key];
         return typeof value === "boolean" ? value : Array.isArray(value) && value.length > 0;
       });
-      if (!hasRules) reasons.push("Aggiungi almeno una regola a graphIntegrity.");
+      if (!hasRules) reasons.push("Aggiungi almeno una regola di qualità dei dati.");
       try {
         validateGraphIntegrityAttributeMappings(
           constraints,
@@ -1109,9 +1171,11 @@
     typeof GRAPH_CONFIG.graphMapping?.edge?.typeField === "string" && GRAPH_CONFIG.graphMapping.edge.typeField.trim() !== ""
   ) as SignedTriadPreparation;
   $: capabilityRows = GRAPH_CAPABILITY_IDS.map((key) => [key, GRAPH_CAPABILITY_LABELS[key]] as const);
+  $: activeCliqueMode = resolveCliqueMode(GRAPH_CONFIG.solver?.cliqueMode);
+  $: activeCliqueTaskLabel = getCliqueTaskLabel(activeCliqueMode);
   $: analysisTaskRows = (() => {
     const rows: Array<{ label: string; available: boolean; reasons: string[] }> = [
-      { label: "Clique massima", available: cliqueDataReadiness.available, reasons: cliqueDataReadiness.reasons },
+      { label: activeCliqueTaskLabel, available: cliqueDataReadiness.available, reasons: cliqueDataReadiness.reasons },
       { label: "k-plex massimo", available: kPlexDataReadiness.available, reasons: kPlexDataReadiness.reasons },
       { label: "k-plex massimali", available: kPlexDataReadiness.available, reasons: kPlexDataReadiness.reasons },
       { label: "k-core", available: kCoreDataReadiness.available, reasons: kCoreDataReadiness.reasons },
@@ -1151,15 +1215,15 @@
   $: integrityRepairDataReadiness = (() => {
     const reasons = [...integrityDataReadiness.reasons];
     if (!repairSuggestionsConfigured) {
-      reasons.push("Aggiungi almeno un'azione candidata in graphIntegrity.repairSuggestions.");
+      reasons.push("Aggiungi almeno un'azione candidata per la riparazione nell'editor JSON avanzato.");
     } else {
       const suggestions = GRAPH_CONFIG.graphIntegrity?.repairSuggestions;
       const mapping = GRAPH_CONFIG.graphMapping;
       if (suggestions?.nodeTypeReplacements?.length && !mapping?.node?.typeField) {
-        reasons.push("Le sostituzioni di tipo nodo richiedono graphMapping.node.typeField.");
+        reasons.push("Per sostituire il tipo dei nodi, associa un campo al tipo nella mappatura dei dati.");
       }
       if (suggestions?.edgeTypeReplacements?.length && !mapping?.edge?.typeField) {
-        reasons.push("Le sostituzioni di tipo arco richiedono graphMapping.edge.typeField.");
+        reasons.push("Per sostituire il tipo degli archi, associa un campo al tipo nella mappatura dei dati.");
       }
       if (suggestions?.edgeIntervalReplacements?.length &&
         (!mapping?.edge?.validity?.fromField || !mapping?.edge?.validity?.toField)) {
@@ -1181,15 +1245,18 @@
       const missingEdgeAttributes = [...new Set(edgeAttributeCandidates
         .map((candidate) => candidate.attribute)
         .filter((attribute) => typeof attribute === "string" && !mappedEdgeAttributes.has(attribute)))];
-      if (missingNodeAttributes.length) reasons.push(`Mappa gli attributi dei nodi usati dalle riparazioni: ${missingNodeAttributes.join(", " )}.`);
-      if (missingEdgeAttributes.length) reasons.push(`Mappa gli attributi degli archi usati dalle riparazioni: ${missingEdgeAttributes.join(", " )}.`);
+      reasons.push(...describeMissingRepairAttributeMappings({
+        nodeAttributes: missingNodeAttributes,
+        edgeAttributes: missingEdgeAttributes
+      }));
     }
     const uniqueReasons = [...new Set(reasons)];
     return { available: uniqueReasons.length === 0, reasons: uniqueReasons };
   })();
   let query = "";
-  let currentStart = GRAPH_CONFIG.timeline.start;
-  let currentEnd = GRAPH_CONFIG.timeline.end;
+  let currentStart = getConfiguredTimelineWindow().start;
+  let currentEnd = getConfiguredTimelineWindow().end;
+  $: currentTimelineLabel = displayMappedTimelineRange(currentStart, currentEnd);
   let timelineTimeout: any = null;
 
   let rootSelectedId: string | null = null;
@@ -1204,6 +1271,13 @@
   let focusedSignedTriadEdgeIds: Set<string> | null = null;
   let focusedSignedTriadKey = "";
   let neighborhoodFocusNodeIds: Set<string> | null = null;
+  $: graphDirectoryFocusNodeIds = focusedSignedTriadEdgeIds !== null
+    ? cliqueNodes
+    : neighborhoodFocusNodeIds;
+  $: graphNodeDirectoryNodes = buildGraphNodeDirectoryEntries(
+    data?.nodes ?? [],
+    graphDirectoryFocusNodeIds
+  );
   let neighborhoodFocusInfo: {
     rootNodeId: string;
     maxHops: number;
@@ -1263,17 +1337,30 @@
             : "");
   let analysisMenuElement: HTMLDetailsElement;
   let viewMenuElement: HTMLDetailsElement;
+  let mobileMoreMenuElement: HTMLDetailsElement;
+  let mobileViewMenuElement: HTMLDetailsElement;
+  let mobileDataPanelFocusReturnTarget: HTMLElement | null = null;
+  let analysisViewportQuery: MediaQueryList | null = null;
+  let analysisViewportChangeHandler: (() => void) | null = null;
+  let compactAnalysisViewport = false;
+  let analysisPanelForFocusTracking: AnalysisPanelKind | null = null;
+  let analysisPanelFocusReturnTarget: HTMLElement | null = null;
+  let suppressAnalysisPanelFocusRestore = false;
   $: activeProjectionLabels = [
     ...(selectedTypes.size ? [`${selectedTypes.size} tipi`] : []),
     ...(selectedGroupsFilter.size ? [`${selectedGroupsFilter.size} gruppi`] : []),
+    ...(Object.values(nodeDegreeFilters).some(Boolean)
+      ? [`grado (${Object.values(nodeDegreeFilters).filter(Boolean).length})`]
+      : []),
     ...(minimumEdgeConfidence !== getDefaultEdgeConfidenceThreshold() ? ["confidenza"] : []),
     ...(selectedProvenanceScenarioId ? ["scenario"] : []),
     ...(timelineControlEnabled && (currentStart !== GRAPH_CONFIG.timeline.start || currentEnd !== GRAPH_CONFIG.timeline.end) ? ["periodo"] : [])
   ];
   $: analysisResultsAvailable = Boolean(
-    lastAnalysisPanel || solverStats.completionLabel || solverStats.timeMs !== undefined || solverError || maximumCliques.length || allCliques.length ||
+    analysisStateHasResult(lastCapturedAnalysisSession?.state ?? {}) ||
+    solverStats.completionLabel || solverStats.timeMs !== undefined || solverError || maximumCliques.length || allCliques.length ||
     structuralStats || structuralOutcomeMessage || structuralError ||
-    integrityHasRun || integrityError || integrityRepairError || integrityRepairProposal ||
+    integrityHasRun || integrityError || integrityRepairError || integrityRepairOutcomeMessage || integrityRepairProposal ||
     motifHasRun || motifError || motifCountHasRun || motifCountError || motifNearMatchHasRun || motifNearMatchError ||
     motifCounterfactualHasRun || motifCounterfactualError || motifScenarioComparison || motifScenarioComparisonError ||
     signedTriadHasRun || signedTriadError || signedTriadScenarioComparison || signedTriadScenarioComparisonError ||
@@ -1298,6 +1385,7 @@
       clique: solverError,
       structural: structuralError,
       integrity: integrityError,
+      integrityRepair: integrityRepairError,
       motif: motifError,
       motifCount: motifCountError || (lastGraph2DAnalysisKind === "motifCount" ? motifCountNotice : ""),
       motifCounterfactual: motifCounterfactualError,
@@ -1318,6 +1406,22 @@
     graph2DOverlayCompletionLabel.startsWith("Infeasibilità provata ·")
   );
   $: graph2DAggregateSummary = (() => {
+    if (showIntegrityPanel && lastGraph2DAnalysisKind === "integrityRepair") {
+      if (integrityRepairOutcomeMessage) {
+        return buildGraph2DInfeasibleAnalysisSummary(
+          "Riparazione d'integrità",
+          "nessuna azione autorizzata produce un grafo che soddisfa i vincoli"
+        );
+      }
+      if (integrityRepairProposal) {
+        return buildGraph2DAnalysisSummary({
+          analysisLabel: "Riparazione minima d'integrità",
+          resultSummary: `costo totale ${integrityRepairProposal.cost}`,
+          completionLabel: "Ottimo di costo provato · proposta non applicata",
+          kind: "collection"
+        });
+      }
+    }
     if (showIntegrityPanel && lastGraph2DAnalysisKind === "integrity" && integrityHasRun) {
       return buildGraph2DAnalysisSummary({
         analysisLabel: "Integrità del grafo",
@@ -1338,17 +1442,21 @@
       return buildGraph2DAnalysisSummary({
         analysisLabel: "Completamento del motivo",
         resultSummary: motifCounterfactuals.length
-          ? `${motifCounterfactuals.length} proposte minime`
+          ? `${motifCounterfactuals.length} proposte minime · costo minimo ${motifCounterfactuals[0].totalCost}`
           : "nessun completamento fra i candidati autorizzati",
-        completionLabel: motifCounterfactuals.length ? "Ottimo di costo provato" : "Infeasibilità provata sui candidati",
+        completionLabel: buildGraph2DOptimizationCompletionLabel({
+          optimizationProven: true,
+          hasSolution: motifCounterfactuals.length > 0,
+          enumerateAllOptima: false
+        }),
         kind: motifCounterfactuals.length ? "collection" : "aggregate"
       });
     }
     if (showMotifPanel && lastGraph2DAnalysisKind === "motifNearMatch" && motifNearMatchHasRun) {
       return buildGraph2DAnalysisSummary({
         analysisLabel: "Corrispondenza di motivo più vicina",
-        resultSummary: `${motifNearMatches.length} proposte ottime`,
-        completionLabel: "Ottimo lessicografico provato",
+        resultSummary: `${motifNearMatches.length} configurazioni migliori mostrate`,
+        completionLabel: "Punteggio migliore provato · pari merito non enumerati tutti",
         kind: "collection"
       });
     }
@@ -1363,9 +1471,11 @@
     if (showMotifPanel && lastGraph2DAnalysisKind === "contextualClique" && contextualCliqueHasRun) {
       return buildGraph2DAnalysisSummary({
         analysisLabel: "Gruppi contestuali",
-        resultSummary: contextualCliqueResults.length
-          ? `${contextualCliqueResults.length} gruppi ottimi`
-          : "nessun gruppo ammissibile",
+        resultSummary: contextualCliqueResults.length === 1
+          ? "1 gruppo ottimo"
+          : contextualCliqueResults.length > 1
+            ? `${contextualCliqueResults.length} gruppi ottimi`
+            : "nessun gruppo ammissibile",
         completionLabel: buildGraph2DOptimizationCompletionLabel({
           optimizationProven: contextualCliqueHasRun,
           hasSolution: contextualCliqueResults.length > 0,
@@ -1457,7 +1567,15 @@
             : showProvenanceScenarioAnalysisPanel ? "provenance" : null,
     incomplete: graph2DIncompleteSummary,
     overlay: graph2DOverlayResultLabel
-      ? { resultLabel: graph2DOverlayResultLabel, completionLabel: graph2DOverlayCompletionLabel }
+      ? {
+          resultLabel: graph2DOverlayResultLabel,
+          completionLabel: graph2DOverlayCompletionLabel,
+          ...(graph2DOverlayResultLabel.startsWith("Presenza del nodo ") ||
+            graph2DOverlayResultLabel.startsWith("Relazione di componente ") ||
+            graph2DOverlayResultLabel.startsWith("Selezione del nodo ")
+            ? { kind: "aggregate" as const }
+            : {})
+        }
       : null,
     aggregate: graph2DAggregateSummary,
     clique: graph2DCliqueSummaryLabel
@@ -1477,7 +1595,10 @@
             hasKCoreProfile: Boolean(structuralKCoreNumbers),
             communityCount: structuralCommunityPartitions[Math.max(0, graph2DCommunityPartitionIndex)]?.communities.length ?? 0,
             communityPartitionIndex: graph2DCommunityPartitionIndex,
-            communityIndex: graph2DCommunityIndex
+            communityIndex: graph2DCommunityIndex,
+            modularity: structuralStats.modularity,
+            modularityResolution: structuralStats.modularityResolution,
+            weightedModularity: structuralStats.weightedModularity
           }) ?? "",
           completionLabel: structuralStats.completionLabel ?? ""
         }
@@ -1493,21 +1614,21 @@
   let provenanceScenarioSelectedGroup = "";
   let provenanceScenarioConfidenceThreshold: number | null = null;
   let provenanceScenarioTimelineWindow = "";
-  let provenanceScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceScenarioViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   let provenanceKCoreScenarioComparison: ProvenanceScenarioKCoreComparison | null = null;
   let provenanceKCoreScenarioComparisonProgress = "";
   let provenanceKCoreScenarioComparisonError = "";
   let provenanceKCoreScenarioSelectedGroup = "";
   let provenanceKCoreScenarioConfidenceThreshold: number | null = null;
   let provenanceKCoreScenarioTimelineWindow = "";
-  let provenanceKCoreScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceKCoreScenarioViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   let provenanceKPlexScenarioComparison: ProvenanceScenarioKPlexComparison | null = null;
   let provenanceKPlexScenarioComparisonProgress = "";
   let provenanceKPlexScenarioComparisonError = "";
   let provenanceKPlexScenarioSelectedGroup = "";
   let provenanceKPlexScenarioConfidenceThreshold: number | null = null;
   let provenanceKPlexScenarioTimelineWindow = "";
-  let provenanceKPlexScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceKPlexScenarioViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   let provenanceComponentScenarioComparison: ProvenanceScenarioComponentComparison | null = null;
   let provenanceComponentScenarioComparisonProgress = "";
   let provenanceComponentScenarioComparisonError = "";
@@ -1515,7 +1636,7 @@
   let provenanceComponentScenarioTargetNodeId = "";
   let provenanceComponentScenarioConfidenceThreshold: number | null = null;
   let provenanceComponentScenarioTimelineWindow = "";
-  let provenanceComponentScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceComponentScenarioViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   let provenanceDominatingSetScenarioComparison: ProvenanceScenarioDominatingSetComparison | null = null;
   let provenanceDominatingSetScenarioComparisonProgress = "";
   let provenanceDominatingSetScenarioComparisonError = "";
@@ -1523,7 +1644,7 @@
   let provenanceDominatingSetScenarioTargetGroup = "";
   let provenanceDominatingSetScenarioConfidenceThreshold: number | null = null;
   let provenanceDominatingSetScenarioTimelineWindow = "";
-  let provenanceDominatingSetScenarioViewFilters: { types: string[]; groups: string[] } = { types: [], groups: [] };
+  let provenanceDominatingSetScenarioViewFilters: GraphViewFilterSnapshot = { types: [], groups: [] };
   let provenanceDominatingSetScenarioWhyNot: {
     scenarioId: string;
     scenarioLabel: string;
@@ -1533,7 +1654,7 @@
     targetGroup: string;
     confidenceThreshold: number | null;
     timelineWindow: string;
-    viewFilters: { types: string[]; groups: string[] };
+    viewFilters: GraphViewFilterSnapshot;
   } | null = null;
   let structuralError = "";
   let structuralOutcomeMessage = "";
@@ -1664,6 +1785,7 @@
   let integrityTimeMs: number | undefined;
   let integrityRepairRunning = false;
   let integrityRepairError = "";
+  let integrityRepairOutcomeMessage = "";
   let integrityRepairProposal: IntegrityRepairProposal | null = null;
   let selectedMotifTemplateIndex = "0";
   let selectedMotifGroup = "";
@@ -1762,9 +1884,28 @@
   const typeFiltersEnabled = GRAPH_CONFIG.filters?.types ?? true;
   const groupFiltersEnabled = GRAPH_CONFIG.filters?.groups ?? false;
   const groupFilterPageSize = 15;
+  const typeFilterPageSize = 15;
 
   let availableTypes: string[] = [];
+  let availableTypeCounts: Record<string, number> = {};
   let availableGroups: string[] = [];
+  let typeFilterSearch = "";
+  let visibleTypeFilterLimit = typeFilterPageSize;
+  let previousAvailableTypes = availableTypes;
+  let previousTypeFilterSearch = typeFilterSearch;
+  $: if (availableTypes !== previousAvailableTypes) {
+    previousAvailableTypes = availableTypes;
+    typeFilterSearch = "";
+    visibleTypeFilterLimit = typeFilterPageSize;
+  }
+  $: if (typeFilterSearch !== previousTypeFilterSearch) {
+    previousTypeFilterSearch = typeFilterSearch;
+    visibleTypeFilterLimit = typeFilterPageSize;
+  }
+  $: matchingTypeFilters = availableTypes.filter((type) =>
+    type.toLowerCase().includes(typeFilterSearch.trim().toLowerCase())
+  );
+  $: visibleTypeFilters = matchingTypeFilters.slice(0, visibleTypeFilterLimit);
   let groupFilterSearch = "";
   let visibleGroupFilterLimit = groupFilterPageSize;
   let previousAvailableGroups = availableGroups;
@@ -1805,17 +1946,39 @@
   $: availableKPlexMembershipNodes = (data?.nodes ?? [])
     .filter((node: any) => !selectedStructuralGroup || extractGroups(node).includes(selectedStructuralGroup))
     .map((node: any) => ({ id: String(node.id), label: String(node.label ?? node.id) }));
-  $: sourceIdByNodeId = Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [
+  $: sourceIdByNodeId = Object.assign(Object.create(null), Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [
     node.id,
     String(node.sourceId ?? node.id)
-  ]));
+  ])));
+  $: nodeLabelById = Object.assign(Object.create(null), Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [
+    String(node.id),
+    String(node.label ?? node.id)
+  ])));
 
   let selectedTypes = new Set<string>();
   let selectedGroupsFilter = new Set<string>();
+  let nodeDegreeFilters = {
+    excludeIsolated: false,
+    excludeWithoutIncoming: false,
+    excludeWithoutOutgoing: false
+  };
   let minimumEdgeConfidence = 0;
   let confidenceExcludedLinkCount = 0;
   let selectedProvenanceScenarioId = "";
   let provenanceExcludedLinkCount = 0;
+
+  $: analysisProjectionScope = {
+    direction: graphDirection,
+    viewTypes: typeFiltersEnabled ? [...selectedTypes].sort() : [],
+    viewGroups: groupFiltersEnabled ? [...selectedGroupsFilter].sort() : [],
+    viewDegreeFilters: { ...nodeDegreeFilters },
+    periodLabel: timelineControlEnabled ? currentTimelineLabel : "",
+    confidenceThreshold: graphCapabilities.edgeConfidence?.available === true ? minimumEdgeConfidence : null,
+    provenanceScenarioAvailable: provenanceScenarios.length > 0,
+    provenanceScenarioLabel: provenanceScenarios.find((scenario: any) => scenario.id === selectedProvenanceScenarioId)?.label ?? selectedProvenanceScenarioId,
+    usesVisibleProjection: true
+  };
+  $: integrityAnalysisScope = { ...analysisProjectionScope, usesVisibleProjection: false };
 
   // ---------------- SOLVER GROUP FILTER ----------------
   let selectedGroup: string = "";
@@ -1833,6 +1996,10 @@
     return getGraphEndpointId(end) as string;
   }
 
+  function getCommunityPairConstraintLabel(kind: "together" | "separate"): string {
+    return kind === "together" ? "vincolo di co-appartenenza" : "vincolo di separazione";
+  }
+
   function getNodeById(id: string, nodes = data?.nodes ?? []): any | null {
     return nodes.find((n: any) => n.id === id) ?? null;
   }
@@ -1841,7 +2008,7 @@
     if (!node) return null;
 
     return {
-      tipo: node.type ?? "unknown",
+      tipo: node.type ?? "non specificato",
       titolo: node.label,
       ...node.data
     };
@@ -1987,7 +2154,12 @@
     const userProvidedEnd = hasOwnPath(RAW_CONFIG, "timeline.end");
 
     // Se l'utente ha specificato esplicitamente start/end, non li tocchiamo.
-    if (userProvidedStart && userProvidedEnd) return;
+    if (userProvidedStart && userProvidedEnd) {
+      const initialWindow = getConfiguredTimelineWindow();
+      currentStart = initialWindow.start;
+      currentEnd = initialWindow.end;
+      return;
+    }
 
     if (!originalData?.nodes?.length && graphCapabilities.edgeIntervals?.available !== true) return;
 
@@ -2014,34 +2186,47 @@
       }
     }
 
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      const initialWindow = getConfiguredTimelineWindow();
+      currentStart = initialWindow.start;
+      currentEnd = initialWindow.end;
+      return;
+    }
 
     if (!userProvidedStart) GRAPH_CONFIG.timeline.start = min;
     if (!userProvidedEnd) GRAPH_CONFIG.timeline.end = max;
 
-    currentStart = GRAPH_CONFIG.timeline.start;
-    currentEnd = GRAPH_CONFIG.timeline.end;
+    const initialWindow = getConfiguredTimelineWindow();
+    currentStart = initialWindow.start;
+    currentEnd = initialWindow.end;
   }
 
   // ---------------- DATASET ----------------
   function computeDynamicFilters() {
     if (!originalData?.nodes) {
       availableTypes = [];
+      availableTypeCounts = {};
       availableGroups = [];
       return;
     }
 
     const typeSet = new Set<string>();
+    const typeCounts = new Map<string, number>();
     const groupSet = new Set<string>();
 
     for (const node of originalData.nodes) {
-      if (node.type) typeSet.add(node.type);
+      if (node.type) {
+        const type = String(node.type);
+        typeSet.add(type);
+        typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+      }
 
       const groups = extractGroups(node);
       groups.forEach(g => groupSet.add(g));
     }
 
     availableTypes = Array.from(typeSet).sort();
+    availableTypeCounts = Object.fromEntries(typeCounts);
     availableGroups = Array.from(groupSet).sort();
   }
 
@@ -2136,17 +2321,16 @@
 
   function resolveCommunityConstraintPairs(
     configuredPairs: unknown,
-    constraintName: string,
     candidateNodes: any[],
     indexByNodeId: Map<string, number>
   ): Array<[number, number]> {
     if (configuredPairs === undefined) return [];
     if (!Array.isArray(configuredPairs)) {
-      throw new Error(`graphAnalysis.communities.${constraintName} deve essere un array di coppie di ID nodo.`);
+      throw new Error("I vincoli di comunità devono contenere coppie di nodi.");
     }
     return configuredPairs.map((pair, index) => {
       if (!Array.isArray(pair) || pair.length !== 2) {
-        throw new Error(`graphAnalysis.communities.${constraintName}[${index}] deve contenere due ID nodo.`);
+        throw new Error(`La coppia ${index + 1} dei vincoli di comunità deve contenere due nodi.`);
       }
       const resolveNode = (rawId: unknown) => {
         const requestedId = String(rawId ?? "");
@@ -2159,10 +2343,10 @@
       const leftIndex = left ? indexByNodeId.get(left.id) : undefined;
       const rightIndex = right ? indexByNodeId.get(right.id) : undefined;
       if (!leftIndex || !rightIndex) {
-        throw new Error(`graphAnalysis.communities.${constraintName}[${index}] fa riferimento a nodi assenti dalla proiezione visibile o dal gruppo selezionato.`);
+        throw new Error(`La coppia ${index + 1} dei vincoli di comunità contiene un nodo assente dalla proiezione o dal gruppo selezionato.`);
       }
       if (leftIndex === rightIndex) {
-        throw new Error(`graphAnalysis.communities.${constraintName}[${index}] deve riferirsi a due nodi distinti.`);
+        throw new Error(`La coppia ${index + 1} dei vincoli di comunità deve riferirsi a due nodi distinti.`);
       }
       return [leftIndex, rightIndex];
     });
@@ -2248,6 +2432,7 @@
     integrityError = "";
     integrityTimeMs = undefined;
     integrityRepairError = "";
+    integrityRepairOutcomeMessage = "";
     integrityRepairProposal = null;
     clearMotifAnalysis();
     clearSignedTriadAnalysis();
@@ -2259,7 +2444,10 @@
     closeToolbarMenus();
     refreshLinkVisuals();
     refreshNodeVisuals();
-    viewMenuElement?.querySelector("summary")?.focus();
+    const focusTarget = window.matchMedia("(max-width: 900px)").matches
+      ? document.querySelector<HTMLElement>('.toolbar input[aria-label="Cerca un nodo per nome o ID"]')
+      : viewMenuElement?.querySelector("summary");
+    focusTarget?.focus();
   }
 
   function getEdgeConfidenceRange() {
@@ -2339,7 +2527,7 @@
     const mode = easterEggMode ? "simple" : (timelineConfig.mode ?? "simple");
     const timelineQualifiedLinks = getTimelineQualifiedLinks(links);
 
-    return projectVisibleNodeIds({
+    const visibleNodeIds = projectVisibleNodeIds({
       nodes: originalData.nodes,
       links: timelineQualifiedLinks,
       mode,
@@ -2361,12 +2549,32 @@
       passesGroupFilter: nodePassesGroupFilters,
       passesTimeline: nodePassesTimeline
     });
+    const hasDegreeFilter = filtersEnabled && (
+      nodeDegreeFilters.excludeIsolated ||
+      (graphDirection === "directed" && (
+        nodeDegreeFilters.excludeWithoutIncoming || nodeDegreeFilters.excludeWithoutOutgoing
+      ))
+    );
+    if (!hasDegreeFilter) return visibleNodeIds;
+
+    const candidateNodes = originalData.nodes.filter((node: any) => visibleNodeIds.has(String(node.id)));
+    const candidateNodeIds = new Set(candidateNodes.map((node: any) => String(node.id)));
+    const candidateLinks = timelineQualifiedLinks.filter((link: any) =>
+      candidateNodeIds.has(getLinkEndId(link.source)) && candidateNodeIds.has(getLinkEndId(link.target))
+    );
+    return filterNodeIdsByDegree(candidateNodes, candidateLinks, {
+      direction: graphDirection,
+      ...nodeDegreeFilters,
+      getNodeId: (node: any) => String(node.id),
+      getLinkEndpoints: (link: any) => [getLinkEndId(link.source), getLinkEndId(link.target)]
+    });
   }
 
   function getScenarioViewFilterSnapshot() {
     return {
       types: [...selectedTypes].sort(),
-      groups: [...selectedGroupsFilter].sort()
+      groups: [...selectedGroupsFilter].sort(),
+      degreeFilters: { ...nodeDegreeFilters }
     };
   }
 
@@ -2386,6 +2594,7 @@
         getIdentity: (link: GraphDisplayLink) => getStructuralEdgeIdentity(link)
       })
       : recordLinks;
+    graphDisplayLinkCurves = buildGraphDisplayLinkCurves(displayLinks);
 
     graphDisplayLinkCount = displayLinks.length;
     if (neighborhoodFocusInfo) {
@@ -2408,6 +2617,9 @@
       ?.warmupTicks(motionSettings.warmupTicks)
       .cooldownTicks(motionSettings.cooldownTicks)
       .cooldownTime(motionSettings.cooldownTime);
+    graph3D
+      ?.linkCurvature((link: GraphDisplayLink) => graphDisplayLinkCurves.get(link)?.curvature ?? 0)
+      .linkCurveRotation((link: GraphDisplayLink) => graphDisplayLinkCurves.get(link)?.rotation ?? 0);
     graph3D?.graphData({ ...data, nodes: displayNodes, links: displayLinks });
   }
 
@@ -2490,8 +2702,9 @@
 
   function loadDataset() {
     clearGraph2DOverlay();
-    currentStart = GRAPH_CONFIG.timeline.start;
-    currentEnd = GRAPH_CONFIG.timeline.end;
+    const initialWindow = getConfiguredTimelineWindow();
+    currentStart = initialWindow.start;
+    currentEnd = initialWindow.end;
     minimumEdgeConfidence = 0;
     confidenceExcludedLinkCount = 0;
     selectedProvenanceScenarioId = "";
@@ -2511,7 +2724,7 @@
     let graph = graphData;
 
     if (forceEasterEgg) {
-      console.info("🥚 Loading the explicitly requested KliqueASP easter egg graph.");
+      console.info("Caricamento del grafo dimostrativo KliqueASP richiesto esplicitamente.");
       easterEggMode = true;
       graph = getKliqueAspEasterEggGraph();
     } else {
@@ -2560,6 +2773,7 @@
     integrityError = "";
     integrityTimeMs = undefined;
     integrityRepairError = "";
+    integrityRepairOutcomeMessage = "";
     integrityRepairProposal = null;
     motifCountAbortController?.abort();
     motifMatches = [];
@@ -2581,7 +2795,7 @@
     resetMotifCounterfactual();
     clearSignedTriadAnalysis();
     if (!normalizedGraph.valid) {
-      console.error("[GRAPH] Input or mapping validation failed:", graphDiagnostics);
+      console.error("[GRAPH] Validazione dei dati o della mappatura non riuscita:", graphDiagnostics);
     }
 
     originalData = {
@@ -2605,9 +2819,36 @@
       { x: 0, y: 0, z: 0 },
       graphTransitionDuration(800)
     );
+    lastIncrementalGraphData = graphData;
+    lastIncrementalDatasetComplete = datasetIsComplete;
+    incrementalGraphDatasetInitialized = true;
   }
 
-  function activeAnalysisPanel(): "clique" | "structural" | "integrity" | "motif" | "provenance" | null {
+  function syncIncrementalGraphDataset() {
+    lastIncrementalGraphData = graphData;
+    lastIncrementalDatasetComplete = datasetIsComplete;
+    const normalizedGraph = normalizeGraphData(graphData, RAW_CONFIG);
+    graphDiagnostics = normalizedGraph.diagnostics;
+    graphDirection = normalizedGraph.direction;
+    graphSchemaVersion = normalizedGraph.schemaVersion;
+    graphCapabilities = normalizedGraph.capabilities;
+    originalData = {
+      nodes: normalizedGraph.nodes,
+      links: normalizedGraph.links,
+      schemaVersion: normalizedGraph.schemaVersion,
+      direction: normalizedGraph.direction,
+      identity: normalizedGraph.identity,
+      capabilities: normalizedGraph.capabilities
+    };
+    if (!normalizedGraph.valid) {
+      console.error("[GRAPH] Validazione dei dati incrementali non riuscita:", graphDiagnostics);
+    }
+    // The bootstrap already contains every record in the active initial window.
+    // Keep that exact visible projection stable until the archive is complete.
+    if (datasetIsComplete) updateTimelineBoundsFromDataIfNeeded();
+  }
+
+  function activeAnalysisPanel(): AnalysisPanelKind | null {
     if (showSolverPanel) return "clique";
     if (showStructuralPanel) return "structural";
     if (showIntegrityPanel) return "integrity";
@@ -2615,6 +2856,263 @@
     if (showProvenanceScenarioAnalysisPanel) return "provenance";
     return null;
   }
+
+  function isolateModalBackground(root: HTMLElement) {
+    const documentForRoot = root.ownerDocument;
+    const previouslyInert = new Map<HTMLElement, boolean>();
+
+    function updateBackgroundIsolation() {
+      const hasNativeModal = documentForRoot.querySelector("dialog:modal") !== null;
+      const modal = hasNativeModal
+        ? null
+        : root.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+      const nextInert = new Set<HTMLElement>();
+
+      if (modal) {
+        let branch: HTMLElement | null = modal;
+        while (branch && branch !== documentForRoot.body) {
+          const parent: HTMLElement | null = branch.parentElement;
+          if (!parent) break;
+          for (const sibling of Array.from(parent.children)) {
+            if (sibling instanceof HTMLElement && sibling !== branch) nextInert.add(sibling);
+          }
+          branch = parent;
+        }
+      }
+
+      for (const [element, wasInert] of previouslyInert) {
+        if (nextInert.has(element)) continue;
+        element.inert = wasInert;
+        previouslyInert.delete(element);
+      }
+      for (const element of nextInert) {
+        if (!previouslyInert.has(element)) previouslyInert.set(element, element.inert);
+        element.inert = true;
+      }
+    }
+
+    const observer = new MutationObserver((records) => {
+      if (records.some((record) => record.type === "attributes" || record.target === root)) {
+        queueMicrotask(updateBackgroundIsolation);
+      }
+    });
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["aria-modal"],
+      childList: true,
+      subtree: true
+    });
+    updateBackgroundIsolation();
+
+    return {
+      destroy() {
+        observer.disconnect();
+        for (const [element, wasInert] of previouslyInert) element.inert = wasInert;
+        previouslyInert.clear();
+      }
+    };
+  }
+
+  const analysisPanelRootSelector = [
+    ".solver-panel",
+    ".structural-panel",
+    ".integrity-panel",
+    ".motif-panel",
+    ".scenario-comparison-panel"
+  ].join(", ");
+
+  const analysisPanelSelectorByKind: Record<AnalysisPanelKind, string> = {
+    clique: ".solver-panel",
+    structural: ".structural-panel",
+    integrity: ".integrity-panel",
+    motif: ".motif-panel",
+    provenance: ".scenario-comparison-panel"
+  };
+
+  function captureAnalysisPanelFocusReturnTarget() {
+    if (typeof document === "undefined") return;
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement &&
+      activeElement !== document.body &&
+      !activeElement.closest(analysisPanelRootSelector)
+    ) {
+      analysisPanelFocusReturnTarget = activeElement;
+    }
+  }
+
+  function isVisibleAnalysisFocusTarget(element: HTMLElement | null): element is HTMLElement {
+    if (!element?.isConnected || element.getClientRects().length === 0) {
+      return false;
+    }
+    const closedDetails = element.closest("details:not([open])");
+    if (closedDetails && element.parentElement !== closedDetails) return false;
+
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (
+        current.hidden || current.inert || current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function restoreAnalysisPanelFocus() {
+    const target = analysisPanelFocusReturnTarget;
+    analysisPanelFocusReturnTarget = null;
+    await tick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (isVisibleAnalysisFocusTarget(target)) {
+      target.focus({ preventScroll: true });
+      return;
+    }
+
+    const analysisSummary =
+      document.querySelector<HTMLElement>('.toolbar summary[aria-labelledby="analysis-menu-label"]') ??
+      analysisMenuElement?.querySelector<HTMLElement>("summary");
+    if (isVisibleAnalysisFocusTarget(analysisSummary)) {
+      analysisSummary.focus({ preventScroll: true });
+      return;
+    }
+
+    const toolbarRecoveryTarget = [...document.querySelectorAll<HTMLElement>(
+      ".app-root .toolbar summary, .app-root .toolbar input:not([disabled]), .app-root .toolbar button:not([disabled])"
+    )].find((element) => isVisibleAnalysisFocusTarget(element));
+    toolbarRecoveryTarget?.focus({ preventScroll: true });
+  }
+
+  function synchronizeAnalysisPanelFocus(panel: AnalysisPanelKind | null) {
+    if (typeof document === "undefined") {
+      analysisPanelForFocusTracking = panel;
+      return;
+    }
+    if (panel === analysisPanelForFocusTracking) return;
+    const previousPanel = analysisPanelForFocusTracking;
+    analysisPanelForFocusTracking = panel;
+
+    if (panel) {
+      if (!previousPanel && !analysisPanelFocusReturnTarget) captureAnalysisPanelFocusReturnTarget();
+      void tick().then(() => {
+        if (activeAnalysisPanel() === panel) {
+          document.querySelector<HTMLElement>(analysisPanelSelectorByKind[panel])?.focus({ preventScroll: true });
+        }
+      });
+      return;
+    }
+
+    if (!previousPanel) return;
+    if (suppressAnalysisPanelFocusRestore) {
+      suppressAnalysisPanelFocusRestore = false;
+      analysisPanelFocusReturnTarget = null;
+      return;
+    }
+    void restoreAnalysisPanelFocus();
+  }
+
+  function isVisibleAnalysisTabStop(element: HTMLElement): boolean {
+    if (!element.isConnected || element.getClientRects().length === 0 || element.closest("details:not([open])")) {
+      return false;
+    }
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (
+        current.hidden || current.inert || current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" || style.visibility === "hidden"
+      ) {
+        return false;
+      }
+    }
+    return element.tabIndex >= 0;
+  }
+
+  function closeOpenToolbarMenuOnEscape(event: KeyboardEvent): boolean {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      (event.target instanceof Element && event.target.closest("dialog[open]")) ||
+      !toolbarElement
+    ) {
+      return false;
+    }
+
+    const focusedMenu = event.target instanceof Element
+      ? event.target.closest<HTMLDetailsElement>("details[open]")
+      : null;
+    if (event.target instanceof Node && toolbarElement.contains(event.target) && !focusedMenu) {
+      return false;
+    }
+    const openMenus = [...toolbarElement.querySelectorAll<HTMLDetailsElement>("details[open]")];
+    const menu = focusedMenu && toolbarElement.contains(focusedMenu)
+      ? focusedMenu
+      : openMenus.at(-1);
+    if (!menu) return false;
+
+    event.preventDefault();
+    menu.open = false;
+    menu.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
+    return true;
+  }
+
+  function handleAnalysisPanelKeydown(event: KeyboardEvent) {
+    if (closeOpenToolbarMenuOnEscape(event)) return;
+    if (!compactAnalysisViewport) return;
+    if (event.target instanceof Element && event.target.closest("dialog[open]")) return;
+
+    const panel = activeAnalysisPanel();
+    if (!panel) return;
+    const panelElement = document.querySelector<HTMLElement>(analysisPanelSelectorByKind[panel]);
+    if (!isVisibleAnalysisFocusTarget(panelElement)) return;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAnalysisPanel(panel);
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusable = [...panelElement.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    )].filter(isVisibleAnalysisTabStop);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      panelElement.focus({ preventScroll: true });
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+    if (!panelElement.contains(activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (activeElement === panelElement) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  $: synchronizeAnalysisPanelFocus(
+    showSolverPanel
+      ? "clique"
+      : showStructuralPanel
+        ? "structural"
+        : showIntegrityPanel
+          ? "integrity"
+          : showMotifPanel
+            ? "motif"
+            : showProvenanceScenarioAnalysisPanel
+              ? "provenance"
+              : null
+  );
 
   function captureAnalysisSessionState(): Record<string, unknown> {
     const panel = activeAnalysisPanel();
@@ -2626,6 +3124,7 @@
       projection: {
         types: [...selectedTypes],
         groups: [...selectedGroupsFilter],
+        degreeFilters: { ...nodeDegreeFilters },
         minimumEdgeConfidence,
         provenanceScenarioId: selectedProvenanceScenarioId,
         start: currentStart,
@@ -2710,6 +3209,7 @@
         kCorePeelingBySetKey: structuralKCorePeelingBySetKey,
         explainKCoreExclusions: structuralExplainKCoreExclusions,
         explainCommunityContributions: structuralExplainCommunityContributions,
+        explainCommunityInfeasibility: structuralExplainCommunityInfeasibility,
         explainPathMinimality: structuralExplainPathMinimality,
         explainTypedPathNoRoute: structuralExplainTypedPathNoRoute,
         dominatingSetSupportBySetKey: structuralDominatingSetSupportBySetKey,
@@ -2740,7 +3240,8 @@
         timeMs: integrityTimeMs,
         error: integrityError,
         repairProposal: integrityRepairProposal,
-        repairError: integrityRepairError
+        repairError: integrityRepairError,
+        repairOutcomeMessage: integrityRepairOutcomeMessage
       },
       motif: {
         selectedTemplateIndex: selectedMotifTemplateIndex,
@@ -2848,7 +3349,8 @@
     const panel = state.resultPanel ?? state.panel;
     if (panel === "clique") {
       const group = state.clique?.selectedGroup;
-      return typeof group === "string" && group ? `Clique massima · ${group}` : "Clique massima";
+      const taskLabel = getCliqueTaskLabel(state.clique?.stats?.cliqueMode);
+      return typeof group === "string" && group ? `${taskLabel} · ${group}` : taskLabel;
     }
     if (panel === "structural") {
       const task = state.structural?.task;
@@ -2888,36 +3390,6 @@
     }
     if (panel === "provenance") return "Confronto di provenienza";
     return "Analisi del grafo";
-  }
-
-  function analysisStateHasResult(state: Record<string, any>): boolean {
-    const panel = state.resultPanel ?? state.panel;
-    if (panel === "clique") {
-      return (Array.isArray(state.clique?.maximumCliques) && state.clique.maximumCliques.length > 0) ||
-        Number.isFinite(state.clique?.stats?.timeMs) || Boolean(state.clique?.error);
-    }
-    if (panel === "structural") {
-      return (Array.isArray(state.structural?.results) && state.structural.results.length > 0) ||
-        Boolean(state.structural?.stats) || Boolean(state.structural?.error);
-    }
-    if (panel === "integrity") {
-      return state.integrity?.hasRun === true || Boolean(state.integrity?.error) || Boolean(state.integrity?.repairProposal);
-    }
-    if (panel === "motif") {
-      const motif = state.motif ?? {};
-      return [
-        motif.hasRun, motif.countHasRun, motif.nearMatchHasRun, motif.counterfactualHasRun,
-        motif.signedTriadHasRun, motif.contextualCliqueHasRun
-      ].some(Boolean) || Boolean(motif.error || motif.countError || motif.nearMatchError || motif.counterfactualError || motif.signedTriadError || motif.contextualCliqueError);
-    }
-    if (panel === "provenance") {
-      const provenance = state.provenance ?? {};
-      return Object.entries(provenance).some(([key, value]) =>
-        /(comparison|error|counterfactual|whynot)/i.test(key) && value !== null && value !== undefined &&
-        value !== "" && (!Array.isArray(value) || value.length > 0)
-      );
-    }
-    return false;
   }
 
   function analysisArchiveEntry(snapshot: WorkbenchAnalysisSessionSnapshot | null): WorkbenchAnalysisArchiveEntry | null {
@@ -3045,6 +3517,12 @@
       selectedGroupsFilter = new Set(Array.isArray(state.projection.groups)
         ? state.projection.groups.filter((group: unknown) => typeof group === "string" && availableGroups.includes(group))
         : []);
+      const degreeFilters = isRecord(state.projection.degreeFilters) ? state.projection.degreeFilters : {};
+      nodeDegreeFilters = {
+        excludeIsolated: degreeFilters.excludeIsolated === true,
+        excludeWithoutIncoming: graphDirection === "directed" && degreeFilters.excludeWithoutIncoming === true,
+        excludeWithoutOutgoing: graphDirection === "directed" && degreeFilters.excludeWithoutOutgoing === true
+      };
       const confidenceRange = getEdgeConfidenceRange();
       const confidence = Number(state.projection.minimumEdgeConfidence);
       minimumEdgeConfidence = graphCapabilities.edgeConfidence?.available === true && Number.isFinite(confidence)
@@ -3203,6 +3681,7 @@
       structuralKCorePeelingBySetKey = isRecord(structural.kCorePeelingBySetKey) ? structural.kCorePeelingBySetKey : {};
       structuralExplainKCoreExclusions = structural.explainKCoreExclusions === true;
       structuralExplainCommunityContributions = structural.explainCommunityContributions === true;
+      structuralExplainCommunityInfeasibility = structural.explainCommunityInfeasibility === true;
       structuralExplainPathMinimality = structural.explainPathMinimality === true;
       structuralExplainTypedPathNoRoute = structural.explainTypedPathNoRoute === true;
       structuralDominatingSetSupportBySetKey = isRecord(structural.dominatingSetSupportBySetKey) ? structural.dominatingSetSupportBySetKey : {};
@@ -3235,6 +3714,9 @@
       integrityError = typeof state.integrity.error === "string" ? state.integrity.error : "";
       integrityRepairProposal = isRecord(state.integrity.repairProposal) ? state.integrity.repairProposal as any : null;
       integrityRepairError = typeof state.integrity.repairError === "string" ? state.integrity.repairError : "";
+      integrityRepairOutcomeMessage = typeof state.integrity.repairOutcomeMessage === "string"
+        ? state.integrity.repairOutcomeMessage
+        : "";
     }
 
     if (isRecord(state.motif)) {
@@ -3389,6 +3871,7 @@
 
   // ---------------- HISTORY ----------------
   let history: WorkbenchHistoryEntry[] = [];
+  let showHistoryPanel = true;
   let historyRestoredForGraph = false;
 
   function updateHistory(entries: WorkbenchHistoryEntry[]) {
@@ -3426,52 +3909,113 @@
     updateHistory([]);
   }
 
+  function toggleHistoryPanel() {
+    showHistoryPanel = !showHistoryPanel;
+    closeToolbarMenusAndRestoreFocus();
+  }
+
+  function dismissHistoryPanel() {
+    showHistoryPanel = false;
+    requestAnimationFrame(() => {
+      const focusTarget = window.matchMedia("(max-width: 900px)").matches
+        ? document.querySelector<HTMLElement>('.toolbar input[aria-label="Cerca un nodo per nome o ID"]')
+        : viewMenuElement?.querySelector("summary");
+      focusTarget?.focus();
+    });
+  }
+
+  function dismissTimelineControl() {
+    showTimelineControl = false;
+    closeToolbarMenusAndRestoreFocus();
+  }
+
+  function clearHistoryFromViewMenu() {
+    clearHistory();
+    closeToolbarMenusAndRestoreFocus();
+  }
+
   // ---------------- AUTOCOMPLETE ----------------
-  let searchIndex: { id: string; label: string; norm: string }[] = [];
+  let searchIndex: { id: string; label: string; normalizedId: string; normalizedLabel: string }[] = [];
   let suggestions: { id: string; label: string }[] = [];
   let showSuggestions = false;
+  let activeSearchSuggestionIndex = -1;
   let searchMessage = "";
 
   function buildSearchIndexFromNodes(nodes: any[]) {
     searchIndex = nodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-      norm: n.label.toLowerCase(),
+      id: String(n.id ?? ""),
+      label: String(n.label ?? n.id ?? ""),
+      normalizedId: String(n.id ?? "").toLowerCase(),
+      normalizedLabel: String(n.label ?? n.id ?? "").toLowerCase(),
     }));
 
     suggestions = [];
     showSuggestions = false;
+    activeSearchSuggestionIndex = -1;
   }
 
   function rankCandidates(q: string) {
-    const text = q.trim().toLowerCase();
+    const text = normalizeGraphNodeSearchQuery(q);
     if (text.length < 2) {
       suggestions = [];
       showSuggestions = false;
+      activeSearchSuggestionIndex = -1;
       return;
     }
 
     const ranked = searchIndex
       .map((item) => {
-        let score = 0;
-        if (item.norm.startsWith(text)) score += 3;
-        else if (item.norm.includes(` ${text}`)) score += 2;
-        else if (item.norm.includes(text)) score += 1;
-        return { id: item.id, label: item.label, score };
+        return { id: item.id, label: item.label, score: getGraphNodeSearchMatchScore(item, text) };
       })
       .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score || a.label.length - b.label.length)
+      .sort((a, b) => b.score - a.score || a.label.length - b.label.length || a.id.localeCompare(b.id))
       .slice(0, 7)
       .map(({ id, label }) => ({ id, label }));
 
     suggestions = ranked;
     showSuggestions = ranked.length > 0;
+    activeSearchSuggestionIndex = -1;
   }
 
   function chooseSuggestion(s: { id: string; label: string }) {
     query = s.label;
     showSuggestions = false;
+    activeSearchSuggestionIndex = -1;
     selectSearchResult(getNodeById(s.id, originalData?.nodes ?? []));
+  }
+
+  function handleGraphNodeSearchKeydown(event: KeyboardEvent) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (!showSuggestions && query.trim().length >= 2) rankCandidates(query);
+      if (suggestions.length === 0) return;
+      event.preventDefault();
+      showSuggestions = true;
+      activeSearchSuggestionIndex = getNextGraphSearchSuggestionIndex(
+        activeSearchSuggestionIndex,
+        suggestions.length,
+        event.key === "ArrowDown" ? 1 : -1
+      );
+      return;
+    }
+
+    if (event.key === "Enter") {
+      const activeSuggestion = showSuggestions ? suggestions[activeSearchSuggestionIndex] : undefined;
+      if (activeSuggestion) {
+        event.preventDefault();
+        chooseSuggestion(activeSuggestion);
+        return;
+      }
+      showSuggestions = false;
+      activeSearchSuggestionIndex = -1;
+      searchNode(query);
+      return;
+    }
+
+    if (event.key === "Escape" && showSuggestions) {
+      event.preventDefault();
+      showSuggestions = false;
+      activeSearchSuggestionIndex = -1;
+    }
   }
 
   // ---------------- NODE STYLE ----------------
@@ -3498,41 +4042,33 @@
     ...(RAW_CONFIG.nodeTypes?.highlight ?? {})
   };
 
-  const colorAccessor = (n: any) => {
-    // Clique highlight attivo
-    if (cliqueNodes.size > 0) {
-      if (cliqueNodes.has(n.id)) return H.clique;
-      return GRAPH_CONFIG.colors?.default ?? "#334155";
-    }
+  const emptyNodeIds = new Set<string>();
 
-    // Stato normale
-    if (!selectedId) {
-      return getNodeStyle(n).color ?? GRAPH_CONFIG.colors?.default ?? "#334155";
-    }
+  function getCurrentGraphNodeHighlightState(nodeId: string) {
+    return getGraphNodeHighlightState(nodeId, {
+      selectedNodeId: selectedId,
+      witnessNodeIds: cliqueNodes,
+      highlightedNeighborIds: highlightedNeighbors,
+      selectedNodeNeighborIds: selectedId ? neighborMap.get(selectedId) ?? emptyNodeIds : emptyNodeIds
+    });
+  }
 
-    if (n.id === selectedId) return H.root;
-    if (highlightedNeighbors.has(n.id)) return H.preview;
-    if (neighborMap.get(selectedId)?.has(n.id)) return H.neighbor;
-
-    return getNodeStyle(n).color ?? GRAPH_CONFIG.colors?.default ?? "#334155";
+  const colorAccessor = (node: any) => {
+    const highlightState = getCurrentGraphNodeHighlightState(String(node.id));
+    if (highlightState === "selected") return H.root;
+    if (highlightState === "witness") return H.clique;
+    if (highlightState === "preview") return H.preview;
+    if (highlightState === "neighbor") return H.neighbor;
+    if (highlightState === "muted") return GRAPH_CONFIG.colors?.default ?? "#64748b";
+    return getNodeStyle(node).color ?? GRAPH_CONFIG.colors?.default ?? "#64748b";
   };
 
   function opacityForNode(nodeId: string) {
-    // Se è attivo un highlight di clique,
-    // i nodi della clique restano pieni, tutti gli altri vengono spenti.
-    if (cliqueNodes.size > 0) {
-      return cliqueNodes.has(nodeId) ? 1 : 0.12;
-    }
-
-    // Comportamento normale basato sulla selezione del nodo
-    if (!selectedId) return 1;
-    if (nodeId === selectedId) return 1;
-    if (highlightedNeighbors.has(nodeId)) return 1;
-    if (neighborMap.get(selectedId)?.has(nodeId)) return 0.95;
-
-    return 0.22;
+    const highlightState = getCurrentGraphNodeHighlightState(nodeId);
+    if (highlightState === "muted") return cliqueNodes.size > 0 ? 0.12 : 0.22;
+    if (highlightState === "neighbor") return 0.95;
+    return 1;
   }
-
   function isGraphDisplayNodeVisible(node: any): boolean {
     if (focusedSignedTriadEdgeIds !== null) return cliqueNodes.has(String(node.id));
     return neighborhoodFocusNodeIds === null || neighborhoodFocusNodeIds.has(String(node.id));
@@ -3853,6 +4389,21 @@
         ));
         const pixelsPerWorldUnit = viewportHeight / (distance * worldHeightAtUnitDistance);
         const nodeId = String(node.id);
+        const labelTexture = getLabelTexture(String(node.label ?? ""));
+        const textureAspect = Number(labelTexture.image?.width) / Number(labelTexture.image?.height);
+        const labelSize = getReadableGraphNodeLabelSize(
+          labelWidth,
+          labelHeight,
+          textureAspect,
+          pixelsPerWorldUnit
+        );
+        const label = node.__threeObj?.userData?.kq?.label;
+        if (label && (
+          Math.abs(label.scale.x - labelSize.width) > 0.01 ||
+          Math.abs(label.scale.y - labelSize.height) > 0.01
+        )) {
+          label.scale.set(labelSize.width, labelSize.height, 1);
+        }
         const degree = neighborMap.get(nodeId)?.size ?? 0;
         const priority = (nodeId === selectedId ? 1_000_000 : 0) +
           (nodeId === hoveredGraphNodeId ? 500_000 : 0) + degree;
@@ -3861,13 +4412,18 @@
           id: nodeId,
           x: screen.x,
           y: screen.y,
-          width: labelWidth * pixelsPerWorldUnit * 1.15,
-          height: labelHeight * pixelsPerWorldUnit * 1.2,
+          width: labelSize.width * pixelsPerWorldUnit * 1.15,
+          height: labelSize.height * pixelsPerWorldUnit * 1.2,
           priority
         };
       });
 
-    const visibleIds = getNonOverlappingGraphNodeLabelIds(candidates, 7);
+    const visibleIds = getNonOverlappingGraphNodeLabelIds(
+      candidates,
+      7,
+      48,
+      getGraphNodeLabelReservedAreas(viewportHeight)
+    );
     const previousIds = nodeLabelLayoutVisibleIds;
     if (previousIds && previousIds.size === visibleIds.size && [...previousIds].every((id) => visibleIds.has(id))) return;
 
@@ -3878,18 +4434,67 @@
     }
   }
 
+  function getGraphNodeLabelReservedAreas(viewportHeight: number) {
+    const graphRect = container.getBoundingClientRect();
+    const selectors = [
+      ".graph-status-bar",
+      ".workspace-navigation",
+      ".scene-nav-info",
+      ".graph-visualization-note",
+      ".timeline-container",
+      ".filter-card",
+      ".solver-panel",
+      ".structural-panel",
+      ".integrity-panel",
+      ".motif-panel",
+      ".provenance-panel",
+      ".json-editor-panel",
+      ".info-panel",
+      ".history-panel",
+      ".node-directory",
+      ".graph2d-export-panel",
+      "[role=dialog]"
+    ];
+    const overlays = new Set<HTMLElement>([
+      toolbarElement,
+      ...Array.from(document.querySelectorAll<HTMLElement>(selectors.join(",")))
+    ].filter((element): element is HTMLElement => Boolean(element)));
+
+    return [...overlays].flatMap((element, index) => {
+      if (element === container || element.closest("[hidden]")) return [];
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return [];
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= graphRect.top || rect.top >= graphRect.top + viewportHeight) return [];
+      return [{
+        id: `ui-overlay-${index}`,
+        x: rect.left - graphRect.left + rect.width / 2,
+        y: rect.top - graphRect.top + rect.height / 2,
+        width: rect.width,
+        height: rect.height
+      }];
+    });
+  }
+
   function makeLabel(text: string) {
     const L = GRAPH_CONFIG.node.label;
+    const texture = getLabelTexture(text);
+    const labelSize = getReadableGraphNodeLabelSize(
+      Number(L.scale?.[0]) || 12,
+      Number(L.scale?.[1]) || 5,
+      Number(texture.image?.width) / Number(texture.image?.height),
+      0
+    );
 
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
-        map: getLabelTexture(text),
+        map: texture,
         transparent: true,
         depthWrite: false
       })
     );
 
-    sprite.scale.set(L.scale[0], L.scale[1], 1);
+    sprite.scale.set(labelSize.width, labelSize.height, 1);
     return sprite;
   }
 
@@ -3932,10 +4537,14 @@
     const kq = obj?.userData?.kq;
     if (!kq) return;
 
+    const highlightState = getCurrentGraphNodeHighlightState(String(node.id));
     const o = opacityForNode(node.id);
+    const baseRingScale = Number(GRAPH_CONFIG.node.ring.scale) || 1;
+    const ringScale = baseRingScale * getGraphNodeHighlightScaleFactor(highlightState);
 
     kq.ring.material.color.set(colorAccessor(node));
     kq.ring.material.opacity = Math.min(0.95, o);
+    kq.ring.scale.set(ringScale, ringScale, ringScale);
 
     if (kq.icon) kq.icon.material.opacity = o;
 
@@ -3957,9 +4566,34 @@
     }
   }
 
-  function closeToolbarMenus() {
+  function closeToolbarMenus(preserveMobileMoreMenu = false) {
     if (analysisMenuElement) analysisMenuElement.open = false;
     if (viewMenuElement) viewMenuElement.open = false;
+    if (mobileMoreMenuElement && !preserveMobileMoreMenu) mobileMoreMenuElement.open = false;
+    if (mobileViewMenuElement) mobileViewMenuElement.open = false;
+  }
+
+  function closeToolbarMenusAndRestoreFocus() {
+    closeToolbarMenus();
+    const focusTarget = window.matchMedia("(max-width: 900px)").matches
+      ? document.querySelector<HTMLElement>('.toolbar input[aria-label="Cerca un nodo per nome o ID"]')
+      : viewMenuElement?.querySelector("summary");
+    focusTarget?.focus();
+  }
+
+  function toggleProjectionControlsFromToolbar() {
+    closeToolbarMenus();
+    showProjectionControls = !showProjectionControls;
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      document.querySelector<HTMLElement>('.toolbar input[aria-label="Cerca un nodo per nome o ID"]')?.focus();
+    } else {
+      document.querySelector<HTMLElement>(".projection-action")?.focus();
+    }
+  }
+
+  function openGraph2DExportFromMobileMenu() {
+    if (mobileViewMenuElement) mobileViewMenuElement.open = false;
+    showGraph2DExportPanel = true;
   }
 
   function closeAnalysisPanels() {
@@ -3971,9 +4605,22 @@
   }
 
   function openDataPanel() {
+    const activeElement = document.activeElement;
+    jsonEditorFocusReturnTarget = mobileDataPanelFocusReturnTarget ?? (
+      activeElement instanceof HTMLElement && activeElement !== document.body
+        ? activeElement
+        : null
+    );
+    mobileDataPanelFocusReturnTarget = null;
+    suppressAnalysisPanelFocusRestore = activeAnalysisPanel() !== null;
     closeToolbarMenus();
     closeAnalysisPanels();
     jsonEditorProps?.onOpen?.();
+  }
+
+  function openDataPanelFromMobileMenu() {
+    mobileDataPanelFocusReturnTarget = mobileMoreMenuElement?.querySelector("summary") ?? null;
+    openDataPanel();
   }
 
   async function openProjectPickerFromEmptyState() {
@@ -3983,6 +4630,7 @@
   }
 
   function openAnalysisPanel(panel: "clique" | "structural" | "integrity" | "motif" | "provenance") {
+    captureAnalysisPanelFocusReturnTarget();
     const previousPanel = activeAnalysisPanel();
     if (previousPanel && previousPanel !== panel && analysisStateHasResult(lastCapturedAnalysisSession?.state ?? {})) {
       persistCurrentAnalysisSession(false, true);
@@ -4006,6 +4654,14 @@
   }
 
   function closeAnalysisPanel(panel: "clique" | "structural" | "integrity" | "motif" | "provenance") {
+    if (
+      activeAnalysisPanel() === panel &&
+      graph2DPanelSummary.resultLabel.trim() &&
+      graph2DPanelSummary.resultLabel !== "Proiezione corrente"
+    ) {
+      graph2DOverlayResultLabel = graph2DPanelSummary.resultLabel;
+      graph2DOverlayCompletionLabel = graph2DPanelSummary.completionLabel ?? "";
+    }
     if (panel === "clique") showSolverPanel = false;
     if (panel === "structural") showStructuralPanel = false;
     if (panel === "integrity") showIntegrityPanel = false;
@@ -4015,6 +4671,7 @@
   }
 
   function launchMaximumCliqueOrRestart() {
+    captureAnalysisPanelFocusReturnTarget();
     clearGraph2DOverlay();
     closeToolbarMenus();
     if (clingoWorkerStatus === "error") restartClingoWorker();
@@ -4057,6 +4714,27 @@
     if (next.size === selectedTypes.size && [...next].every((value) => selectedTypes.has(value))) return;
     clearAnalysisResultsForProjectionChange();
     selectedTypes = next;
+    recomputeGraphData();
+    refreshLinkVisuals();
+  }
+
+  function clearTypeFilters() {
+    if (solverRunning || selectedTypes.size === 0) return;
+    clearAnalysisResultsForProjectionChange();
+    selectedTypes = new Set();
+    recomputeGraphData();
+    refreshLinkVisuals();
+  }
+
+  function setNodeDegreeFilter(
+    filter: keyof typeof nodeDegreeFilters,
+    checked: boolean
+  ) {
+    if (solverRunning || !filtersEnabled) return;
+    if (filter !== "excludeIsolated" && graphDirection !== "directed") return;
+    if (nodeDegreeFilters[filter] === checked) return;
+    clearAnalysisResultsForProjectionChange();
+    nodeDegreeFilters = { ...nodeDegreeFilters, [filter]: checked };
     recomputeGraphData();
     refreshLinkVisuals();
   }
@@ -4204,6 +4882,11 @@
     persistCurrentAnalysisSession(true);
   }
 
+  function selectGraphDirectoryNode(id: string) {
+    selectRoot(id);
+    closeToolbarMenus();
+  }
+
   function selectWitnessRoot(nodeIds: string[]) {
     const visibleNodeIds = [...new Set(nodeIds.map(String))].filter((id) => getNodeById(id));
     const rootId = visibleNodeIds[0];
@@ -4245,34 +4928,32 @@
   }
 
   function searchNode(q: string) {
-    const text = q.trim().toLowerCase();
+    const text = normalizeGraphNodeSearchQuery(q);
     if (!text || !originalData) return;
+    activeSearchSuggestionIndex = -1;
 
     // Priorità: match esatto > prefisso > sottostringa; a parità, nodi visibili.
-    const rank = (n: any) => {
-      const label = n.label.toLowerCase();
-      const score = label === text ? 3 : label.startsWith(text) ? 2 : label.includes(text) ? 1 : 0;
-      return score * 2 + (getNodeById(n.id) ? 1 : 0);
-    };
-
-    let best: any = null;
+    const visibleNodeIds = new Set((data?.nodes ?? []).map((node: any) => String(node.id)));
+    let best: { id: string; label: string; normalizedId: string; normalizedLabel: string } | null = null;
     let bestScore = 0;
 
-    for (const n of originalData.nodes) {
-      const score = rank(n);
+    for (const candidate of searchIndex) {
+      const score = getGraphNodeSearchMatchScore(candidate, text) * 2 + (visibleNodeIds.has(candidate.id) ? 1 : 0);
       if (score > bestScore) {
-        best = n;
+        best = candidate;
         bestScore = score;
       }
     }
 
-    selectSearchResult(bestScore >= 2 ? best : null);
+    selectSearchResult(best && bestScore > 0 ? getNodeById(best.id, originalData.nodes) : null);
   }
 
   function resetView() {
+    const initialWindow = getConfiguredTimelineWindow();
     const projectionChanged = selectedTypes.size > 0 || selectedGroupsFilter.size > 0 ||
-      minimumEdgeConfidence !== getDefaultEdgeConfidenceThreshold() || currentStart !== GRAPH_CONFIG.timeline.start ||
-      currentEnd !== GRAPH_CONFIG.timeline.end || selectedProvenanceScenarioId !== "";
+      Object.values(nodeDegreeFilters).some(Boolean) ||
+      minimumEdgeConfidence !== getDefaultEdgeConfidenceThreshold() || currentStart !== initialWindow.start ||
+      currentEnd !== initialWindow.end || selectedProvenanceScenarioId !== "";
     if (projectionChanged) clearAnalysisResultsForProjectionChange();
 
     rootSelectedId = null;
@@ -4284,15 +4965,25 @@
     highlightedEdgeIds = new Set();
     suggestions = [];
     showSuggestions = false;
+    activeSearchSuggestionIndex = -1;
     searchMessage = "";
 
     selectedTypes = new Set();
     selectedGroupsFilter = new Set();
+    typeFilterSearch = "";
+    visibleTypeFilterLimit = typeFilterPageSize;
+    groupFilterSearch = "";
+    visibleGroupFilterLimit = groupFilterPageSize;
+    nodeDegreeFilters = {
+      excludeIsolated: false,
+      excludeWithoutIncoming: false,
+      excludeWithoutOutgoing: false
+    };
     minimumEdgeConfidence = getDefaultEdgeConfidenceThreshold();
     selectedProvenanceScenarioId = "";
 
-    currentStart = GRAPH_CONFIG.timeline.start;
-    currentEnd = GRAPH_CONFIG.timeline.end;
+    currentStart = initialWindow.start;
+    currentEnd = initialWindow.end;
 
     recomputeGraphData();
     refreshLinkVisuals();
@@ -4339,16 +5030,36 @@
     if (!graph3D) return;
     graph3D.zoomToFit(graphTransitionDuration(0), graphViewFitPadding);
     if (data?.nodes?.length) {
-      const cameraPosition = graph3D.camera().position;
-      graph3D.cameraPosition(
-        {
-          x: cameraPosition.x * graphViewFitScale,
-          y: cameraPosition.y * graphViewFitScale,
-          z: cameraPosition.z * graphViewFitScale
-        },
-        { x: 0, y: 0, z: 0 },
-        graphTransitionDuration(500)
-      );
+      const graphNodes = graph3D.graphData()?.nodes ?? [];
+      const camera = graph3D.camera();
+      camera.updateMatrixWorld(true);
+      let maxAbsScreenX = 0;
+      let maxAbsScreenY = 0;
+      for (const node of graphNodes) {
+        if (!isGraphDisplayNodeVisible(node)) continue;
+        const x = Number(node.x);
+        const y = Number(node.y);
+        const z = Number(node.z);
+        if (![x, y, z].every(Number.isFinite)) continue;
+        const projected = new THREE.Vector3(x, y, z).project(camera);
+        if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+        maxAbsScreenX = Math.max(maxAbsScreenX, Math.abs(projected.x));
+        maxAbsScreenY = Math.max(maxAbsScreenY, Math.abs(projected.y));
+      }
+
+      const zoomFactor = getGraphFitZoomFactor(maxAbsScreenX, maxAbsScreenY);
+      if (zoomFactor > 1) {
+        const cameraPosition = camera.position;
+        graph3D.cameraPosition(
+          {
+            x: cameraPosition.x / zoomFactor,
+            y: cameraPosition.y / zoomFactor,
+            z: cameraPosition.z / zoomFactor
+          },
+          { x: 0, y: 0, z: 0 },
+          graphTransitionDuration(500)
+        );
+      }
     }
     fitOnEngineStop = graphLayoutRunning;
   }
@@ -4523,7 +5234,7 @@
       provenanceScenarioSelectedGroup = selectedGroup;
       provenanceScenarioConfidenceThreshold = confidenceThreshold;
       provenanceScenarioTimelineWindow = timelineControlEnabled
-        ? `${currentStart}–${currentEnd}`
+        ? currentTimelineLabel
         : "";
       provenanceScenarioViewFilters = getScenarioViewFilterSnapshot();
     } catch (error) {
@@ -4689,7 +5400,7 @@
       provenanceKCoreScenarioSelectedGroup = request.group;
       provenanceKCoreScenarioConfidenceThreshold = confidenceThreshold;
       provenanceKCoreScenarioTimelineWindow = timelineControlEnabled
-        ? `${currentStart}–${currentEnd}`
+        ? currentTimelineLabel
         : "";
       provenanceKCoreScenarioViewFilters = getScenarioViewFilterSnapshot();
     } catch (error) {
@@ -4728,7 +5439,7 @@
       return;
     }
     if (request.enumerateAllOptima !== true) {
-      provenanceKPlexScenarioComparisonError = "Per confrontare la membership occorre enumerare tutti i k-plex di cardinalità massima.";
+      provenanceKPlexScenarioComparisonError = "Per confrontare l'appartenenza dei nodi, attiva l'enumerazione di tutti i k-plex di cardinalità massima.";
       return;
     }
     if (provenanceScenarios.length < 2) {
@@ -4864,7 +5575,7 @@
       provenanceKPlexScenarioSelectedGroup = request.group;
       provenanceKPlexScenarioConfidenceThreshold = confidenceThreshold;
       provenanceKPlexScenarioTimelineWindow = timelineControlEnabled
-        ? `${currentStart}–${currentEnd}`
+        ? currentTimelineLabel
         : "";
       provenanceKPlexScenarioViewFilters = getScenarioViewFilterSnapshot();
     } catch (error) {
@@ -5035,7 +5746,7 @@
       provenanceComponentScenarioTargetNodeId = targetNodeId;
       provenanceComponentScenarioConfidenceThreshold = confidenceThreshold;
       provenanceComponentScenarioTimelineWindow = timelineControlEnabled
-        ? `${currentStart}–${currentEnd}`
+        ? currentTimelineLabel
         : "";
       provenanceComponentScenarioViewFilters = getScenarioViewFilterSnapshot();
     } catch (error) {
@@ -5204,10 +5915,10 @@
             candidateGroup,
             targetGroup,
             confidenceThreshold,
-            timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+            timelineWindow: timelineControlEnabled ? currentTimelineLabel : "",
             viewFilters: getScenarioViewFilterSnapshot()
           };
-          throw new Error(`la combinazione di candidati e nodi obiettivo non ammette una copertura completa; ${expectedUncoverableTargetIds.length} target non sono copribili nello scenario`);
+          throw new Error(`la combinazione di candidati e nodi obiettivo non ammette una copertura completa; ${expectedUncoverableTargetIds.length} nodi obiettivo non sono copribili nello scenario`);
         }
         if (result?.Result !== "OPTIMUM FOUND") {
           throw new Error(`clingo non ha provato tutti gli ottimi; stato: ${result?.Result ?? "risposta vuota"}`);
@@ -5274,7 +5985,7 @@
       provenanceDominatingSetScenarioTargetGroup = targetGroup;
       provenanceDominatingSetScenarioConfidenceThreshold = confidenceThreshold;
       provenanceDominatingSetScenarioTimelineWindow = timelineControlEnabled
-        ? `${currentStart}–${currentEnd}`
+        ? currentTimelineLabel
         : "";
       provenanceDominatingSetScenarioViewFilters = getScenarioViewFilterSnapshot();
     } catch (error) {
@@ -5408,7 +6119,7 @@
       };
 
       const onError = (e: ErrorEvent) => {
-        finish({ Result: "ERROR", Error: e.message || "Clingo worker error" });
+        finish({ Result: "ERROR", Error: e.message || "Errore del worker clingo." });
         if (clingoWorker === worker) {
           restartClingoWorker();
         }
@@ -5539,7 +6250,7 @@
         timeMs: t1 - t0,
         nodesCount: data.nodes.length,
         linksCount: data.links.length,
-        periodLabel: timelineControlEnabled ? `${currentStart}–${currentEnd}` : undefined,
+        periodLabel: timelineControlEnabled ? currentTimelineLabel : undefined,
         cliqueMode: mode,
         completionLabel: undefined,
         selectedGroup
@@ -5556,7 +6267,7 @@
 
     if (result?.Result === "ERROR") {
       console.error("❌ CLINGO ERROR:", result.Error);
-      solverError = result.Error || "Clingo error";
+      solverError = result.Error || "Errore del worker clingo.";
     } else if (!explainCliqueSupports) {
       allCliqueWitnesses = parseWitnessCliques(result?.Call?.[0]?.Witnesses, reverseIndex, 1);
       foundCliques = allCliqueWitnesses.filter((clique) => clique.length >= 3);
@@ -5609,7 +6320,7 @@
       timeMs: t1 - t0,
       nodesCount: data.nodes.length,
       linksCount: data.links.length,
-      periodLabel: timelineControlEnabled ? `${currentStart}–${currentEnd}` : undefined,
+      periodLabel: timelineControlEnabled ? currentTimelineLabel : undefined,
       cliqueMode: mode,
       completionLabel: mode === "maximum"
         ? "Ottimo provato · tutte le clique massime enumerate"
@@ -5782,7 +6493,7 @@
     structuralKPlexMembershipCounterfactualCandidateCount = 0;
 
     if (graphDirection !== "undirected") {
-      structuralKPlexMembershipCounterfactualError = "Il controfattuale di membership richiede una proiezione non orientata.";
+      structuralKPlexMembershipCounterfactualError = "L'analisi dell'appartenenza controfattuale richiede una proiezione non orientata.";
       return;
     }
     if (!Number.isSafeInteger(structuralParameter) || structuralParameter < 1 ||
@@ -5791,7 +6502,7 @@
       return;
     }
     if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
-      structuralKPlexMembershipCounterfactualError = "Dichiara gli archi e i costi possibili in graphAnalysis.counterfactuals.edgeAdditions.";
+      structuralKPlexMembershipCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -5815,7 +6526,7 @@
       const { facts, reverseEdgeIndex, reverseIndex, indexByNodeId } = buildAspFactsFromCurrentData();
       if (!facts.trim()) throw new Error("La proiezione corrente non ha prodotto fatti ASP.");
       const targetIndex = indexByNodeId.get(targetNodeId);
-      if (targetIndex === undefined) throw new Error("Il nodo target non è mappabile nell'indice ASP.");
+      if (targetIndex === undefined) throw new Error("Il nodo selezionato non è riconosciuto nella proiezione corrente.");
       const { candidatesForCohort, excludedCandidateCount } = resolveStructuralCounterfactualCandidates(
         candidateNodeIds,
         reverseEdgeIndex,
@@ -5824,7 +6535,7 @@
       structuralKPlexMembershipCounterfactualCandidateCount = candidatesForCohort.length;
       if (candidatesForCohort.length > MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES) {
         throw new RangeError(
-          `Sono eleggibili ${candidatesForCohort.length} archi candidati (${excludedCandidateCount} esclusi dalla proiezione); il limite esatto corrente è ${MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES}. Riduci edgeAdditions o filtri il grafo.`
+          `Sono eleggibili ${candidatesForCohort.length} archi candidati (${excludedCandidateCount} esclusi dalla proiezione); il limite corrente è ${MAX_KPLEX_MEMBERSHIP_COUNTERFACTUAL_CANDIDATES}. Riduci il numero di candidati o filtra il grafo.`
         );
       }
 
@@ -5890,9 +6601,10 @@
     } catch (error) {
       if (requestId === structuralKPlexMembershipCounterfactualRequestId) {
         structuralKPlexMembershipCounterfactual = null;
-        structuralKPlexMembershipCounterfactualError = error instanceof Error
-          ? error.message
-          : "La ricerca ASP del controfattuale di membership non è disponibile.";
+      structuralKPlexMembershipCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      ) || "La ricerca sull'appartenenza al k-plex non è disponibile.";
         structuralKPlexMembershipCounterfactualTimeMs = performance.now() - startedAt;
       }
     } finally {
@@ -6148,7 +6860,7 @@
       return;
     }
     if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
-      structuralTypedPathCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      structuralTypedPathCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     if (!request.startNodeId || !request.goalNodeId || request.startNodeId === request.goalNodeId ||
@@ -6435,7 +7147,10 @@
       }
     } catch (error) {
       solverRunning = false;
-      structuralTypedPathCounterfactualError = error instanceof Error ? error.message : String(error);
+      structuralTypedPathCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      );
     }
     persistCurrentAnalysisSession(false, true);
   }
@@ -6453,15 +7168,15 @@
       return;
     }
     if (!Number.isSafeInteger(request.targetS) || request.targetS < 1) {
-      structuralKPlexCounterfactualError = "Il valore target s deve essere un intero positivo sicuro.";
+      structuralKPlexCounterfactualError = "Il parametro s del k-plex deve essere un intero positivo.";
       return;
     }
     if (!Array.isArray(motifCounterfactualEdgeAdditions)) {
-      structuralKPlexCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      structuralKPlexCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     if (motifCounterfactualEdgeAdditions.length === 0) {
-      structuralKPlexCounterfactualError = "La configurazione edgeAdditions non contiene candidati.";
+      structuralKPlexCounterfactualError = "Non sono stati dichiarati archi candidati. Aggiungili in Dati e configurazione.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -6537,7 +7252,7 @@
           structuralKPlexCounterfactualHasRun = true;
           const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
           if (whyNotRemainingMs <= 0) {
-            structuralKPlexCounterfactualWhyNotMessage = "Il solver ha provato l'infeasibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+            structuralKPlexCounterfactualWhyNotMessage = "Nessun completamento ammissibile con i candidati configurati. Il tempo è terminato prima di individuare i nodi che lo impediscono.";
           } else {
             try {
               const diagnostic = buildKPlexCompletionWhyNotProgram(
@@ -6552,8 +7267,8 @@
               );
               if (diagnosticResult?.Result !== "SATISFIABLE" || diagnosticResult?.Models?.More !== "no") {
                 structuralKPlexCounterfactualWhyNotMessage = diagnosticResult?.Result === "ERROR"
-                  ? `Il solver ha provato l'infeasibilita, ma non ha completato il certificato why-not: ${diagnosticResult.Error || "errore del worker clingo"}`
-                  : `Il solver ha provato l'infeasibilita, ma la query why-not non ha restituito un answer set completo (${diagnosticResult?.Result ?? "risposta vuota"}).`;
+                  ? "Nessun completamento ammissibile con i candidati configurati. Non è stato possibile completare l'individuazione dei nodi che lo impediscono."
+                  : "Nessun completamento ammissibile con i candidati configurati. La verifica dei nodi che lo impediscono non è stata completata.";
               } else {
                 const observedEdges = (data.links as any[]).flatMap((link) => {
                   const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
@@ -6575,9 +7290,7 @@
                 );
               }
             } catch (error) {
-              structuralKPlexCounterfactualWhyNotMessage = error instanceof Error
-                ? `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${error.message}`
-                : `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${String(error)}`;
+              structuralKPlexCounterfactualWhyNotMessage = "Nessun completamento ammissibile con i candidati configurati. La verifica dei nodi che lo impediscono non è riuscita.";
             }
           }
           structuralKPlexCounterfactualTimeMs = performance.now() - startedAt;
@@ -6594,7 +7307,7 @@
           compiled.candidates
         );
         if (structuralKPlexCounterfactuals.length === 0) {
-          structuralKPlexCounterfactualError = "Il solver ha trovato un ottimo, ma il testimone non e stato mappato in modo verificabile.";
+          structuralKPlexCounterfactualError = "Il risultato non è interpretabile e non è stato mostrato.";
           return;
         }
         structuralKPlexCounterfactualHasRun = true;
@@ -6603,7 +7316,10 @@
       }
     } catch (error) {
       solverRunning = false;
-      structuralKPlexCounterfactualError = error instanceof Error ? error.message : String(error);
+      structuralKPlexCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      );
     }
     persistCurrentAnalysisSession(false, true);
   }
@@ -6621,11 +7337,11 @@
       return;
     }
     if (!Number.isSafeInteger(request.targetK) || request.targetK < Number(structuralParameter)) {
-      structuralKCoreCounterfactualError = `Il valore target k deve essere un intero sicuro maggiore o uguale a ${structuralParameter}.`;
+      structuralKCoreCounterfactualError = `La soglia k deve essere un intero maggiore o uguale a ${structuralParameter}.`;
       return;
     }
     if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
-      structuralKCoreCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      structuralKCoreCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -6702,7 +7418,7 @@
           structuralKCoreCounterfactualHasRun = true;
           const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
           if (whyNotRemainingMs <= 0) {
-            structuralKCoreCounterfactualWhyNotMessage = "Il solver ha provato l'infeasibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+            structuralKCoreCounterfactualWhyNotMessage = "Nessun completamento ammissibile con i candidati configurati. Il tempo è terminato prima di individuare i nodi che lo impediscono.";
           } else {
             try {
               const diagnostic = buildKCoreCompletionWhyNotProgram(
@@ -6717,8 +7433,8 @@
               );
               if (diagnosticResult?.Result !== "SATISFIABLE" || diagnosticResult?.Models?.More !== "no") {
                 structuralKCoreCounterfactualWhyNotMessage = diagnosticResult?.Result === "ERROR"
-                  ? `Il solver ha provato l'infeasibilita, ma non ha completato il certificato why-not: ${diagnosticResult.Error || "errore del worker clingo"}`
-                  : `Il solver ha provato l'infeasibilita, ma la query why-not non ha restituito un answer set completo (${diagnosticResult?.Result ?? "risposta vuota"}).`;
+                  ? "Nessun completamento ammissibile con i candidati configurati. Non è stato possibile completare l'individuazione dei nodi che lo impediscono."
+                  : "Nessun completamento ammissibile con i candidati configurati. La verifica dei nodi che lo impediscono non è stata completata.";
               } else {
                 const observedEdges = (data.links as any[]).flatMap((link) => {
                   const sourceNode = indexByNodeId.get(normalizeGraphId(getGraphEndpointId(link.source)));
@@ -6740,9 +7456,7 @@
                 );
               }
             } catch (error) {
-              structuralKCoreCounterfactualWhyNotMessage = error instanceof Error
-                ? `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${error.message}`
-                : `Il solver ha provato l'infeasibilita, ma il certificato why-not non ha superato la verifica: ${String(error)}`;
+              structuralKCoreCounterfactualWhyNotMessage = "Nessun completamento ammissibile con i candidati configurati. La verifica dei nodi che lo impediscono non è riuscita.";
             }
           }
           structuralKCoreCounterfactualTimeMs = performance.now() - startedAt;
@@ -6759,7 +7473,7 @@
           compiled.candidates
         );
         if (structuralKCoreCounterfactuals.length === 0) {
-          structuralKCoreCounterfactualError = "Il solver ha trovato un ottimo, ma il testimone non e stato mappato in modo verificabile.";
+          structuralKCoreCounterfactualError = "Il risultato non è interpretabile e non è stato mostrato.";
           return;
         }
         structuralKCoreCounterfactualHasRun = true;
@@ -6768,7 +7482,10 @@
       }
     } catch (error) {
       solverRunning = false;
-      structuralKCoreCounterfactualError = error instanceof Error ? error.message : String(error);
+      structuralKCoreCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      );
     }
     persistCurrentAnalysisSession(false, true);
   }
@@ -6787,11 +7504,11 @@
       return;
     }
     if (!Number.isSafeInteger(request.targetK) || request.targetK < Number(structuralParameter)) {
-      structuralKCoreMembershipCounterfactualError = `La soglia target k deve essere un intero sicuro maggiore o uguale a ${structuralParameter}.`;
+      structuralKCoreMembershipCounterfactualError = `La soglia k deve essere un intero maggiore o uguale a ${structuralParameter}.`;
       return;
     }
     if (!Array.isArray(motifCounterfactualEdgeAdditions) || motifCounterfactualEdgeAdditions.length === 0) {
-      structuralKCoreMembershipCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      structuralKCoreMembershipCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -6868,7 +7585,7 @@
         }
         if (request.enumerateAllOptima === true && result?.Result !== "UNSATISFIABLE" &&
           !hasCompleteModelEnumeration(result)) {
-          structuralKCoreMembershipCounterfactualError = "clingo non conferma che tutte le proposte ottime di membership siano state enumerate; il risultato parziale è stato scartato.";
+          structuralKCoreMembershipCounterfactualError = "Non è stato possibile verificare tutte le modifiche a costo minimo per includere il nodo selezionato nel k-core; i risultati parziali non vengono mostrati.";
           structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
           return;
         }
@@ -6876,7 +7593,7 @@
           structuralKCoreMembershipCounterfactualHasRun = true;
           const whyNotRemainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
           if (whyNotRemainingMs <= 0) {
-            structuralKCoreMembershipCounterfactualWhyNotMessage = "Il solver ha provato l'infattibilita, ma il budget complessivo e terminato prima di completare il certificato why-not.";
+            structuralKCoreMembershipCounterfactualWhyNotMessage = "Il nodo selezionato non può entrare nel k-core con i candidati configurati. Il tempo è terminato prima di individuare i nodi che lo impediscono.";
           } else {
             try {
               const observedEdges = (data.links as any[]).flatMap((link) => {
@@ -6903,9 +7620,7 @@
                 { stopAfterTargetRemoval: true, maxRoundsPerQuery: 4, adaptiveBatching: true }
               );
             } catch (error) {
-              structuralKCoreMembershipCounterfactualWhyNotMessage = error instanceof Error
-              ? `Il solver ha provato l'infattibilita, ma il certificato why-not non e stato completato o verificato: ${error.message}`
-              : `Il solver ha provato l'infattibilita, ma il certificato why-not non e stato completato o verificato: ${String(error)}`;
+              structuralKCoreMembershipCounterfactualWhyNotMessage = "Il nodo selezionato non può entrare nel k-core con i candidati configurati. La verifica dei nodi che lo impediscono non è riuscita.";
             }
           }
           structuralKCoreMembershipCounterfactualTimeMs = performance.now() - startedAt;
@@ -6924,7 +7639,7 @@
           targetNodeId
         );
         if (structuralKCoreMembershipCounterfactuals.length === 0) {
-          structuralKCoreMembershipCounterfactualError = "Il solver ha trovato un ottimo, ma il witness di appartenenza al k-core non e stato mappato in modo verificabile.";
+          structuralKCoreMembershipCounterfactualError = "La proposta non è stata verificata e non è stata mostrata.";
           return;
         }
         structuralKCoreMembershipCounterfactualHasRun = true;
@@ -6933,7 +7648,10 @@
       }
     } catch (error) {
       solverRunning = false;
-      structuralKCoreMembershipCounterfactualError = error instanceof Error ? error.message : String(error);
+      structuralKCoreMembershipCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      );
     }
     persistCurrentAnalysisSession(false, true);
   }
@@ -7261,13 +7979,11 @@
 
         const mustLinkPairs = resolveCommunityConstraintPairs(
           configuredCommunityConstraints?.mustLink,
-          "mustLink",
           candidateNodes,
           indexByNodeId
         );
         const cannotLinkPairs = resolveCommunityConstraintPairs(
           configuredCommunityConstraints?.cannotLink,
-          "cannotLink",
           candidateNodes,
           indexByNodeId
         );
@@ -7709,7 +8425,7 @@
           const failureDetail = typeof feasibilityResult?.Error === "string"
             ? feasibilityResult.Error.trim()
             : "";
-          structuralError = `La copertura è impossibile, ma la diagnosi dei target non è stata verificata: il certificato why-not non è stato completato (${feasibilityResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
+          structuralError = `La copertura è impossibile, ma la verifica dei nodi non coperti non è stata completata (stato: ${feasibilityResult?.Result ?? "risposta vuota"})${failureDetail ? `: ${failureDetail}` : "."}`;
           return;
         }
 
@@ -7718,7 +8434,7 @@
           reverseIndex
         );
         if (!certificate) {
-          structuralError = "La copertura è impossibile, ma la diagnosi dei target non è stata verificata: il solver non ha restituito un certificato why-not interpretabile.";
+          structuralError = "La copertura è impossibile, ma la verifica dei nodi non coperti non ha prodotto un risultato leggibile.";
           return;
         }
 
@@ -7738,12 +8454,12 @@
           ] as [string, string])
         );
         if (!expectedUncoverableIds) {
-          structuralError = "La copertura è impossibile, ma la diagnosi dei target non è stata verificata: il certificato ASP non coincide con il controllo indipendente sulla proiezione corrente ed è stato scartato.";
+          structuralError = "La copertura è impossibile, ma la verifica dei nodi non coperti non ha superato il controllo indipendente sul grafo attuale.";
           return;
         }
 
         structuralDominatingSetUncoverableTargetNodeIds = expectedUncoverableIds;
-        setGraph2DProvenInfeasibility("Copertura minima", "il certificato why-not è verificato sulla proiezione corrente");
+        setGraph2DProvenInfeasibility("Copertura minima", "i nodi non coperti sono verificati sulla proiezione corrente");
         return;
       }
       if (request.task === "minimumNodeSeparator" && result?.Result === "UNSATISFIABLE") {
@@ -8183,7 +8899,7 @@
       structuralCommunityPairMembershipRunning = true;
       const probe = async (kind: "together" | "separate", program: string): Promise<number | null> => {
         const remainingMs = getRemainingSolverBudgetMs(deadline, performance.now());
-        if (remainingMs <= 0) throw new Error(`budget complessivo esaurito prima della query ${kind === "together" ? "must-link" : "cannot-link"}`);
+        if (remainingMs <= 0) throw new Error(`budget complessivo esaurito prima della query con il ${getCommunityPairConstraintLabel(kind)}`);
         const result = await callClingo(
           `${context.baseFacts}\n${program}\n`,
           getStructuralSolverOptions("communities"),
@@ -8194,7 +8910,7 @@
         }
         if (result?.Result === "UNSATISFIABLE") return null;
         if (result?.Result !== "OPTIMUM FOUND") {
-          throw new Error(`clingo non ha provato l'ottimo della query ${kind === "together" ? "must-link" : "cannot-link"} (${result?.Result ?? "risposta vuota"}).`);
+          throw new Error(`clingo non ha provato l'ottimo della query con il ${getCommunityPairConstraintLabel(kind)} (${result?.Result ?? "risposta vuota"}).`);
         }
         const optimumPartitions = selectMaximumModularityPartitions(
           parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, context.reverseIndex)
@@ -8291,7 +9007,7 @@
       removedEdgeByEditId.set(edit.id, matchingRecords[0].identity);
     }
     if (availableEdits.length === 0) {
-      structuralCommunityTopologyCounterfactualError = "Nessun edge edit configurato è applicabile al gruppo e alla proiezione visibile correnti.";
+      structuralCommunityTopologyCounterfactualError = "Nessuna modifica di arco configurata è applicabile al gruppo e alla proiezione visibile correnti.";
       return;
     }
 
@@ -8388,11 +9104,11 @@
             const result = await runAsp(
               `${factsForVariant}\n\n${program}\n`,
               getStructuralSolverOptions("communities"),
-              `ottimo ${kind === "together" ? "must-link" : "cannot-link"}`
+              `ottimo con il ${getCommunityPairConstraintLabel(kind)}`
             );
             if (result?.Result === "UNSATISFIABLE") return null;
             if (result?.Result !== "OPTIMUM FOUND") {
-              throw new Error(`clingo non ha provato l'ottimo ${kind === "together" ? "must-link" : "cannot-link"} (${result?.Result ?? "risposta vuota"}).`);
+              throw new Error(`clingo non ha provato l'ottimo con il ${getCommunityPairConstraintLabel(kind)} (${result?.Result ?? "risposta vuota"}).`);
             }
             const optima = selectMaximumModularityPartitions(
               parseWitnessModularityPartitions(result?.Call?.[0]?.Witnesses, context.reverseIndex)
@@ -8449,10 +9165,11 @@
     integrityResults = [];
     integrityHasRun = false;
     integrityRepairError = "";
+    integrityRepairOutcomeMessage = "";
     integrityRepairProposal = null;
 
     if (graphSchemaVersion !== 2) {
-      integrityError = "La diagnosi ASP richiede schemaVersion: 2 e mapping semantici espliciti.";
+      integrityError = "La diagnosi ASP richiede schemaVersion: 2 e mappature semantiche esplicite.";
       return;
     }
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
@@ -8490,7 +9207,11 @@
           integrityError = result.Error || "Errore del worker clingo.";
           return;
         }
-        if (result?.Result !== "UNSATISFIABLE" && !hasCompleteModelEnumeration(result)) {
+        if (result?.Result === "UNSATISFIABLE") {
+          integrityError = "Clingo non ha restituito alcun modello diagnostico. L'assenza di modelli non dimostra che il grafo sia privo di violazioni.";
+          return;
+        }
+        if (!hasCompleteModelEnumeration(result)) {
           integrityError = `clingo non conferma che l'enumerazione delle violazioni sia completa (${result?.Result ?? "risposta vuota"}).`;
           return;
         }
@@ -8753,7 +9474,7 @@
         {
           selectedGroup: request.group,
           graphDirection,
-          timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+          timelineWindow: timelineControlEnabled ? currentTimelineLabel : "",
           minimumEdgeConfidence: confidenceThreshold,
           viewFilters: getScenarioViewFilterSnapshot()
         }
@@ -9021,7 +9742,7 @@
     selectedSignedTriadGroup = request.group;
 
     if (!signedTriadConfig) {
-      signedTriadScenarioComparisonError = "graphAnalysis.signedTriads non è configurato.";
+      signedTriadScenarioComparisonError = "Configura i tipi di relazione positiva e negativa in Dati e configurazione.";
       return;
     }
     if (provenanceScenarioConfig?.worldAssumption !== "finite-exhaustive-worlds") {
@@ -9147,7 +9868,7 @@
         negativeValues: signedTriadConfig.negativeValues,
         edgeTypes: Array.isArray(signedTriadConfig.edgeTypes) ? signedTriadConfig.edgeTypes : [],
         selectedGroup: request.group,
-        timelineWindow: timelineControlEnabled ? `${currentStart}–${currentEnd}` : "",
+        timelineWindow: timelineControlEnabled ? currentTimelineLabel : "",
         minimumEdgeConfidence: confidenceThreshold,
         viewFilters: getScenarioViewFilterSnapshot()
       });
@@ -9260,7 +9981,7 @@
       return;
     }
     if (!motifCounterfactualsConfigured) {
-      motifCounterfactualError = "Configura graphAnalysis.counterfactuals.edgeAdditions con candidati e costi espliciti.";
+      motifCounterfactualError = "Aggiungi archi candidati con origine, destinazione e costo in Dati e configurazione.";
       return;
     }
     const templateInput = motifTemplates[request.templateIndex];
@@ -9288,7 +10009,7 @@
 
     try {
       if (!Array.isArray(motifCounterfactualEdgeAdditions)) {
-        throw new TypeError("graphAnalysis.counterfactuals.edgeAdditions deve essere un array.");
+        throw new TypeError("La configurazione degli archi candidati deve essere un elenco.");
       }
       const additionalTemporalValues = templateInput.temporal
         ? motifCounterfactualEdgeAdditions.flatMap((candidate: any) => [
@@ -9439,7 +10160,10 @@
       }
     } catch (error) {
       solverRunning = false;
-      motifCounterfactualError = error instanceof Error ? error.message : String(error);
+      motifCounterfactualError = getUserFacingConfigurationError(
+        error,
+        "La configurazione degli archi candidati non è valida. In Dati e configurazione, verifica ID, nodi collegati, tipo e costo."
+      );
     }
     persistCurrentAnalysisSession(false, true);
   }
@@ -9530,7 +10254,7 @@
     contextualCliqueEnumerateAllOptima = request?.enumerateAllOptima === true;
 
     if (!contextualCliqueConfig) {
-      contextualCliqueError = "graphAnalysis.contextualClique non è configurato.";
+      contextualCliqueError = "Configura i criteri del gruppo contestuale in Dati e configurazione.";
       return;
     }
     if (!clingoWorker) {
@@ -9654,8 +10378,8 @@
     graph2DEdgeAnnotations = Object.fromEntries(triad.dyads.flatMap((dyad) => dyad.edgeRecords.map((record) => [
       `source:${record.id}`,
       dyad.polarity === "positive"
-        ? { label: "Positiva", color: "#16834a" }
-        : { label: "Negativa", color: "#b4233c", dashPattern: "dashed" }
+        ? { label: "Positiva", description: "Polarità positiva della dyade", color: "#16834a" }
+        : { label: "Negativa", description: "Polarità negativa della dyade", color: "#b4233c", dashPattern: "dashed" }
     ])));
     graph2DHypotheticalLinks = [];
     graph2DOverlayResultLabel = triad.balanced
@@ -9686,7 +10410,11 @@
     graph2DHypotheticalLinks = buildGraph2DHypotheticalLinks("typed-motif", addedEdges, graphDirection);
     graph2DEdgeAnnotations = buildGraph2DHypotheticalEdgeAnnotations("typed-motif", addedEdges);
     graph2DOverlayResultLabel = `Controfattuale di motivo · ${counterfactual.label} · costo totale ${counterfactual.totalCost}`;
-    graph2DOverlayCompletionLabel = "Ottimo di costo provato";
+    graph2DOverlayCompletionLabel = buildGraph2DOptimizationCompletionLabel({
+      optimizationProven: true,
+      hasSolution: true,
+      enumerateAllOptima: false
+    });
     showGraph2DExportPanel = true;
   }
 
@@ -9698,6 +10426,56 @@
     graph2DOverlayCompletionLabel = "";
     graph2DCommunityPartitionIndex = -1;
     graph2DCommunityIndex = -1;
+  }
+
+  function highlightProvenanceStructuralScenarioMembership(selection: {
+    kind: "kCore" | "kPlex" | "component" | "dominatingSet";
+    nodeId: string;
+  }) {
+    if (typeof selection?.nodeId !== "string" || !getNodeById(selection.nodeId)) return;
+
+    let overlay: ReturnType<typeof buildProvenanceScenarioStructuralMembershipGraph2DAnnotation> | null = null;
+    if (selection.kind === "kCore" && provenanceKCoreScenarioComparison) {
+      const membership = provenanceKCoreScenarioComparison.memberships.find(({ nodeId }) => nodeId === selection.nodeId);
+      if (membership) overlay = buildProvenanceScenarioStructuralMembershipGraph2DAnnotation({
+        kind: "kCore",
+        membership,
+        comparison: provenanceKCoreScenarioComparison
+      });
+    } else if (selection.kind === "kPlex" && provenanceKPlexScenarioComparison) {
+      const membership = provenanceKPlexScenarioComparison.memberships.find(({ nodeId }) => nodeId === selection.nodeId);
+      if (membership) overlay = buildProvenanceScenarioStructuralMembershipGraph2DAnnotation({
+        kind: "kPlex",
+        membership,
+        comparison: provenanceKPlexScenarioComparison
+      });
+    } else if (selection.kind === "component" && provenanceComponentScenarioComparison) {
+      const membership = provenanceComponentScenarioComparison.memberships.find(({ nodeId }) => nodeId === selection.nodeId);
+      if (membership) overlay = buildProvenanceScenarioStructuralMembershipGraph2DAnnotation({
+        kind: "component",
+        membership,
+        comparison: provenanceComponentScenarioComparison
+      });
+    } else if (selection.kind === "dominatingSet" && provenanceDominatingSetScenarioComparison) {
+      const membership = provenanceDominatingSetScenarioComparison.memberships.find(({ nodeId }) => nodeId === selection.nodeId);
+      if (membership) overlay = buildProvenanceScenarioStructuralMembershipGraph2DAnnotation({
+        kind: "dominatingSet",
+        membership,
+        comparison: provenanceDominatingSetScenarioComparison
+      });
+    }
+    if (!overlay) return;
+
+    clearGraphNeighborhoodFocus();
+    clearGraph2DOverlay();
+    graph2DNodeAnnotations = overlay.nodeAnnotations;
+    graph2DOverlayResultLabel = overlay.resultLabel;
+    graph2DOverlayCompletionLabel = overlay.completionLabel;
+    highlightedEdgeIds = new Set();
+    cliqueNodes = new Set(overlay.nodeIds);
+    refreshLinkVisuals();
+    selectWitnessRoot(overlay.nodeIds);
+    refreshNodeVisuals();
   }
 
   function setGraph2DProvenInfeasibility(analysisLabel: string, reason: string) {
@@ -9716,16 +10494,54 @@
     refreshNodeVisuals();
   }
 
+  function highlightKPlexWitness(witness: {
+    nodeIds: string[];
+    missingTiePairs: Array<[string, string]>;
+    parameter: number;
+    task: "kPlex" | "maximalKPlex";
+  }) {
+    clearGraphNeighborhoodFocus();
+    clearGraph2DOverlay();
+    const nodeIds = [...new Set(witness.nodeIds.map(String))].filter((nodeId) => getNodeById(nodeId));
+    const nodeSet = new Set(nodeIds);
+    const observedLinks = (data?.links ?? []).filter((link: GraphDisplayLink) => {
+      const source = getLinkEndId(link.source);
+      const target = getLinkEndId(link.target);
+      return source !== target && nodeSet.has(source) && nodeSet.has(target);
+    });
+    const missingTiePairs = witness.missingTiePairs.filter(([source, target]) =>
+      nodeSet.has(String(source)) && nodeSet.has(String(target))
+    );
+
+    highlightedEdgeIds = new Set(observedLinks.map((link: GraphDisplayLink) => getStructuralEdgeIdentity(link)));
+    graph2DHypotheticalLinks = buildGraph2DAbsenceLinks(missingTiePairs, {
+      scope: `k-plex-s${witness.parameter}`,
+      description: `Relazione assente nella proiezione analizzata; coppia ammessa da un ${witness.parameter}-plex.`,
+      reservedSourceIds: (data?.links ?? []).flatMap((link: GraphDisplayLink) => [link.sourceId, link.analysis?.id])
+        .filter((id: unknown) => id !== undefined && id !== null)
+    });
+    cliqueNodes = nodeSet;
+    graph2DNodeAnnotations = Object.fromEntries(nodeIds.map((nodeId) => [nodeId, "Membro del k-plex"]));
+    graph2DOverlayResultLabel = witness.task === "maximalKPlex"
+      ? `k-plex massimale selezionato · s=${witness.parameter} · ${nodeIds.length} nodi`
+      : `k-plex di cardinalità massima selezionato · s=${witness.parameter} · ${nodeIds.length} nodi`;
+    graph2DOverlayCompletionLabel = structuralStats?.completionLabel ?? "";
+    refreshLinkVisuals();
+    selectWitnessRoot(nodeIds);
+    refreshNodeVisuals();
+  }
+
   function highlightTypedMotif(match: TypedMotifMatch, completionLabel?: string) {
     clearGraphNeighborhoodFocus();
-    highlightedEdgeIds = new Set(match.supportingEdges.flatMap((edge) => edge.edgeIds));
+    highlightedEdgeIds = mapSourceEdgeIdsToStructuralIdentities(
+      match.supportingEdges.flatMap((edge) => edge.edgeIds),
+      data?.links ?? []
+    );
     refreshLinkVisuals();
     cliqueNodes = new Set(match.nodeIds);
-    graph2DNodeAnnotations = Object.fromEntries(Object.entries(match.roles).map(([role, assignment]) => [
-      assignment.nodeId,
-      `Ruolo ${role}`
-    ]));
-    graph2DEdgeAnnotations = {};
+    const graph2DAnnotations = buildTypedMotifGraph2DAnnotations(match);
+    graph2DNodeAnnotations = graph2DAnnotations.nodeAnnotations;
+    graph2DEdgeAnnotations = mapTypedMotifGraph2DEdgeAnnotations(graph2DAnnotations.edgeAnnotations);
     graph2DOverlayCompletionLabel = "";
     graph2DHypotheticalLinks = [];
     graph2DOverlayResultLabel = "Motivo tipizzato · ruoli sui nodi";
@@ -9738,44 +10554,53 @@
     refreshNodeVisuals();
   }
 
+  function mapTypedMotifGraph2DEdgeAnnotations(
+    sourceAnnotations: Record<string, Graph2DEdgeAnnotation>
+  ): Record<string, Graph2DEdgeAnnotation> {
+    return Object.fromEntries(Object.entries(sourceAnnotations).flatMap(([sourceEdgeId, annotation]) =>
+      [...mapSourceEdgeIdsToStructuralIdentities([sourceEdgeId], data?.links ?? [])]
+        .map((identity) => [identity, annotation])
+    ));
+  }
+
   function inspectProvenanceMotifWitness(request: { scenarioId: string; match: TypedMotifMatch }) {
     if (solverRunning || !request || !provenanceScenarios.some((scenario: any) => scenario.id === request.scenarioId) ||
       !request.match || !Array.isArray(request.match.supportingEdges)) return;
-    setProvenanceScenario(request.scenarioId);
-    showMotifPanel = false;
-    highlightTypedMotif(request.match, buildGraph2DScenarioComparisonCompletionLabel({
+    const completionLabel = buildGraph2DScenarioComparisonCompletionLabel({
       analysisLabel: "scenari",
       scenarioCount: motifScenarioComparison?.scenarios.length ?? 0,
       error: motifScenarioComparisonError
-    }));
+    });
+    setProvenanceScenario(request.scenarioId);
+    showMotifPanel = false;
+    highlightTypedMotif(request.match, completionLabel);
   }
 
   function inspectSignedTriadScenarioWitness(request: { scenarioId: string; triad: SignedTriadResult }) {
     if (solverRunning || !request || !provenanceScenarios.some((scenario: any) => scenario.id === request.scenarioId) ||
       !request.triad || !Array.isArray(request.triad.dyads) || request.triad.dyads.length !== 3) return;
-    setProvenanceScenario(request.scenarioId);
-    showMotifPanel = false;
-    showSignedTriadInGraph(request.triad, false, buildGraph2DScenarioComparisonCompletionLabel({
+    const completionLabel = buildGraph2DScenarioComparisonCompletionLabel({
       analysisLabel: "scenari",
       scenarioCount: signedTriadScenarioComparison?.scenarios.length ?? 0,
       error: signedTriadScenarioComparisonError
-    }));
+    });
+    setProvenanceScenario(request.scenarioId);
+    showMotifPanel = false;
+    showSignedTriadInGraph(request.triad, false, completionLabel);
   }
 
   function highlightTypedMotifNearMatch(match: TypedMotifNearMatch) {
     clearGraphNeighborhoodFocus();
     const nodeIds = Object.values(match.roles).map((role) => role.nodeId);
-    highlightedEdgeIds = new Set([
+    highlightedEdgeIds = mapSourceEdgeIdsToStructuralIdentities([
       ...match.supportingEdges.flatMap((edge) => edge.edgeIds),
       ...match.violatedAbsencePatterns.flatMap((pattern) => pattern.edgeIds)
-    ]);
+    ], data?.links ?? []);
     refreshLinkVisuals();
     cliqueNodes = new Set(nodeIds);
-    graph2DNodeAnnotations = Object.fromEntries(Object.entries(match.roles).map(([role, assignment]) => [
-      assignment.nodeId,
-      `Ruolo ${role}`
-    ]));
-    graph2DEdgeAnnotations = {};
+    const graph2DAnnotations = buildTypedMotifNearMatchGraph2DAnnotations(match);
+    graph2DNodeAnnotations = graph2DAnnotations.nodeAnnotations;
+    graph2DEdgeAnnotations = mapTypedMotifGraph2DEdgeAnnotations(graph2DAnnotations.edgeAnnotations);
     graph2DOverlayCompletionLabel = "";
     graph2DHypotheticalLinks = match.missingPatterns.flatMap((pattern) => {
       const source = match.roles[pattern.sourceRole]?.nodeId;
@@ -9792,9 +10617,15 @@
       }];
     });
     graph2DOverlayResultLabel = graph2DHypotheticalLinks.length
-      ? "Motivo incompleto · linee tratteggiate = relazioni mancanti"
-      : "Motivo quasi corrispondente · ruoli sui nodi";
-    graph2DOverlayCompletionLabel = "Ottimo lessicografico provato";
+      ? match.temporalEvidence
+        ? "Motivo temporale incompleto · linee tratteggiate = relazioni mancanti"
+        : "Motivo incompleto · linee tratteggiate = relazioni mancanti"
+      : match.temporalEvidence
+        ? match.temporalEvidence.semantics === "orderedByStart"
+          ? "Motivo temporale quasi corrispondente · inizi e ordine annotati"
+          : "Motivo temporale quasi corrispondente · istante esaminato annotato"
+        : "Motivo quasi corrispondente · ruoli sui nodi";
+    graph2DOverlayCompletionLabel = "Ottimo lessicografico provato · una soluzione tra eventuali pari merito";
     selectWitnessRoot(nodeIds);
     refreshNodeVisuals();
   }
@@ -9843,6 +10674,7 @@
     proposal: { totalCost: number; addedEdges?: Array<{ id: string; sourceNodeId: string; targetNodeId: string; edgeType?: string; cost?: number }>; path?: { edgeIdsByStep?: string[][] } };
     nodeIds: string[];
     title: string;
+    completionLabel?: string;
   }) {
     if (!request || !Array.isArray(request.nodeIds)) return;
     clearGraphNeighborhoodFocus();
@@ -9853,16 +10685,28 @@
     graph2DHypotheticalLinks = buildGraph2DHypotheticalLinks(analysisId, addedEdges, graphDirection);
     graph2DEdgeAnnotations = buildGraph2DHypotheticalEdgeAnnotations(analysisId, addedEdges);
     const pathEdgeIds = request.proposal?.path?.edgeIdsByStep?.flat() ?? [];
-    for (const edgeId of pathEdgeIds) {
-      graph2DEdgeAnnotations[edgeId] = { label: "Arco osservato del cammino", color: "#2563eb" };
+    const observedEvidenceEdgeIdentities = buildGraph2DCounterfactualEvidenceEdgeIdentities(
+      data?.links ?? [],
+      nodeIds,
+      request.proposal?.path ? pathEdgeIds : undefined
+    );
+    for (const edgeIdentity of observedEvidenceEdgeIdentities) {
+      graph2DEdgeAnnotations[edgeIdentity] = {
+        label: request.proposal?.path ? "Arco osservato del cammino" : "Arco osservato nel gruppo",
+        color: "#2563eb"
+      };
     }
     graph2DNodeAnnotations = Object.fromEntries(nodeIds.map((nodeId, index) => [
       nodeId,
       request.title.toLowerCase().includes("cammino") ? `Passo ${index + 1} del cammino` : "Nodo del testimone controfattuale"
     ]));
     graph2DOverlayResultLabel = `${request.title} · costo minimo ${request.proposal.totalCost}`;
-    graph2DOverlayCompletionLabel = "Ottimo di costo provato";
-    highlightedEdgeIds = new Set(pathEdgeIds);
+    graph2DOverlayCompletionLabel = request.completionLabel?.trim() || buildGraph2DOptimizationCompletionLabel({
+      optimizationProven: true,
+      hasSolution: true,
+      enumerateAllOptima: false
+    });
+    highlightedEdgeIds = observedEvidenceEdgeIdentities;
     cliqueNodes = new Set(nodeIds);
     selectWitnessRoot(nodeIds);
     refreshLinkVisuals();
@@ -9893,12 +10737,15 @@
   }
   async function runIntegrityRepair() {
     if (solverRunning || !clingoWorker || !integrityHasRun || integrityResults.length === 0) return;
+    lastGraph2DAnalysisKind = "integrityRepair";
     clearGraph2DOverlay();
     integrityRepairError = "";
+    integrityRepairOutcomeMessage = "";
     integrityRepairProposal = null;
     const blockingDiagnostic = graphDiagnostics.find((diagnostic) => diagnostic.severity === "error");
     if (blockingDiagnostic) {
       integrityRepairError = blockingDiagnostic.message;
+      persistCurrentAnalysisSession(false, true);
       return;
     }
 
@@ -9919,14 +10766,14 @@
           includeRawTemporalValues: edgeIntervalReplacements.length > 0
         });
       if (repairSuggestions?.nodeTypeReplacements?.length && !GRAPH_CONFIG.graphMapping?.node?.typeField) {
-        throw new TypeError("Le sostituzioni di tipo nodo richiedono graphMapping.node.typeField");
+        throw new TypeError("Per sostituire il tipo dei nodi, associa un campo al tipo nella mappatura dei dati.");
       }
       if (repairSuggestions?.edgeTypeReplacements?.length && !GRAPH_CONFIG.graphMapping?.edge?.typeField) {
-        throw new TypeError("Le sostituzioni di tipo arco richiedono graphMapping.edge.typeField");
+        throw new TypeError("Per sostituire il tipo degli archi, associa un campo al tipo nella mappatura dei dati.");
       }
       if (repairSuggestions?.edgeIntervalReplacements?.length &&
         (!GRAPH_CONFIG.graphMapping?.edge?.validity?.fromField || !GRAPH_CONFIG.graphMapping?.edge?.validity?.toField)) {
-        throw new TypeError("Le sostituzioni d'intervallo richiedono graphMapping.edge.validity.fromField e toField");
+        throw new TypeError("Per sostituire gli intervalli degli archi, associa i campi di inizio e fine validità.");
       }
       validateGraphIntegrityAttributeMappings(
         GRAPH_CONFIG.graphIntegrity as GraphIntegrityConstraints,
@@ -9963,7 +10810,7 @@
         return;
       }
       if (result?.Result === "UNSATISFIABLE") {
-        integrityRepairError = "Nessuna riparazione è possibile usando soltanto le azioni autorizzate e i vincoli attuali.";
+        integrityRepairOutcomeMessage = "Nessuna delle azioni autorizzate soddisfa tutti i vincoli d'integrità.";
         return;
       }
       if (result?.Result !== "OPTIMUM FOUND") {
@@ -9986,7 +10833,10 @@
         integrityRepairError = "Il solver non ha restituito una proposta di riparazione leggibile.";
       }
     } catch (error) {
-      integrityRepairError = error instanceof Error ? error.message : String(error);
+      integrityRepairError = getUserFacingConfigurationError(
+        error,
+        "La configurazione dei controlli o delle azioni di riparazione non è valida. Verifica campi, attributi e tipi nella mappatura dei dati."
+      );
     } finally {
       solverRunning = false;
       integrityRepairRunning = false;
@@ -9998,6 +10848,15 @@
   let destroyed = false;
 
   onMount(() => {
+    analysisViewportQuery = typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 900px)")
+      : null;
+    analysisViewportChangeHandler = () => {
+      compactAnalysisViewport = analysisViewportQuery?.matches === true;
+    };
+    analysisViewportChangeHandler();
+    analysisViewportQuery?.addEventListener("change", analysisViewportChangeHandler);
+
     if (!sessionRestored && GRAPH_CONFIG.features?.nodeLabelsVisibleByDefault !== undefined) {
       nodeLabelsVisible = GRAPH_CONFIG.features.nodeLabelsVisibleByDefault !== false;
     }
@@ -10078,6 +10937,7 @@
 
       graph3D.onNodeClick((node: any) => {
         showSuggestions = false;
+        activeSearchSuggestionIndex = -1;
         selectRoot(node.id);
       });
       graph3D.onNodeHover((node: any) => {
@@ -10122,6 +10982,9 @@
 
   onDestroy(() => {
     destroyed = true;
+    if (analysisViewportQuery && analysisViewportChangeHandler) {
+      analysisViewportQuery.removeEventListener("change", analysisViewportChangeHandler);
+    }
     if (motionPreferenceQuery && motionPreferenceChangeHandler) {
       motionPreferenceQuery.removeEventListener("change", motionPreferenceChangeHandler);
     }
@@ -10136,12 +10999,15 @@
   });
 </script>
 
+<svelte:window on:keydown={handleAnalysisPanelKeydown} />
+
 <div
   class:with-json-editor={JsonEditor && jsonEditorProps?.open}
   class:projection-controls-open={showProjectionControls}
   class:analysis-panel-open={Boolean(activeAnalysisPanel())}
-  class:timeline-enabled={timelineControlEnabled}
+  class:timeline-enabled={timelineControlEnabled && showTimelineControl}
   class="app-root"
+  use:isolateModalBackground
   style="
   --info-top: {UI.infoPanel.top}px;
 --info-right: {UI.infoPanel.right}px;
@@ -10177,8 +11043,8 @@
 --solver-width: {UI.solverPanel.width}px;
 --solver-max-height: {UI.solverPanel.maxHeight};
 --mobile-status-reserve: 48px;
---mobile-filter-timeline-reserve: {timelineControlEnabled ? "176px" : "0px"};
---desktop-timeline-reserve: {timelineControlEnabled ? "132px" : "0px"};
+--mobile-filter-timeline-reserve: {timelineControlEnabled && showTimelineControl ? "176px" : "0px"};
+--desktop-timeline-reserve: {timelineControlEnabled && showTimelineControl ? "132px" : "0px"};
 --solver-padding: {UI.solverPanel.padding}px;
 --solver-radius: {UI.solverPanel.borderRadius}px;
 --solver-bg: {UI.solverPanel.background};
@@ -10244,6 +11110,7 @@
   --body-bg: {UI.body.background};
 --body-color: {UI.body.textColor};
 --body-font: {UI.body.fontFamily};
+--graph-background: {GRAPH_CONFIG.graph.backgroundColor};
 
 --toolbar-bg: {UI.toolbar.background};
 --toolbar-z: {UI.toolbar.zIndex};
@@ -10296,7 +11163,7 @@
         {/each}
       </ul>
       {#if JsonEditor}
-        <button class="diagnostics-action" type="button" on:click={openDataPanel}>Apri Dati e mapping</button>
+        <button class="diagnostics-action" type="button" on:click={openDataPanel}>Apri Dati e mappatura</button>
       {/if}
     </div>
   {/if}
@@ -10315,33 +11182,36 @@
         {/each}
       </ul>
       {#if analysisTaskRows.some((row) => !row.available) && JsonEditor}
-        <button class="diagnostics-action" type="button" on:click={openDataPanel}>Apri Dati e mapping</button>
+        <button class="diagnostics-action" type="button" on:click={openDataPanel}>Apri Dati e mappatura</button>
       {/if}
-      <ul class="capability-list">
-        {#each capabilityRows as [key, label]}
-          {@const status = graphCapabilities[key]}
-          <li class:available={status?.available}>
-            <span>{label}: {status?.available ? "disponibile" : "non disponibile"}</span>
-            {#if !status?.available && status?.reason}
-              <small>{status.reason}</small>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      <div class="future-task-readiness">
-        <p>Motivi tipizzati: {typedMotifDataReadiness.available ? "campi necessari disponibili" : "serve mappare i campi indicati"}</p>
-        {#if !typedMotifDataReadiness.available}
-          <ul class="task-readiness">
-            {#each typedMotifDataReadiness.reasons as reason}<li>{reason}</li>{/each}
-          </ul>
-        {/if}
-        <p>Motivi temporali: {temporalMotifDataReadiness.available ? "campi necessari disponibili" : "serve mappare intervalli temporali validi"}</p>
-        {#if !temporalMotifDataReadiness.available}
-          <ul class="task-readiness">
-            {#each temporalMotifDataReadiness.reasons as reason}<li>{reason}</li>{/each}
-          </ul>
-        {/if}
-      </div>
+      <details class="capability-details">
+        <summary>Dettagli di campi e relazioni</summary>
+        <ul class="capability-list">
+          {#each capabilityRows as [key, label]}
+            {@const status = graphCapabilities[key]}
+            <li class:available={status?.available}>
+              <span>{label}: {status?.available ? "disponibile" : "non disponibile"}</span>
+              {#if !status?.available && status?.reason}
+                <small>{status.reason}</small>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        <div class="future-task-readiness">
+          <p>Motivi tipizzati: {typedMotifDataReadiness.available ? "campi necessari disponibili" : "serve mappare i campi indicati"}</p>
+          {#if !typedMotifDataReadiness.available}
+            <ul class="task-readiness">
+              {#each typedMotifDataReadiness.reasons as reason}<li>{reason}</li>{/each}
+            </ul>
+          {/if}
+          <p>Motivi temporali: {temporalMotifDataReadiness.available ? "campi necessari disponibili" : "serve mappare intervalli temporali validi"}</p>
+          {#if !temporalMotifDataReadiness.available}
+            <ul class="task-readiness">
+              {#each temporalMotifDataReadiness.reasons as reason}<li>{reason}</li>{/each}
+            </ul>
+          {/if}
+        </div>
+      </details>
     </div>
   </details>
 
@@ -10350,6 +11220,7 @@
       this={JsonEditor}
       bind:this={jsonEditorComponent}
       {...jsonEditorProps}
+      focusReturnTarget={jsonEditorFocusReturnTarget}
     />
   {/if}
   <div bind:this={container} class="graph"></div>
@@ -10357,9 +11228,9 @@
   {#if JsonEditor && (data?.nodes?.length ?? 0) === 0}
     <section class="empty-graph-state" aria-labelledby="empty-graph-title">
       <div class="empty-graph-card">
-        <p class="empty-graph-eyebrow">KLIQUEASP · ANALISI DI RETI</p>
+        <p class="empty-graph-eyebrow">KliqueASP · Analisi di rete</p>
         <h1 id="empty-graph-title">Apri una rete per iniziare</h1>
-        <p>Carica un dataset JSON o un progetto, controlla i campi riconosciuti e applica il grafo quando è pronto.</p>
+        <p>Carica i dati del grafo da un file JSON o apri un progetto; controlla i campi riconosciuti e applica la rete.</p>
         <div class="empty-graph-actions">
           <button type="button" class="empty-graph-primary" on:click={openDataPanel}>Carica i miei dati</button>
           <button type="button" on:click={openProjectPickerFromEmptyState}>Apri un progetto</button>
@@ -10367,7 +11238,7 @@
             <button type="button" class="empty-graph-example" on:click={() => jsonEditorProps.onReset()}>Prova un esempio</button>
           {/if}
         </div>
-        <small>Il mapping rapido riconosce gli ID e gli estremi più comuni. Le opzioni avanzate restano disponibili nel pannello Dati.</small>
+        <small>La mappatura rapida riconosce gli ID e gli estremi più comuni. Le opzioni avanzate restano disponibili nel pannello Dati.</small>
       </div>
     </section>
   {/if}
@@ -10376,65 +11247,93 @@
     <div class="graph-visualization-note" role="status" aria-live="polite">
       {#if neighborhoodFocusInfo}
         {#if neighborhoodFocusInfo.nodeCount >= (data?.nodes?.length ?? 0)}
-          Il focus include tutti i {neighborhoodFocusInfo.nodeCount} nodi filtrati: nessun nodo escluso. {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee. Analisi ed export usano l'intera proiezione filtrata.
+          Il focus include tutti i {neighborhoodFocusInfo.nodeCount} nodi filtrati: nessun nodo escluso. {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee. Analisi ed esportazioni usano l'intera proiezione filtrata.
         {:else}
-          Vicinato isolato: {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee, su {data?.links?.length ?? 0} record filtrati. Analisi ed export usano l'intera proiezione filtrata.
+          Vicinato isolato: {neighborhoodFocusInfo.recordCount} record in {neighborhoodFocusInfo.renderedLinkCount} linee, su {data?.links?.length ?? 0} record filtrati. Analisi ed esportazioni usano l'intera proiezione filtrata.
         {/if}
       {:else if aggregateParallelEdgesForDisplay}
         Vista aggregata: {data?.links?.length ?? 0} record di contatto in {graphDisplayLinkCount} linee. Le analisi mantengono i record distinti; passa su una linea per vedere gli ID.
-      {:else}
+      {:else if edgeTypeColorsConfigured}
         I colori degli archi seguono i tipi di relazione dichiarati nella legenda.
       {/if}
       {#if graphEdgeTypeLegend.length > 0}
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex (the scrollable legend must accept keyboard focus so users can scroll it) -->
-        <ul class="graph-edge-type-legend" aria-label="Legenda dei tipi di arco" tabindex="0">
-          {#each visibleGraphEdgeTypeEntries as entry (entry.type)}
-            <li>
-              <span class="graph-edge-type-swatch" style={`background-color: ${entry.color};`}></span>
-              <span>{entry.type}</span>
-            </li>
-          {/each}
-        </ul>
-        <ResultListPager
-          total={graphEdgeTypeLegend.length}
-          visible={visibleGraphEdgeTypeEntries.length}
-          pageSize={GRAPH_EDGE_TYPE_LEGEND_PAGE_SIZE}
-          label="tipi di arco"
-          showMore={() => visibleGraphEdgeTypeLimit += GRAPH_EDGE_TYPE_LEGEND_PAGE_SIZE}
-        />
+        <div class="graph-legend-section" role="group" aria-label="Tipi di arco">
+          <p class="graph-legend-heading">Tipi di arco</p>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (the scrollable legend must accept keyboard focus so users can scroll it) -->
+          <ul class="graph-edge-type-legend" aria-label="Legenda dei tipi di arco" tabindex="0">
+            {#each visibleGraphEdgeTypeEntries as entry (entry.type)}
+              <li>
+                <span class="graph-edge-type-swatch" style={`background-color: ${entry.color};`}></span>
+                <span>{entry.type}</span>
+              </li>
+            {/each}
+          </ul>
+          <ResultListPager
+            total={graphEdgeTypeLegend.length}
+            visible={visibleGraphEdgeTypeEntries.length}
+            pageSize={GRAPH_EDGE_TYPE_LEGEND_PAGE_SIZE}
+            label="tipi di arco"
+            showMore={() => visibleGraphEdgeTypeLimit += GRAPH_EDGE_TYPE_LEGEND_PAGE_SIZE}
+          />
+        </div>
       {/if}
     </div>
   {/if}
 
+{#if solverRunning}
+  <span id="analysis-in-progress-status" class="visually-hidden-analysis-status" role="status" aria-live="polite" aria-atomic="true">
+    È in corso un calcolo. Attendi il completamento prima di modificare i criteri o l'intervallo temporale, avviarne un altro o cancellare i risultati.
+  </span>
+{/if}
+
 <!-- TOOLBAR -->
 <div bind:this={toolbarElement} class="toolbar">
   {#if JsonEditor}
-    <button class="toolbar-button" type="button" on:click={openDataPanel} title="Carica dati, apri un progetto o modifica il mapping">
+    <span class="project-name-control desktop-toolbar-control" title={jsonEditorProps?.projectName?.trim() || "Progetto senza nome"}>
+      <span class="project-name-caption">{jsonEditorProps?.projectName?.trim() || "Progetto senza nome"}</span>
+    </span>
+    <button class="toolbar-button desktop-toolbar-control" type="button" on:click={openDataPanel} title="Carica dati, apri un progetto o modifica la mappatura">
       Dati
     </button>
-    {#if jsonEditorProps?.projectDirty}
-      <span class="toolbar-export-status" role="status" title="La sessione è salvata nel browser. Esporta il progetto per creare un file riapribile.">Modifiche da esportare</span>
-    {/if}
+  {:else if workspaceNavigationHref}
+    <a class="toolbar-button desktop-toolbar-control workspace-toolbar-action" href={workspaceNavigationHref} title="Apri l’area per analizzare i tuoi dati">I miei dati</a>
   {/if}
+
+  <details class="toolbar-menu examples-toolbar-menu desktop-toolbar-control">
+    <summary>Esempi <span class="menu-chevron" aria-hidden="true"></span></summary>
+    <div class="menu-content" role="group" aria-label="Apri un esempio in una nuova scheda">
+      {#each graphExampleCatalog as example (example.id)}
+        <a class="toolbar-example-link" href={example.href} target="_blank" rel="noopener">
+          <strong>{example.title}</strong>
+          <small>{example.description}</small>
+        </a>
+      {/each}
+    </div>
+  </details>
 
   {#if solverEnabled}
     <details class="toolbar-menu" bind:this={analysisMenuElement}>
-      <summary aria-labelledby="analysis-menu-label"><span id="analysis-menu-label">Analisi</span> <span class="menu-chevron" aria-hidden="true">⌄</span></summary>
+      <summary aria-labelledby="analysis-menu-label"><span id="analysis-menu-label">Analisi</span> <span class="menu-chevron" aria-hidden="true"></span></summary>
       <div class="menu-content" role="group" aria-label="Scegli un'analisi">
+        {#if solverRunning}
+          <p class="menu-readiness blocked">Calcolo in corso. Le altre analisi saranno disponibili al termine.</p>
+        {/if}
         <div class="menu-group">
           <span>Gruppi densi</span>
-          <button type="button" class="menu-primary" aria-labelledby="analysis-clique-label" disabled={solverRunning || clingoWorkerStatus === "initializing" || (clingoWorkerStatus !== "error" && !cliqueDataReadiness.available)} on:click={launchMaximumCliqueOrRestart}>
-            <span id="analysis-clique-label">{solverRunning ? "Calcolo in corso…" : clingoWorkerStatus === "error" ? "Riavvia analisi" : "Clique massima"}</span>
+          <button type="button" class="menu-primary" aria-labelledby="analysis-clique-label" aria-describedby={solverRunning ? "analysis-in-progress-status" : cliqueAnalysisMenuBlocker ? "clique-analysis-menu-blocker" : undefined} disabled={solverRunning || clingoWorkerStatus === "initializing" || (clingoWorkerStatus !== "error" && !cliqueDataReadiness.available)} on:click={launchMaximumCliqueOrRestart}>
+            <span id="analysis-clique-label">{solverRunning ? "Calcolo in corso…" : clingoWorkerStatus === "error" ? "Riavvia analisi" : activeCliqueTaskLabel}</span>
           </button>
+          {#if cliqueAnalysisMenuBlocker}
+            <p id="clique-analysis-menu-blocker" class="menu-requirement" role="status" aria-live="polite">{cliqueAnalysisMenuBlocker}</p>
+          {/if}
           {#if !cliqueDataReadiness.available && clingoWorkerStatus !== "error"}
-            <p class="menu-requirement">{cliqueDataReadiness.reasons.join(" ")}</p>
             {#if JsonEditor}
-              <button type="button" class="menu-data-action" aria-label="Apri Dati e mapping" on:click={openDataPanel}>Apri Dati e mapping</button>
+              <button type="button" class="menu-data-action" aria-label="Apri Dati e configurazione" on:click={openDataPanel}>Apri Dati e configurazione</button>
             {/if}
-          {:else if clingoWorkerStatus !== "error"}
+          {:else if clingoWorkerStatus === "ready"}
             <p class="menu-readiness available">Prerequisiti disponibili</p>
           {/if}
-          <button type="button" aria-label="k-plex, k-core e struttura…" disabled={solverRunning} on:click={() => openAnalysisPanel("structural")}>
+          <button type="button" aria-label="k-plex, k-core e struttura…" aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined} disabled={solverRunning} on:click={() => openAnalysisPanel("structural")}>
             k-plex, k-core e struttura…
           </button>
           <p class="menu-readiness" class:available={structuralMenuReadiness.blockedCount === 0} class:blocked={structuralMenuReadiness.blockedCount > 0}>
@@ -10451,14 +11350,14 @@
               </ul>
             </details>
             {#if JsonEditor}
-              <button type="button" class="menu-data-action" aria-label="Apri Dati e mapping" on:click={openDataPanel}>Apri Dati e mapping</button>
+              <button type="button" class="menu-data-action" aria-label="Apri Dati e mappatura" on:click={openDataPanel}>Apri Dati e mappatura</button>
             {/if}
           {/if}
         </div>
         {#if motifTemplates.length > 0 || signedTriadConfig || contextualCliqueConfig}
           <div class="menu-group">
             <span>Motivi e relazioni</span>
-            <button type="button" aria-label="Motivi, triadi e gruppi contestuali…" disabled={solverRunning} on:click={() => openAnalysisPanel("motif")}>
+            <button type="button" aria-label="Motivi, triadi e gruppi contestuali…" aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined} disabled={solverRunning} on:click={() => openAnalysisPanel("motif")}>
               Motivi, triadi e gruppi contestuali…
             </button>
             <p class="menu-readiness" class:available={motifMenuReadiness.blockedCount === 0} class:blocked={motifMenuReadiness.blockedCount > 0}>
@@ -10475,7 +11374,7 @@
                 </ul>
               </details>
               {#if JsonEditor}
-              <button type="button" class="menu-data-action" aria-label="Apri Dati e mapping" on:click={openDataPanel}>Apri Dati e mapping</button>
+              <button type="button" class="menu-data-action" aria-label="Apri Dati e mappatura" on:click={openDataPanel}>Apri Dati e mappatura</button>
               {/if}
             {/if}
           </div>
@@ -10483,7 +11382,7 @@
         {#if integrityConfigured}
           <div class="menu-group">
             <span>Qualità dei dati</span>
-            <button type="button" aria-label="Verifica e riparazione…" disabled={solverRunning} on:click={() => openAnalysisPanel("integrity")}>
+            <button type="button" aria-label="Verifica e riparazione…" aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined} disabled={solverRunning} on:click={() => openAnalysisPanel("integrity")}>
               Verifica e riparazione…
             </button>
             <p class="menu-readiness" class:available={integrityDataReadiness.available} class:blocked={!integrityDataReadiness.available}>
@@ -10501,7 +11400,7 @@
                 <ul>{#each integrityRepairDataReadiness.reasons as reason}<li><span>{reason}</span></li>{/each}</ul>
               </details>
               {#if JsonEditor}
-              <button type="button" class="menu-data-action" aria-label="Apri Dati e mapping" on:click={openDataPanel}>Apri Dati e mapping</button>
+              <button type="button" class="menu-data-action" aria-label="Apri Dati e mappatura" on:click={openDataPanel}>Apri Dati e mappatura</button>
               {/if}
             {/if}
           </div>
@@ -10512,6 +11411,12 @@
             <button
               type="button"
               aria-label={solverRunning && lastGraph2DAnalysisKind === "provenanceClique" ? "Confronto in corso…" : "Confronta clique massime"}
+              aria-describedby={[
+                solverRunning ? "analysis-in-progress-status" : "",
+                provenanceCliqueComparisonBlocker && provenanceScenarios.length > 1
+                  ? "provenance-clique-comparison-menu-blocker"
+                  : provenanceScenarios.length < 2 ? "provenance-clique-comparison-menu-readiness" : ""
+              ].filter(Boolean).join(" ") || undefined}
               disabled={solverRunning || provenanceCliqueComparisonBlocker !== ""}
               class:running={solverRunning && lastGraph2DAnalysisKind === "provenanceClique"}
               on:click={runProvenanceScenarioCliqueComparison}
@@ -10519,9 +11424,9 @@
               {solverRunning && lastGraph2DAnalysisKind === "provenanceClique" ? "Confronto in corso…" : "Confronta clique massime"}
             </button>
             {#if provenanceCliqueComparisonBlocker && provenanceScenarios.length > 1}
-              <p class="menu-requirement">{provenanceCliqueComparisonBlocker}</p>
+              <p id="provenance-clique-comparison-menu-blocker" class="menu-requirement">{provenanceCliqueComparisonBlocker}</p>
             {/if}
-            <p class="menu-readiness" class:available={provenanceScenarios.length > 1} class:blocked={provenanceScenarios.length < 2}>
+            <p id="provenance-clique-comparison-menu-readiness" class="menu-readiness" class:available={provenanceScenarios.length > 1} class:blocked={provenanceScenarios.length < 2}>
               {provenanceScenarios.length} scenari dichiarati · {provenanceScenarios.length > 1 ? "confronti strutturali pronti" : "aggiungi un secondo scenario per confrontare"}
             </p>
             <p class="menu-readiness" class:available={provenanceScenarioConfig?.worldAssumption === "finite-exhaustive-worlds"} class:blocked={provenanceScenarioConfig?.worldAssumption !== "finite-exhaustive-worlds"}>
@@ -10541,12 +11446,12 @@
       </div>
     </details>
     {#if clingoWorkerStatus === "error"}
-      <span class="solver-worker-status" role="status">Motore di analisi non disponibile</span>
+      <span class="solver-worker-status desktop-toolbar-control" role="status">Motore di analisi non disponibile</span>
     {/if}
   {/if}
 
   {#if filtersEnabled || provenanceScenarios.length > 0}
-    <button class="toolbar-button" class:active={showProjectionControls} type="button" aria-expanded={showProjectionControls} on:click={() => { closeToolbarMenus(); showProjectionControls = !showProjectionControls; }}>
+    <button class="toolbar-button projection-action desktop-toolbar-control" class:active={showProjectionControls} type="button" aria-expanded={showProjectionControls} on:click={toggleProjectionControlsFromToolbar}>
       Proiezione{#if activeProjectionLabels.length}<span class="active-count">{activeProjectionLabels.length}</span>{/if}
     </button>
   {/if}
@@ -10554,56 +11459,78 @@
   <div class="search-wrap">
     <input
       type="text"
-      aria-label="Cerca un nodo"
-      placeholder="Cerca un nodo…"
+      aria-label="Cerca un nodo per nome o ID"
+      placeholder="Nome o ID del nodo…"
       bind:value={query}
       on:input={() => {
         searchMessage = "";
         rankCandidates(query);
       }}
-      on:keydown={(e) => {
-        if (e.key === "Enter") {
-          showSuggestions = false;
-          searchNode(query);
-        }
-        if (e.key === "Escape") showSuggestions = false;
+      role="combobox"
+      aria-autocomplete="list"
+      aria-expanded={showSuggestions}
+      aria-controls="graph-node-search-options"
+      aria-activedescendant={showSuggestions ? getGraphSearchSuggestionId(activeSearchSuggestionIndex) : undefined}
+      aria-describedby="graph-node-search-keyboard-hint"
+      on:keydown={handleGraphNodeSearchKeydown}
+      on:focus={() => {
+        if (suggestions.length > 0 && query.trim().length >= 2) showSuggestions = true;
       }}
-      on:focus={() => suggestions.length > 0 && query.trim().length >= 2 && (showSuggestions = true)}
-      on:blur={() => setTimeout(() => (showSuggestions = false), 120)}
+      on:blur={() => setTimeout(() => {
+        showSuggestions = false;
+        activeSearchSuggestionIndex = -1;
+      }, 120)}
     />
 
-    {#if showSuggestions}
-      <div class="autocomplete">
-        {#each suggestions as s (s.id)}
+    <span id="graph-node-search-keyboard-hint" class="visually-hidden-search-hint">Cerca per nome o ID. Digita almeno due caratteri; usa le frecce per scegliere un nodo e Invio per selezionarlo.</span>
+    <p class="visually-hidden-search-hint" role="status" aria-live="polite" aria-atomic="true">
+      {#if showSuggestions}{suggestions.length} {suggestions.length === 1 ? "nodo suggerito" : "nodi suggeriti"}. Usa le frecce per scorrere l'elenco.{/if}
+    </p>
+    <div id="graph-node-search-options" class="autocomplete" role="listbox" aria-label="Suggerimenti dei nodi" hidden={!showSuggestions}>
+        {#if showSuggestions}
+        {#each suggestions as s, index (s.id)}
           <button
             type="button"
+            id={getGraphSearchSuggestionId(index)}
+            role="option"
+            aria-selected={activeSearchSuggestionIndex === index}
+            tabindex="-1"
             class="autocomplete-item"
+            class:active={activeSearchSuggestionIndex === index}
             on:mousedown|preventDefault
             on:click={() => chooseSuggestion(s)}
-          >{s.label}</button>
+          >{getGraphSearchSuggestionLabel(s)}</button>
         {/each}
-      </div>
-    {:else if searchMessage}
+        {/if}
+    </div>
+    {#if !showSuggestions && searchMessage}
       <div class="search-message" role="status">{searchMessage}</div>
     {/if}
   </div>
 
-  <button class="toolbar-button search-action" type="button" on:click={() => { closeToolbarMenus(); showSuggestions = false; searchNode(query); }}>Cerca</button>
+  <button class="toolbar-button search-action" type="button" aria-label="Cerca" on:click={() => { closeToolbarMenus(); showSuggestions = false; activeSearchSuggestionIndex = -1; searchNode(query); }}><span class="search-action-label">Cerca</span><svg class="search-action-icon" aria-hidden="true" viewBox="0 0 20 20" focusable="false"><circle cx="8.7" cy="8.7" r="5.7" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="m13 13 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg></button>
 
-  <details class="toolbar-menu" bind:this={viewMenuElement}>
-    <summary>Vista <span class="menu-chevron" aria-hidden="true">⌄</span></summary>
+  <details class="toolbar-menu desktop-toolbar-control" bind:this={viewMenuElement}>
+    <summary>Vista <span class="menu-chevron" aria-hidden="true"></span></summary>
     <div class="menu-content view-menu" role="group" aria-label="Controlli della vista">
+      {#if solverRunning && analysisResultsAvailable}
+        <p class="menu-readiness blocked">Attendi il termine del calcolo prima di cancellare i risultati.</p>
+      {/if}
       {#if labelVisibilityToggleEnabled}
         <button type="button" on:click={() => { toggleNodeLabels(); closeToolbarMenus(); }}>{nodeLabelsVisible ? "Nascondi etichette" : "Mostra etichette"}</button>
-        <p class="label-layout-hint">I nomi vicini si alternano per evitare sovrapposizioni; avvicina la vista o seleziona un nodo per leggerne altri.</p>
+      {/if}
+      {#if timelineControlEnabled}
+        <button type="button" aria-pressed={showTimelineControl} on:click={() => { showTimelineControl = !showTimelineControl; closeToolbarMenus(); }}>
+          {showTimelineControl ? "Nascondi timeline" : `Mostra timeline · ${currentTimelineLabel}`}
+        </button>
       {/if}
       {#if fitGraphToViewEnabled}
         <button type="button" on:click={() => { fitGraphToView(); closeToolbarMenus(); }}>Adatta alla rete</button>
       {/if}
       <div class="zoom-menu-row" aria-label="Zoom">
-        <button type="button" aria-label="Riduci zoom" on:click={() => { zoomOut(); closeToolbarMenus(); }}>−</button>
+        <button type="button" aria-label="Riduci zoom" title="Riduci zoom" on:click={() => { zoomOut(); closeToolbarMenus(); }}>−</button>
         <span>Zoom</span>
-        <button type="button" aria-label="Aumenta zoom" on:click={() => { zoomIn(); closeToolbarMenus(); }}>+</button>
+        <button type="button" aria-label="Aumenta zoom" title="Aumenta zoom" on:click={() => { zoomIn(); closeToolbarMenus(); }}>+</button>
       </div>
       {#if cliqueNodes.size || highlightedEdgeIds.size}
         <button type="button" on:click={() => { clearClique(); closeToolbarMenus(); }}>Rimuovi evidenziazione</button>
@@ -10611,21 +11538,152 @@
       {#if analysisResultsAvailable}
         <button
           type="button"
+          aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
           disabled={solverRunning}
           title="Cancella i risultati correnti e mantiene rete, filtri, vista e cronologia."
           on:click={clearAnalysisResultsFromToolbar}
         >Cancella risultati correnti</button>
       {/if}
       <button type="button" on:click={() => { resetView(); closeToolbarMenus(); }}>Reimposta filtri e vista</button>
+      {#if history.length > 0 || analysisArchiveEntries.length > 0}
+        <div class="menu-group">
+          <span>Cronologia</span>
+          <button type="button" aria-expanded={showHistoryPanel} aria-controls="history-panel" on:click={toggleHistoryPanel}>
+            {showHistoryPanel ? "Nascondi cronologia" : "Mostra cronologia"}
+          </button>
+          {#if history.length > 0}
+            <button type="button" on:click={clearHistoryFromViewMenu}>Svuota cronologia</button>
+          {/if}
+        </div>
+      {/if}
     </div>
   </details>
 
-  <button class="toolbar-button export-action" type="button" on:click={() => { closeToolbarMenus(); showGraph2DExportPanel = true; }}>Esporta 2D</button>
+  {#if (data?.nodes?.length ?? 0) > 0}
+    <details class="toolbar-menu graph-node-directory node-directory-menu desktop-toolbar-control">
+      <summary>Nodi · {graphNodeDirectoryNodes.length}</summary>
+      <div class="menu-content node-directory-content" role="group" aria-label="Elenco dei nodi">
+        <GraphNodeDirectory
+          nodes={graphNodeDirectoryNodes}
+          selectedNodeId={selectedId}
+          onSelect={selectGraphDirectoryNode}
+        />
+      </div>
+    </details>
+  {/if}
+
+  <button class="toolbar-button export-action desktop-toolbar-control" class:result-ready={analysisResultsAvailable} type="button" aria-label={analysisResultsAvailable ? "Esporta il grafo 2D con il risultato corrente" : "Esporta la proiezione del grafo in 2D"} title={analysisResultsAvailable ? "Esporta il grafo 2D con il risultato corrente." : "Esporta la proiezione corrente del grafo in 2D."} on:click={() => { closeToolbarMenus(); showGraph2DExportPanel = true; }}>Esporta 2D</button>
+
+  <details class="toolbar-menu mobile-toolbar-more" bind:this={mobileMoreMenuElement}>
+    <summary aria-label="Altre azioni">Altro <span class="menu-chevron" aria-hidden="true"></span></summary>
+    <div class="menu-content mobile-more-menu" role="group" aria-label="Altre azioni">
+      {#if workspaceNavigationHref}
+        <a class="workspace-route-action" href={workspaceNavigationHref}>Analizza i tuoi dati</a>
+      {/if}
+      <details class="toolbar-example-submenu">
+        <summary>Esempi disponibili · {graphExampleCatalog.length}</summary>
+        <div class="toolbar-example-list">
+          {#each graphExampleCatalog as example (example.id)}
+            <a class="toolbar-example-link" href={example.href} target="_blank" rel="noopener">
+              <strong>{example.title}</strong>
+              <small>{example.description}</small>
+            </a>
+          {/each}
+        </div>
+      </details>
+      {#if solverRunning && analysisResultsAvailable}
+        <p class="menu-readiness blocked">Attendi il termine del calcolo prima di cancellare i risultati.</p>
+      {/if}
+      {#if JsonEditor}
+        <span class="mobile-project-name" title={jsonEditorProps?.projectName?.trim() || "Progetto senza nome"}>Progetto · {jsonEditorProps?.projectName?.trim() || "Progetto senza nome"}</span>
+        <button type="button" on:click={openDataPanelFromMobileMenu}>Dati e mappatura</button>
+      {/if}
+      {#if filtersEnabled || provenanceScenarios.length > 0}
+        <button type="button" aria-expanded={showProjectionControls} class:active={showProjectionControls} on:click={toggleProjectionControlsFromToolbar}>
+          Proiezione{#if activeProjectionLabels.length}<span class="active-count">{activeProjectionLabels.length}</span>{/if}
+        </button>
+      {/if}
+      <details class="toolbar-menu mobile-view-menu" bind:this={mobileViewMenuElement}>
+        <summary>Vista</summary>
+        <div class="menu-content view-menu" role="group" aria-label="Controlli della vista">
+          {#if labelVisibilityToggleEnabled}
+            <button type="button" on:click={() => { toggleNodeLabels(); closeToolbarMenusAndRestoreFocus(); }}>{nodeLabelsVisible ? "Nascondi etichette" : "Mostra etichette"}</button>
+          {/if}
+          {#if timelineControlEnabled}
+            <button type="button" aria-pressed={showTimelineControl} on:click={() => { showTimelineControl = !showTimelineControl; closeToolbarMenusAndRestoreFocus(); }}>
+              {showTimelineControl ? "Nascondi timeline" : `Mostra timeline · ${currentTimelineLabel}`}
+            </button>
+          {/if}
+          {#if fitGraphToViewEnabled}
+            <button type="button" on:click={() => { fitGraphToView(); closeToolbarMenusAndRestoreFocus(); }}>Adatta alla rete</button>
+          {/if}
+          <div class="zoom-menu-row" aria-label="Zoom">
+            <button type="button" aria-label="Riduci zoom" title="Riduci zoom" on:click={() => { zoomOut(); closeToolbarMenusAndRestoreFocus(); }}>−</button>
+            <span>Zoom</span>
+            <button type="button" aria-label="Aumenta zoom" title="Aumenta zoom" on:click={() => { zoomIn(); closeToolbarMenusAndRestoreFocus(); }}>+</button>
+          </div>
+          {#if cliqueNodes.size || highlightedEdgeIds.size}
+            <button type="button" on:click={() => { clearClique(); closeToolbarMenusAndRestoreFocus(); }}>Rimuovi evidenziazione</button>
+          {/if}
+          {#if analysisResultsAvailable}
+            <button
+              type="button"
+              aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+              disabled={solverRunning}
+              title="Cancella i risultati correnti e mantiene rete, filtri, vista e cronologia."
+              on:click={clearAnalysisResultsFromToolbar}
+            >Cancella risultati correnti</button>
+          {/if}
+          <button type="button" on:click={() => { resetView(); closeToolbarMenusAndRestoreFocus(); }}>Reimposta filtri e vista</button>
+          {#if history.length > 0 || analysisArchiveEntries.length > 0}
+            <div class="menu-group">
+              <span>Cronologia</span>
+              <button type="button" aria-expanded={showHistoryPanel} aria-controls="history-panel" on:click={toggleHistoryPanel}>
+                {showHistoryPanel ? "Nascondi cronologia" : "Mostra cronologia"}
+              </button>
+              {#if history.length > 0}
+                <button type="button" on:click={clearHistoryFromViewMenu}>Svuota cronologia</button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </details>
+      {#if (data?.nodes?.length ?? 0) > 0}
+        <details class="graph-node-directory mobile-node-directory">
+          <summary>Nodi · {graphNodeDirectoryNodes.length}</summary>
+          <GraphNodeDirectory
+            nodes={graphNodeDirectoryNodes}
+            selectedNodeId={selectedId}
+            onSelect={(nodeId) => { selectGraphDirectoryNode(nodeId); closeToolbarMenusAndRestoreFocus(); }}
+            searchInputId="mobile-graph-node-directory-search"
+          />
+        </details>
+      {/if}
+      {#if clingoWorkerStatus === "error"}
+        <span class="solver-worker-status mobile-worker-status" role="status">Motore di analisi non disponibile</span>
+      {/if}
+      <button class="export-action" class:result-ready={analysisResultsAvailable} type="button" aria-label={analysisResultsAvailable ? "Esporta il grafo 2D con il risultato corrente" : "Esporta la proiezione del grafo in 2D"} title={analysisResultsAvailable ? "Esporta il grafo 2D con il risultato corrente." : "Esporta la proiezione corrente del grafo in 2D."} on:click={openGraph2DExportFromMobileMenu}>Esporta 2D</button>
+    </div>
+  </details>
 </div>
 
 <div class="graph-status-bar" role="status" aria-live="polite">
   <span><strong>{data?.nodes?.length ?? 0}</strong> nodi</span>
   <span><strong>{data?.links?.length ?? 0}</strong> archi</span>
+  {#if graphNodeTypeSummary.length > 0}
+    <span class="node-type-summary" aria-label={`Tipi di nodo: ${graphNodeTypeSummary.map((entry) => `${entry.label}, ${entry.count}`).join("; ")}`}>
+      {#each graphNodeTypeSummary.slice(0, 3) as entry (entry.type)}
+        <span class="node-type-chip" title={`${entry.label}: ${entry.count} nodi`}>
+          <i aria-hidden="true" style:background-color={graphNodeTypeLegend.find((legend) => legend.type === entry.type)?.color ?? "#94a3b8"}></i>
+          <span>{entry.label}</span> <strong>{entry.count}</strong>
+        </span>
+      {/each}
+      {#if graphNodeTypeSummary.length > 3}<span class="node-type-overflow">+{graphNodeTypeSummary.length - 3} tipi</span>{/if}
+    </span>
+  {/if}
+  {#if timelineControlEnabled && !showTimelineControl}
+    <span class="timeline-collapsed-state">Timeline nascosta · periodo {currentTimelineLabel}</span>
+  {/if}
   {#if activeProjectionLabels.length}
     <span class="projection-state"><span class="status-dot"></span>Proiezione · {activeProjectionLabels.join(", ")}</span>
   {:else}
@@ -10644,18 +11702,59 @@
 
     {#if typeFiltersEnabled}
       <div class="filter-section">
-        <span class="filter-title">Tipi di nodo</span>
-        {#each availableTypes as type}
-          <label>
-            <input
-              type="checkbox"
-              checked={selectedTypes.has(type)}
+        <div class="filter-section-heading">
+          <span class="filter-title">Tipi di nodo</span>
+          {#if selectedTypes.size > 0}
+            <button
+              class="filter-reset"
+              type="button"
               disabled={solverRunning}
-              on:change={(e) => toggleTypeFilter(type, (e.currentTarget as HTMLInputElement).checked)}
+              aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+              on:click={clearTypeFilters}
+            >Tutti</button>
+          {/if}
+        </div>
+        {#if availableTypes.length > 0}
+          <label class="group-filter-search-label">
+            <input
+              class="group-filter-search"
+              type="search"
+              bind:value={typeFilterSearch}
+              aria-label="Cerca un tipo di nodo nel filtro della proiezione"
+              placeholder="Cerca tipo…"
+              disabled={solverRunning}
+              aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
             />
-            {type}
           </label>
-        {/each}
+          <div class="group-filter-list">
+            {#each visibleTypeFilters as type (type)}
+              <label class="type-filter-option">
+                <input
+                  type="checkbox"
+                  checked={selectedTypes.has(type)}
+                  disabled={solverRunning}
+                  aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+                  on:change={(e) => toggleTypeFilter(type, (e.currentTarget as HTMLInputElement).checked)}
+                />
+                <span>{type}</span>
+                <small>{availableTypeCounts[type] ?? 0}</small>
+              </label>
+            {/each}
+            {#if matchingTypeFilters.length === 0}
+              <small>Nessun tipo corrisponde alla ricerca.</small>
+            {/if}
+          </div>
+          <ResultListPager
+            total={matchingTypeFilters.length}
+            visible={visibleTypeFilters.length}
+            pageSize={typeFilterPageSize}
+            label="tipi disponibili"
+            showMore={() => visibleTypeFilterLimit += typeFilterPageSize}
+          />
+          <small>Nessuna selezione include tutti i tipi; seleziona uno o più tipi per restringere il grafo.</small>
+        {:else}
+          <small>Nessun tipo di nodo disponibile nel grafo.</small>
+        {/if}
       </div>
     {/if}
 
@@ -10671,6 +11770,7 @@
               aria-label="Cerca un gruppo nel filtro della proiezione"
               placeholder="Cerca gruppo…"
               disabled={solverRunning}
+              aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
             />
           </label>
           <div class="group-filter-list">
@@ -10680,6 +11780,7 @@
                   type="checkbox"
                   checked={selectedGroupsFilter.has(group)}
                   disabled={solverRunning}
+                  aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
                   on:change={(e) => toggleGroupFilter(group, (e.currentTarget as HTMLInputElement).checked)}
                 />
                 {group}
@@ -10701,6 +11802,43 @@
         {/if}
       </div>
     {/if}
+
+    <div class="filter-section degree-filter-section">
+      <span class="filter-title">Grado dei nodi</span>
+      <label>
+        <input
+          type="checkbox"
+          checked={nodeDegreeFilters.excludeIsolated}
+          disabled={solverRunning}
+          aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+          on:change={(event) => setNodeDegreeFilter("excludeIsolated", (event.currentTarget as HTMLInputElement).checked)}
+        />
+        Escludi nodi isolati
+      </label>
+      {#if graphDirection === "directed"}
+        <label>
+          <input
+            type="checkbox"
+            checked={nodeDegreeFilters.excludeWithoutIncoming}
+            disabled={solverRunning}
+            aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+            on:change={(event) => setNodeDegreeFilter("excludeWithoutIncoming", (event.currentTarget as HTMLInputElement).checked)}
+          />
+          Escludi nodi senza archi entranti
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={nodeDegreeFilters.excludeWithoutOutgoing}
+            disabled={solverRunning}
+            aria-describedby={solverRunning ? "analysis-in-progress-status" : undefined}
+            on:change={(event) => setNodeDegreeFilter("excludeWithoutOutgoing", (event.currentTarget as HTMLInputElement).checked)}
+          />
+          Escludi nodi senza archi uscenti
+        </label>
+      {/if}
+      <small>Il grado è misurato dopo gli altri filtri e prima di queste esclusioni, che si combinano tra loro.</small>
+    </div>
 
     {#if graphCapabilities.edgeConfidence?.available}
       <div class="filter-section confidence-filter">
@@ -10776,14 +11914,25 @@
             type="button"
             class="provenance-analysis-run"
             class:running={solverRunning}
-            disabled={solverRunning || clingoWorkerStatus !== "ready" || graphDirection === "directed" || !originalData?.nodes?.length}
+            aria-describedby={[
+              solverRunning ? "analysis-in-progress-status" : "",
+              provenanceCliqueComparisonBlocker ? "provenance-clique-comparison-blocker" : ""
+            ].filter(Boolean).join(" ") || undefined}
+            disabled={solverRunning || provenanceCliqueComparisonBlocker !== ""}
             on:click={runProvenanceScenarioCliqueComparison}
           >
             {solverRunning && lastGraph2DAnalysisKind === "provenanceClique" ? "Confronto in corso…" : "Confronta clique massime"}
           </button>
-          <small>
-            Confronta la clique massima in ogni scenario usando la stessa finestra temporale, gli stessi filtri e la soglia di confidenza. Il limite di calcolo è condiviso; se il tempo scade, il confronto si interrompe senza mostrare risultati parziali.
-          </small>
+          {#if provenanceCliqueComparisonBlocker}
+            <small id="provenance-clique-comparison-blocker" class="menu-requirement" role="status" aria-live="polite">
+              {provenanceCliqueComparisonBlocker}
+            </small>
+          {/if}
+          <small>Confronta le clique di cardinalità massima di ogni scenario; mostra solo confronti completi.</small>
+          <details class="clique-comparison-details">
+            <summary>Dettagli del confronto</summary>
+            <p>Usa la stessa finestra temporale, gli stessi filtri e la soglia di confidenza. Il limite di calcolo è condiviso; se il tempo scade, il confronto si interrompe senza mostrare risultati parziali.</p>
+          </details>
         {/if}
       </div>
     {/if}
@@ -10812,22 +11961,25 @@
   {highlightedNeighbors}
   onBackToRoot={backToRoot}
   onViewNeighbor={viewNeighbor}
+  onOpenData={openDataPanel}
   onCommitNeighbor={(id) => {
   const node = getNodeById(id);
   commitNeighbor(id, node?.label ?? id);
 }}
 />
 
-<HistoryPanel
-  {history}
-  analysisArchive={analysisArchiveEntries}
-  onClear={clearHistory}
-  onClearAnalysisArchive={clearAnalysisArchive}
-  onRestoreAnalysis={restoreArchivedAnalysis}
-  onJumpTo={(id) => selectRoot(id, "truncate")}
-/>
+<div id="history-panel" hidden={!showHistoryPanel}>
+  <HistoryPanel
+    {history}
+    analysisArchive={analysisArchiveEntries}
+    onDismiss={dismissHistoryPanel}
+    onClearAnalysisArchive={clearAnalysisArchive}
+    onRestoreAnalysis={restoreArchivedAnalysis}
+    onJumpTo={(id) => selectRoot(id, "truncate")}
+  />
+</div>
 
-{#if timelineControlEnabled}
+{#if timelineControlEnabled && showTimelineControl}
 <TimelineSlider
   uiConfig={UI.timeline}
   min={GRAPH_CONFIG.timeline.start}
@@ -10845,6 +11997,7 @@
       graph3D?.d3ReheatSimulation?.();
     }, GRAPH_CONFIG.timeline.debounceMs);
   }}
+  on:dismiss={dismissTimelineControl}
 />
 {/if}
 
@@ -10852,8 +12005,11 @@
 <SolverPanel
   config={GRAPH_CONFIG.solver}
   open={showSolverPanel}
+  compactModal={compactAnalysisViewport}
   running={solverRunning}
+  analysisScope={analysisProjectionScope}
   stats={solverStats}
+  completionLabel={graph2DPanelSummary.completionLabel ?? ""}
   error={solverError}
   maximumCliques={maximumCliques}
   maximumCliquesForMembership={maximumCliqueMembershipCliques}
@@ -10867,6 +12023,7 @@
   clingoStats={clingoInvocationStats}
   showClingoStats={showClingoSolverStatsDiagnostics}
   selectedNodeId={selectedId}
+  {nodeLabelById}
   {sourceIdByNodeId}
   {cliqueMembershipDiagnosis}
   {cliqueMembershipDiagnosisTargetNodeId}
@@ -10877,6 +12034,7 @@
   bind:selectedGroup
   availableGroups={visibleAnalysisGroups}
   on:close={() => closeAnalysisPanel("clique")}
+  on:openStructuralAnalysis={() => openAnalysisPanel("structural")}
   on:rerun={() => runMaximumClique()}
   on:diagnoseMaximumMembership={(e) => explainMaximumCliqueMembership(String(e.detail ?? ""))}
   on:highlight={(e) => {
@@ -10915,33 +12073,50 @@
 
 <ProvenanceScenarioAnalysisPanel
   open={showProvenanceScenarioAnalysisPanel}
+  compactModal={compactAnalysisViewport}
   running={solverRunning}
+  completionLabel={graph2DPanelSummary.completionLabel ?? ""}
   progress={provenanceScenarioAnalysisProgress}
   error={provenanceScenarioAnalysisError}
   comparison={provenanceScenarioComparison}
   nodeLabels={Object.fromEntries((data?.nodes ?? []).map((node: any) => [node.id, node.label ?? node.id]))}
+  {sourceIdByNodeId}
+  highlightedNodeIds={[...cliqueNodes]}
   selectedGroup={provenanceScenarioSelectedGroup}
   confidenceThreshold={provenanceScenarioConfidenceThreshold}
   timelineWindow={provenanceScenarioTimelineWindow}
   viewFilters={provenanceScenarioViewFilters}
   on:close={() => closeAnalysisPanel("provenance")}
+  on:openData={openDataPanel}
   on:highlight={(event) => {
     clearGraphNeighborhoodFocus();
     clearGraph2DOverlay();
     const nodeIds = event.detail as string[];
+    const membership = provenanceScenarioComparison?.memberships.find(({ nodeId }) => nodeId === nodeIds[0]);
+    const membershipOverlay = membership && provenanceScenarioComparison
+      ? buildProvenanceScenarioCliqueMembershipGraph2DOverlay(membership, provenanceScenarioComparison)
+      : null;
     highlightedEdgeIds = new Set();
-    cliqueNodes = new Set(nodeIds);
+    cliqueNodes = new Set(membershipOverlay?.nodeIds ?? nodeIds);
+    if (membershipOverlay) {
+      graph2DNodeAnnotations = membershipOverlay.nodeAnnotations;
+      graph2DOverlayResultLabel = membershipOverlay.resultLabel;
+      graph2DOverlayCompletionLabel = membershipOverlay.completionLabel;
+    }
     refreshLinkVisuals();
-    selectWitnessRoot(nodeIds);
+    selectWitnessRoot(membershipOverlay?.nodeIds ?? nodeIds);
     refreshNodeVisuals();
   }}
 />
 
 <StructuralAnalysisPanel
   open={showStructuralPanel}
+  compactModal={compactAnalysisViewport}
   running={solverRunning}
+  analysisScope={analysisProjectionScope}
   error={structuralError}
   outcomeMessage={structuralOutcomeMessage}
+  completionLabel={graph2DPanelSummary.completionLabel ?? ""}
   bind:task={structuralTask}
   bind:parameter={structuralParameter}
   bind:kCoreMode={structuralKCoreMode}
@@ -10967,7 +12142,7 @@
   }))}
   bind:componentScenarioTargetNodeId={provenanceComponentScenarioTargetNodeId}
   connectedComponentsAvailable={graphCapabilities.undirectedAdjacency?.available === true}
-  nodeLabelById={Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [String(node.id), String(node.label ?? node.id)]))}
+  {nodeLabelById}
   provenanceScenarioCount={provenanceScenarios.length}
   provenanceKCoreComparison={provenanceKCoreScenarioComparison}
   provenanceKCoreComparisonRunning={solverRunning && provenanceKCoreScenarioComparisonProgress !== ""}
@@ -11022,6 +12197,7 @@
   edgeProvenanceById={structuralEdgeProvenanceById}
   {edgeProvenanceReferencesBySourceId}
   resultSets={structuralResults}
+  highlightedNodeIds={[...cliqueNodes]}
   kPlexMembershipNodes={availableKPlexMembershipNodes}
   bind:kPlexMembershipTargetNodeId={structuralKPlexMembershipDiagnosisTargetNodeId}
   kPlexMembershipDiagnosis={structuralKPlexMembershipDiagnosis}
@@ -11169,10 +12345,16 @@
     clearGraph2DOverlay();
     const selectedNodes = event.detail as string[];
     if (structuralTask === "minimumNodeSeparator" || structuralTask === "minimumCostNodeSeparator") {
-      graph2DNodeAnnotations = Object.fromEntries(selectedNodes.map((nodeId) => [
-        nodeId,
-        "Nodo rimosso · separatore"
-      ]));
+      const overlay = buildSeparatorGraph2DOverlay({
+        kind: "removed-nodes",
+        ids: selectedNodes,
+        ...(structuralTask === "minimumCostNodeSeparator" && Number.isFinite(structuralStats?.minimumNodeRemovalCost)
+          ? { removalCost: structuralStats?.minimumNodeRemovalCost }
+          : {})
+      });
+      graph2DNodeAnnotations = overlay.nodeAnnotations;
+      graph2DOverlayResultLabel = overlay.resultLabel;
+      graph2DOverlayCompletionLabel = structuralStats?.completionLabel ?? "";
     }
     const dominatingSetOverlay = structuralTask === "dominatingSet"
       ? getDominatingSetCoverageOverlay(selectedNodes)
@@ -11184,16 +12366,24 @@
     selectWitnessRoot(selectedNodes);
     refreshNodeVisuals();
   }}
+  on:highlightScenarioMembership={(event) => highlightProvenanceStructuralScenarioMembership(event.detail)}
+  on:highlightKPlexWitness={(event) => highlightKPlexWitness(event.detail)}
   on:highlightCounterfactual={(event) => highlightStructuralCounterfactual(event.detail)}
   on:highlightEdges={(event) => {
     clearGraphNeighborhoodFocus();
     clearGraph2DOverlay();
     const selectedEdges = event.detail as string[];
     if (structuralTask === "minimumEdgeSeparator" || structuralTask === "minimumCostEdgeSeparator") {
-      graph2DEdgeAnnotations = Object.fromEntries(selectedEdges.map((edgeId) => [
-        edgeId,
-        { label: "Arco rimosso", color: "#b4233c", dashPattern: "dotted" }
-      ]));
+      const overlay = buildSeparatorGraph2DOverlay({
+        kind: "removed-edges",
+        ids: selectedEdges,
+        ...(structuralTask === "minimumCostEdgeSeparator" && Number.isFinite(structuralStats?.minimumCutCost)
+          ? { removalCost: structuralStats?.minimumCutCost }
+          : {})
+      });
+      graph2DEdgeAnnotations = overlay.edgeAnnotations;
+      graph2DOverlayResultLabel = overlay.resultLabel;
+      graph2DOverlayCompletionLabel = structuralStats?.completionLabel ?? "";
     }
     highlightedEdgeIds = new Set(selectedEdges);
     cliqueNodes = new Set();
@@ -11208,8 +12398,17 @@
     clearGraphNeighborhoodFocus();
     const reachableNodes = event.detail as string[];
     clearGraph2DOverlay();
-    graph2DNodeAnnotations = Object.fromEntries(reachableNodes.map((nodeId) => [nodeId, "Lato raggiungibile dal terminale iniziale"]));
-    graph2DOverlayResultLabel = "Lato sorgente raggiungibile dopo la rimozione";
+    const overlay = buildSeparatorGraph2DOverlay({
+      kind: "reachable-side",
+      ids: reachableNodes,
+      ...(structuralTask === "minimumCostNodeSeparator" && Number.isFinite(structuralStats?.minimumNodeRemovalCost)
+        ? { removalCost: structuralStats?.minimumNodeRemovalCost }
+        : structuralTask === "minimumCostEdgeSeparator" && Number.isFinite(structuralStats?.minimumCutCost)
+          ? { removalCost: structuralStats?.minimumCutCost }
+          : {})
+    });
+    graph2DNodeAnnotations = overlay.nodeAnnotations;
+    graph2DOverlayResultLabel = overlay.resultLabel;
     graph2DOverlayCompletionLabel = structuralStats?.completionLabel ?? "";
     highlightedEdgeIds = new Set();
     cliqueNodes = new Set(reachableNodes);
@@ -11285,7 +12484,18 @@
   on:highlightTypedPath={(event) => {
     clearGraphNeighborhoodFocus();
     clearGraph2DOverlay();
-    const path = event.detail as { nodeIds: string[]; edgeIds: string[] };
+    const path = event.detail as {
+      nodeIds: string[];
+      edgeIds: string[];
+      edgeIdsByStep?: string[][];
+      resultLabel?: string;
+      completionLabel?: string;
+    };
+    const annotations = buildGraph2DPathAnnotations(path.nodeIds, path.edgeIdsByStep ?? []);
+    graph2DNodeAnnotations = annotations.nodeAnnotations;
+    graph2DEdgeAnnotations = annotations.edgeAnnotations;
+    graph2DOverlayResultLabel = path.resultLabel?.trim() ?? "";
+    graph2DOverlayCompletionLabel = path.completionLabel?.trim() ?? "";
     highlightedEdgeIds = new Set(path.edgeIds);
     cliqueNodes = new Set(path.nodeIds);
     selectWitnessRoot(path.nodeIds);
@@ -11296,7 +12506,10 @@
 
 <IntegrityPanel
   open={showIntegrityPanel}
+  compactModal={compactAnalysisViewport}
   running={solverRunning}
+  analysisScope={integrityAnalysisScope}
+  completionLabel={graph2DPanelSummary.completionLabel ?? ""}
   requirementsAvailable={integrityDataReadiness.available}
   requirementReasons={integrityDataReadiness.reasons}
   onOpenData={openDataPanel}
@@ -11314,7 +12527,10 @@
   repairRequirementReasons={integrityRepairDataReadiness.reasons}
   repairRunning={integrityRepairRunning}
   repairError={integrityRepairError}
+  repairOutcomeMessage={integrityRepairOutcomeMessage}
   repairProposal={integrityRepairProposal}
+  {nodeLabelById}
+  {sourceIdByNodeId}
   {edgeProvenanceBySourceId}
   {edgeProvenanceReferencesBySourceId}
   on:run={runIntegrityAnalysis}
@@ -11327,8 +12543,11 @@
 {#if motifTemplates.length > 0 || signedTriadConfig || contextualCliqueConfig}
 <MotifAnalysisPanel
   open={showMotifPanel}
+  compactModal={compactAnalysisViewport}
   activeAnalysisKind={lastGraph2DAnalysisKind}
   running={solverRunning}
+  analysisScope={analysisProjectionScope}
+  completionLabel={graph2DPanelSummary.completionLabel ?? ""}
   error={motifError}
   hasRun={motifHasRun}
   templates={motifTemplates}
@@ -11389,7 +12608,7 @@
   contextualCliqueError={contextualCliqueError}
   contextualCliqueTimeMs={contextualCliqueTimeMs}
   {sourceIdByNodeId}
-  nodeLabelById={Object.fromEntries((originalData?.nodes ?? []).map((node: any) => [String(node.id), String(node.label ?? node.id)]))}
+  {nodeLabelById}
   timeMs={motifTimeMs}
   {motifCount}
   motifCountHasRun={motifCountHasRun}
@@ -11446,6 +12665,10 @@
   nodeAnnotations={graph2DNodeAnnotations}
   edgeAnnotations={graph2DEdgeAnnotations}
   communityPartitions={!graph2DOverlayResultLabel && showStructuralPanel && structuralStats?.task === "communities" ? structuralCommunityPartitions.map((partition) => partition.communities) : []}
+  componentPartition={!graph2DOverlayResultLabel && showStructuralPanel && ["components", "weakComponents", "strongComponents"].includes(structuralStats?.task ?? "") ? structuralResults : []}
+  componentGroupLabel={structuralStats?.task === "strongComponents" ? "Componente forte" : structuralStats?.task === "weakComponents" ? "Componente debole" : "Componente"}
+  componentLegendTitle={structuralStats?.task === "strongComponents" ? "COMPONENTI FORTI" : structuralStats?.task === "weakComponents" ? "COMPONENTI DEBOLI" : "COMPONENTI CONNESSE"}
+  componentPartitionLabel={structuralStats?.task === "strongComponents" ? "Partizione in componenti forti" : structuralStats?.task === "weakComponents" ? "Partizione in componenti deboli" : "Partizione in componenti connesse"}
   highlightedCommunityPartitionIndex={graph2DCommunityPartitionIndex}
   coreNumbers={!graph2DOverlayResultLabel && showStructuralPanel && structuralStats?.task === "kCore" ? structuralKCoreNumbers : null}
   orderedNodeIds={!graph2DOverlayResultLabel && showStructuralPanel && (structuralStats?.task === "path" || structuralStats?.task === "typedPath") ? structuralResults[0] ?? [] : []}
@@ -11454,7 +12677,9 @@
   resultKind={graph2DPanelSummary.kind}
   {graphDirection}
   edgeColors={edgeTypeColors}
+  nodeTypeStyles={GRAPH_CONFIG.nodeTypes}
   scopeLabel={graph2DScopeLabel}
+  allowSampledProjectionPreview={graphData?.datasetMetadata?.id === "bitcoin-otc"}
   onClose={() => showGraph2DExportPanel = false}
 />
 <DownloadAnnouncement />
@@ -11494,6 +12719,10 @@
     .app-root.timeline-enabled .graph {
       height: calc(100vh - var(--desktop-timeline-reserve, 0px));
     }
+
+    .app-root.timeline-enabled .graph-visualization-note {
+      bottom: calc(12px + var(--desktop-timeline-reserve, 0px));
+    }
   }
 
   @media (max-width: 600px) {
@@ -11515,8 +12744,17 @@
     background: rgba(255, 255, 255, 0.95);
     color: #0f172a;
     box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
-    font: 12px/1.4 system-ui, sans-serif;
+    font: 12px/1.4 Arial, Helvetica, sans-serif;
   }
+
+  .graph-legend-heading {
+    margin: 6px 0 0;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .graph-legend-section { margin-top: 2px; }
 
   .graph-edge-type-legend {
     display: flex;
@@ -11548,20 +12786,87 @@
 
   @media (max-width: 600px) {
     :global(.app-root .scene-container .scene-nav-info) {
-      top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + 40px);
+      top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + var(--mobile-status-reserve, 48px) + 5px);
       bottom: auto;
+      left: 8px;
+      right: auto;
+      max-width: min(240px, calc(100vw - 160px));
+      transform: none;
+      white-space: normal;
     }
 
     .graph-visualization-note {
       left: auto;
       right: 12px;
       bottom: calc(12px + max(var(--mobile-status-reserve, 48px), var(--mobile-filter-timeline-reserve, 0px)));
-      width: calc(50vw - 18px);
+      width: min(220px, calc(58vw - 32px));
       max-width: none;
       max-height: min(42vh, 300px);
       overflow: auto;
       box-sizing: border-box;
       padding: 8px 9px;
+      font-size: 11px;
+    }
+
+    .graph-legend-section {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      align-items: start;
+      gap: 4px 8px;
+      margin-top: 4px;
+    }
+
+    .graph-legend-heading {
+      grid-column: 1;
+      margin: 3px 0 0;
+      font-size: 10px;
+    }
+
+    .graph-edge-type-legend {
+      grid-column: 2;
+      gap: 3px 7px;
+      max-height: none;
+      overflow: visible;
+      margin: 0;
+      padding: 0;
+      border-top: 0;
+      font-size: 10px;
+    }
+
+    :global(.graph-legend-section .result-list-pager) {
+      grid-column: 1 / -1;
+      gap: 4px;
+      margin: 0;
+      font-size: 10px;
+    }
+  }
+
+  @media (max-width: 600px) and (max-height: 420px) {
+    .app-root { --mobile-status-reserve: 0px; }
+    .graph-status-bar { max-width: min(780px, calc(100vw - 166px)); }
+    .graph-visualization-note {
+      left: 8px;
+      right: auto;
+      top: calc(var(--toolbar-top, 10px) + var(--toolbar-height, 48px) + 52px);
+      bottom: auto;
+      width: min(154px, calc(100vw - 166px));
+      max-height: min(70px, calc(100dvh - var(--toolbar-top, 10px) - var(--toolbar-height, 48px) - 52px - 128px));
+      padding: 6px 7px;
+      font-size: 10px;
+    }
+    :global(.app-root .scene-container .scene-nav-info) { display: none; }
+    .graph-capabilities { display: none; }
+  }
+
+  @media (min-width: 601px) and (max-width: 1023px) {
+    :global(.app-root .scene-container .scene-nav-info) {
+      top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + var(--mobile-status-reserve, 48px) + 5px);
+      bottom: auto;
+      left: 8px;
+      right: auto;
+      max-width: min(240px, calc(100vw - 160px));
+      transform: none;
+      white-space: normal;
     }
   }
 
@@ -11582,7 +12887,7 @@
     background: rgba(255, 251, 235, 0.97);
     color: #78350f;
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
-    font: 13px/1.45 system-ui, sans-serif;
+    font: 13px/1.45 Arial, Helvetica, sans-serif;
   }
 
   .graph-data-diagnostics.error {
@@ -11604,7 +12909,7 @@
     border-radius: 7px;
     background: #fff;
     color: inherit;
-    font: 650 12px/1 system-ui, sans-serif;
+    font: 650 12px/1 Arial, Helvetica, sans-serif;
     cursor: pointer;
   }
 
@@ -11620,7 +12925,7 @@
     z-index: 35;
     width: min(380px, calc(100vw - 24px));
     color: #0f172a;
-    font: 12px/1.4 system-ui, sans-serif;
+    font: 12px/1.4 Arial, Helvetica, sans-serif;
   }
 
   .graph-capabilities summary {
@@ -11709,6 +13014,9 @@
     position: absolute;
     top: var(--toolbar-top);
     left: var(--toolbar-left);
+    right: auto;
+    width: max-content;
+    max-width: calc(100vw - var(--toolbar-left) - 24px);
     display: flex;
     gap: var(--toolbar-gap);
     align-items: center;
@@ -11770,7 +13078,8 @@
   }
 
   .autocomplete-item:hover,
-  .autocomplete-item:focus-visible {
+  .autocomplete-item:focus-visible,
+  .autocomplete-item.active {
     background: var(--autocomplete-hover, rgba(56, 189, 248, 0.2));
   }
 
@@ -11812,6 +13121,25 @@
     gap: 6px;
   }
 
+  .filter-section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .filter-reset {
+    padding: 2px 6px;
+    border: 1px solid rgba(148, 163, 184, 0.55);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.82);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .filter-reset:disabled { opacity: 0.55; cursor: not-allowed; }
+
   .filter-title {
     font-weight: 600;
     color: var(--filter-title-color, #7dd3fc);
@@ -11838,6 +13166,9 @@
   }
 
   .group-filter-list > label { overflow-wrap: anywhere; }
+  .type-filter-option > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .type-filter-option > small { flex: 0 0 auto; color: var(--text-muted, #64748b); font-variant-numeric: tabular-nums; }
+  .degree-filter-section > small { color: var(--text-muted, #64748b); font-size: 0.78em; line-height: 1.35; }
 
   .filter-card label {
     display: flex;
@@ -11866,6 +13197,28 @@
     color: var(--text-muted, #536171);
     font-size: 0.78em;
     line-height: 1.35;
+  }
+
+  .provenance-scenario-section .clique-comparison-details {
+    color: var(--text-muted, #536171);
+    font-size: 0.78em;
+    line-height: 1.35;
+  }
+
+  .clique-comparison-details summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .clique-comparison-details summary:focus-visible {
+    border-radius: 2px;
+    outline: 2px solid #0284c7;
+    outline-offset: 2px;
+  }
+
+  .clique-comparison-details p {
+    margin: 5px 0 0;
   }
 
   .provenance-analysis-run {
@@ -12034,7 +13387,8 @@
     height: 100vh;
     height: 100dvh;
     overflow: hidden;
-    font-family: var(--body-font, system-ui, sans-serif);
+    background: var(--graph-background, #050816);
+    font-family: var(--body-font, Arial, Helvetica, sans-serif);
     --toolbar-top: 12px;
     --toolbar-left: 12px;
   }
@@ -12097,7 +13451,7 @@
     border-radius: 9px;
     background: #fff;
     color: #263548;
-    font: 650 12px/1.2 system-ui, sans-serif;
+    font: 650 12px/1.2 Arial, Helvetica, sans-serif;
     cursor: pointer;
   }
 
@@ -12120,12 +13474,12 @@
   }
 
   .toolbar {
-    right: 12px;
-    width: auto;
-    max-width: none;
+    right: auto;
+    width: max-content;
+    max-width: calc(100vw - var(--toolbar-left) - 24px);
     min-height: 48px;
     box-sizing: border-box;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 7px;
     padding: 7px;
     border: 1px solid rgba(203, 213, 225, .88);
@@ -12138,7 +13492,7 @@
   .toolbar button,
   .toolbar summary {
     color: #253449;
-    font: 600 12px/1.1 system-ui, sans-serif;
+    font: 600 12px/1.1 Arial, Helvetica, sans-serif;
   }
 
   .toolbar .toolbar-button,
@@ -12168,10 +13522,15 @@
   .toolbar-menu > summary:focus-visible,
   .toolbar-menu button:focus-visible,
   .toolbar .search-wrap input:focus-visible { outline: 3px solid rgba(20, 126, 113, .25); outline-offset: 2px; }
-  .menu-chevron { color: #718096; font-size: 14px; font-weight: 500; }
+  .menu-chevron { display: inline-block; width: 7px; height: 7px; margin: 0 1px 3px 2px; transform: rotate(45deg); border-right: 1.6px solid #718096; border-bottom: 1.6px solid #718096; transition: transform .14s ease, margin .14s ease; }
+  .toolbar-menu[open] > summary .menu-chevron { margin-bottom: -1px; transform: rotate(225deg); }
   .active-count { display: inline-grid; min-width: 17px; height: 17px; place-items: center; padding: 0 3px; border-radius: 999px; background: #d6ebe7; color: #175c55; font-size: 10px; }
 
   .toolbar-menu { position: relative; }
+  .mobile-toolbar-more { display: none; }
+  .search-action-icon { display: none; width: 17px; height: 17px; }
+  .mobile-project-name { display: block; margin: 4px 7px; overflow: hidden; color: #536174; font: 650 11px/1.4 Arial, Helvetica, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-worker-status { display: block; margin: 4px 7px; }
   .toolbar-menu:not([open]) > .menu-content { display: none; }
   .toolbar-menu .menu-content {
     position: absolute;
@@ -12194,12 +13553,12 @@
 
   .toolbar-menu .menu-group { display: flex; flex-direction: column; gap: 3px; padding: 5px 0 8px; border-bottom: 1px solid #edf1f5; }
   .toolbar-menu .menu-group:last-child { padding-bottom: 3px; border-bottom: 0; }
-  .toolbar-menu .menu-group > span { padding: 4px 8px; color: #7b8796; font: 700 9px/1.2 system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; }
-  .toolbar-menu .menu-requirement { margin: 0; padding: 6px 9px; color: #75542d; font: 10px/1.4 system-ui, sans-serif; }
-  .toolbar-menu .menu-readiness { margin: 0; padding: 4px 9px; color: #596779; font: 11px/1.4 system-ui, sans-serif; }
+  .toolbar-menu .menu-group > span { padding: 4px 8px; color: #7b8796; font: 600 10px/1.3 Arial, Helvetica, sans-serif; letter-spacing: .01em; }
+  .toolbar-menu .menu-requirement { margin: 0; padding: 6px 9px; color: #75542d; font: 10px/1.4 Arial, Helvetica, sans-serif; }
+  .toolbar-menu .menu-readiness { margin: 0; padding: 4px 9px; color: #596779; font: 11px/1.4 Arial, Helvetica, sans-serif; }
   .toolbar-menu .menu-readiness.available { color: #176458; }
   .toolbar-menu .menu-readiness.blocked { color: #75542d; }
-  .toolbar-menu .menu-blockers { margin: 2px 8px; padding: 5px 7px; border: 1px solid #e6ebf0; border-radius: 7px; background: #fafbfd; color: #526173; font: 11px/1.4 system-ui, sans-serif; }
+  .toolbar-menu .menu-blockers { margin: 2px 8px; padding: 5px 7px; border: 1px solid #e6ebf0; border-radius: 7px; background: #fafbfd; color: #526173; font: 11px/1.4 Arial, Helvetica, sans-serif; }
   .toolbar-menu .menu-blockers summary { cursor: pointer; color: #536174; font-weight: 650; }
   .toolbar-menu .menu-blockers ul { display: grid; gap: 6px; margin: 7px 0 2px; padding: 0 0 0 15px; }
   .toolbar-menu .menu-blockers li strong,
@@ -12216,25 +13575,57 @@
     background: transparent;
     color: #334155;
     cursor: pointer;
-    font: 550 12px/1.25 system-ui, sans-serif;
+    font: 550 12px/1.25 Arial, Helvetica, sans-serif;
     text-align: left;
   }
+  .toolbar-menu .menu-content > a {
+    display: none;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 10px;
+    border-radius: 7px;
+    color: #334155;
+    font: 550 12px/1.25 Arial, Helvetica, sans-serif;
+    text-decoration: none;
+  }
+  .toolbar-menu .menu-content > a:hover { background: #f1f6f5; color: #155d55; }
+  .toolbar-menu .menu-content > a:focus-visible { outline: 3px solid rgba(20, 126, 113, .35); outline-offset: 2px; }
   .toolbar-menu .menu-content button:hover:not(:disabled) { background: #f1f6f5; color: #155d55; }
+  .toolbar-menu .menu-content button.active { background: #edf7f5; color: #155d55; }
   .toolbar-menu .menu-content button:disabled { color: #94a3b8; cursor: not-allowed; }
   .toolbar-menu .menu-group > button.menu-primary { background: #1d6a61; color: #fff; font-weight: 700; }
   .toolbar-menu .menu-group > button.menu-primary:hover:not(:disabled) { background: #185b53; color: #fff; }
   .toolbar-menu .menu-group > button.menu-primary:disabled { background: #dbe5e3; color: #72827f; }
   .toolbar-menu .view-menu { width: 220px; }
-  .toolbar-menu .label-layout-hint { margin: 2px 10px 8px; color: #64748b; font-size: 10px; line-height: 1.4; }
+  .graph-node-directory { margin: 2px 0; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+  .graph-node-directory > summary { padding: 8px 9px; border-radius: 7px; color: #334155; cursor: pointer; font-size: 11px; list-style-position: inside; }
+  .graph-node-directory[open] > summary { border-bottom: 1px solid #e2e8f0; border-radius: 7px 7px 0 0; background: #f8fafc; }
+  .node-directory-menu > .node-directory-content { right: 0; left: auto; width: min(340px, calc(100vw - 24px)); }
+  .node-directory-content :global(.node-directory) { width: 100%; max-height: 60vh; }
+  .toolbar-example-link { display: flex; flex-direction: column; gap: 3px; padding: 8px 9px; border-radius: 7px; color: #334155; text-decoration: none; }
+  .toolbar-example-link:hover { background: #f1f6f5; color: #155d55; }
+  .toolbar-example-link:focus-visible { outline: 3px solid rgba(20, 126, 113, .35); outline-offset: 2px; }
+  .toolbar-example-link strong { font-size: 11px; font-weight: 700; }
+  .toolbar-example-link small { color: #64748b; font-size: 10px; line-height: 1.35; }
+  .examples-toolbar-menu .menu-content > .toolbar-example-link { display: flex; }
+  .toolbar-example-submenu { padding: 3px 0; border-bottom: 1px solid #edf1f5; }
+  .toolbar-example-submenu > summary { padding: 8px 9px; border-radius: 7px; color: #334155; cursor: pointer; font-size: 11px; font-weight: 650; }
+  .toolbar-example-list { display: flex; flex-direction: column; gap: 2px; padding: 3px 0 4px 6px; }
+  .toolbar-example-list .toolbar-example-link { padding: 7px 8px; }
   .toolbar-menu .zoom-menu-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; color: #64748b; font-size: 11px; }
   .toolbar-menu .zoom-menu-row button { display: grid; width: 32px; height: 30px; place-items: center; border: 1px solid #d8e0e9; border-radius: 7px; background: #fff; font-size: 17px; cursor: pointer; }
   .toolbar .search-wrap { flex: 1 1 190px; min-width: 150px; max-width: 290px; }
-  .toolbar .search-wrap input { width: 100%; max-width: none; min-height: 36px; box-sizing: border-box; padding: 8px 11px; border: 1px solid #d8e0e9; border-radius: 9px; background: #fff; color: #172033; font: 12px/1.2 system-ui, sans-serif; }
+  .toolbar .search-wrap input { width: 100%; max-width: none; min-height: 36px; box-sizing: border-box; padding: 8px 11px; border: 1px solid #d8e0e9; border-radius: 9px; background: #fff; color: #172033; font: 12px/1.2 Arial, Helvetica, sans-serif; }
   .toolbar .search-action { min-width: 56px; }
-  .toolbar .export-action { border-color: #1d6a61; background: #1d6a61; color: #fff; }
-  .toolbar .export-action:hover { border-color: #185b53; background: #185b53; color: #fff; }
-  .toolbar-export-status { padding: 5px 8px; border: 1px solid #f3d49a; border-radius: 999px; background: #fff8e8; color: #87520b; font: 650 10px/1.15 system-ui, sans-serif; white-space: nowrap; }
+  .toolbar .export-action { border-color: #b8cbc7; background: #f8fbfa; color: #245d55; }
+  .toolbar .export-action:hover { border-color: #82aaa2; background: #edf7f5; color: #155d55; }
+  .toolbar .export-action.result-ready { border-color: #1d6a61; background: #1d6a61; color: #fff; box-shadow: 0 0 0 2px rgba(29, 106, 97, .12); }
+  .toolbar .export-action.result-ready:hover { border-color: #185b53; background: #185b53; color: #fff; }
+  .toolbar .project-name-control { display: flex; max-width: 190px; min-height: 36px; box-sizing: border-box; align-items: center; padding: 7px 10px; border: 1px solid #dce5e2; border-radius: 9px; background: #f2f6f5; color: #52656a; font: 650 11px/1.2 Arial, Helvetica, sans-serif; }
+  .project-name-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .solver-worker-status { padding: 4px 7px; border-radius: 6px; background: #fff3ed; color: #9a3412; font-size: 10px; }
+  .visually-hidden-analysis-status,
+  .visually-hidden-search-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
   .graph-status-bar {
     position: absolute;
@@ -12253,49 +13644,145 @@
     background: rgba(255, 255, 255, .88);
     color: #334155;
     box-shadow: 0 3px 12px rgba(15, 23, 42, .07);
-    font: 10px/1.3 system-ui, sans-serif;
+    font: 10px/1.3 Arial, Helvetica, sans-serif;
     pointer-events: none;
   }
   .graph-status-bar strong { color: #26384c; font-weight: 750; }
   .graph-status-bar .projection-state { padding-left: 9px; border-left: 1px solid #d7dfe8; }
+  .graph-status-bar .timeline-collapsed-state { padding-left: 9px; border-left: 1px solid #d7dfe8; color: #586b79; }
+  .node-type-summary { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .node-type-chip { display: inline-flex; max-width: 140px; align-items: center; gap: 4px; padding: 2px 5px; border: 1px solid #e1e7ed; border-radius: 999px; background: rgba(248, 250, 252, .92); }
+  .node-type-chip > i { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; }
+  .node-type-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node-type-chip > strong { font-size: 9px; }
+  .node-type-overflow { color: #64748b; white-space: nowrap; }
   .status-dot { display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 0; border-radius: 50%; background: #cf8731; }
   .witness-state { color: #85510b; }
   .filter-card { top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + 39px); left: 12px; border: 1px solid rgba(203, 213, 225, .9); border-radius: 12px; background: rgba(255, 255, 255, .96); color: #263449; box-shadow: 0 12px 34px rgba(15, 23, 42, .14); backdrop-filter: blur(10px); }
 
-  .app-root.with-json-editor .toolbar { left: calc(var(--toolbar-left) + 432px); right: 12px; width: auto; max-width: none; }
+  .toolbar .workspace-toolbar-action { color: #155d55; text-decoration: none; }
+  .toolbar .workspace-toolbar-action:hover { color: #155d55; text-decoration: none; }
+
+  .app-root.with-json-editor .toolbar {
+    left: calc(var(--toolbar-left) + 432px);
+    right: auto;
+    width: max-content;
+    max-width: calc(100vw - var(--toolbar-left) - 456px);
+  }
   .app-root.with-json-editor .graph-status-bar { left: 438px; }
 
   @media (max-width: 1280px) {
-    .toolbar { right: 10px; width: auto; max-width: none; display: flex; grid-template-columns: none; align-items: center; }
+    .toolbar {
+      right: auto;
+      width: max-content;
+      max-width: calc(100vw - var(--toolbar-left) - 20px);
+      display: flex;
+      grid-template-columns: none;
+      align-items: center;
+      flex-wrap: nowrap;
+    }
+    .app-root.with-json-editor .toolbar {
+      right: auto;
+      width: max-content;
+      max-width: calc(100vw - var(--toolbar-left) - 456px);
+      flex-wrap: wrap;
+    }
     .toolbar > button { min-width: 0; white-space: nowrap; }
-    .toolbar .search-wrap { flex: 1 1 180px; min-width: 140px; max-width: 250px; grid-column: auto; }
+    .toolbar .project-name-control { max-width: 132px; }
+    .toolbar .toolbar-button,
+    .toolbar-menu > summary { gap: 5px; padding-right: 8px; padding-left: 8px; }
+    .toolbar .search-wrap { flex: 1 1 132px; min-width: 88px; max-width: 220px; grid-column: auto; }
     .toolbar .search-wrap input { width: 100%; max-width: none; }
+    .toolbar .search-action { min-width: 36px; width: 36px; padding-right: 8px; padding-left: 8px; }
+  }
+
+  @media (min-width: 901px) and (max-width: 1100px) {
+    .toolbar .search-action-label { display: none; }
+    .toolbar .search-action-icon { display: block; }
+    .toolbar .search-action { min-width: 36px; width: 36px; padding-right: 8px; padding-left: 8px; }
   }
 
   @media (max-width: 900px) {
     .toolbar { right: 8px; left: 8px; gap: 6px; padding: 6px; }
     .toolbar .search-wrap { flex: 1 1 100%; max-width: none; order: 20; }
     .toolbar .search-action { order: 21; }
-    .graph-status-bar { left: 8px; max-width: calc(100vw - 16px); gap: 5px 9px; }
+    .graph-status-bar { left: 8px; max-width: min(780px, calc(100vw - 150px)); gap: 5px 9px; }
     .filter-card { top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + 39px); left: 8px; max-width: min(360px, calc(100vw - 16px)); max-height: min(55vh, calc(100dvh - var(--toolbar-height, 48px) - 95px)); }
     .app-root.with-json-editor .toolbar { display: none; }
     .app-root.with-json-editor .graph-status-bar { display: none; }
+  }
+
+  @media (max-width: 900px) {
+    .toolbar {
+      right: 8px;
+      left: 8px;
+      width: auto;
+      max-width: none;
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 4px;
+      padding: 5px;
+    }
+    .toolbar > .desktop-toolbar-control { display: none; }
+    .toolbar > details.toolbar-menu:not(.mobile-toolbar-more) { flex: 0 0 auto; order: 1; }
+    .toolbar > .search-wrap { flex: 1 1 auto; order: 2; width: auto; min-width: 0; max-width: none; }
+    .toolbar > .search-wrap input { min-width: 0; min-height: 34px; padding: 7px 8px; font-size: 11px; }
+    .toolbar > .search-action { flex: 0 0 34px; order: 3; width: 34px; min-width: 34px; min-height: 34px; padding: 6px; }
+    .search-action-label { display: none; }
+    .search-action-icon { display: block; }
+    .toolbar > .mobile-toolbar-more { display: block; flex: 0 0 auto; order: 4; }
+    .toolbar .toolbar-button,
+    .toolbar-menu > summary { min-height: 34px; padding: 6px 8px; font-size: 11px; }
+    .toolbar > .toolbar-menu:not(.mobile-toolbar-more) > .menu-content,
+    .toolbar > .mobile-toolbar-more > .menu-content {
+      position: fixed;
+      top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + 44px);
+      right: 12px;
+      left: auto;
+      max-height: min(72dvh, calc(100dvh - var(--toolbar-top) - var(--toolbar-height, 48px) - 62px));
+    }
+    .toolbar .mobile-toolbar-more > .menu-content { width: min(264px, calc(100vw - 24px)); }
+    .toolbar .mobile-toolbar-more .workspace-route-action { display: block; }
+    .toolbar .mobile-view-menu { width: 100%; }
+    .toolbar .mobile-view-menu > summary { min-height: 36px; padding: 9px 10px; }
+    .toolbar .mobile-view-menu[open] > .menu-content {
+      position: static;
+      width: auto;
+      max-height: none;
+      overflow: visible;
+      padding: 4px 0 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .toolbar .mobile-view-menu .view-menu { width: auto; }
+    .toolbar .mobile-toolbar-more > .menu-content > .export-action {
+      display: block;
+      width: 100%;
+      margin-top: 4px;
+      padding: 9px 10px;
+      border: 1px solid #b8cbc7;
+      border-radius: 7px;
+      background: #f8fbfa;
+      color: #245d55;
+      cursor: pointer;
+      font: 650 12px/1.25 Arial, Helvetica, sans-serif;
+      text-align: left;
+    }
+    .toolbar .mobile-toolbar-more > .menu-content > .export-action.result-ready { border-color: #1d6a61; background: #1d6a61; color: #fff; }
+    .toolbar .mobile-toolbar-more > .menu-content > .export-action:hover { background: #edf7f5; }
+    .toolbar .mobile-toolbar-more > .menu-content > .export-action.result-ready:hover { background: #185b53; }
+    .toolbar .mobile-toolbar-more > .menu-content > .export-action:focus-visible { outline: 3px solid rgba(20, 126, 113, .35); outline-offset: 2px; }
   }
 
   @media (max-width: 520px) {
     .empty-graph-state { inset: calc(var(--toolbar-top) + 54px) 10px 28px; }
     .empty-graph-actions { display: grid; grid-template-columns: 1fr; margin-top: 17px; }
     .empty-graph-actions button { width: 100%; }
-    .toolbar { gap: 5px; }
-    .toolbar .toolbar-button, .toolbar-menu > summary { min-height: 34px; padding: 7px 9px; font-size: 11px; }
-    .toolbar .search-wrap { min-width: 120px; }
+    .toolbar { gap: 4px; }
+    .toolbar-menu:not(.mobile-toolbar-more) > summary { padding-right: 7px; padding-left: 7px; }
     .toolbar .menu-content { width: min(264px, calc(100vw - 24px)); }
-    .toolbar details:first-of-type .menu-content {
-      position: fixed;
-      top: calc(var(--toolbar-top) + 47px);
-      right: 12px;
-      left: auto;
-    }
     .graph-status-bar { top: calc(var(--toolbar-top) + var(--toolbar-height, 48px) + 5px); padding: 5px 8px; }
   }
 
@@ -12319,6 +13806,13 @@
   }
 
   @media (max-width: 900px) {
+    .app-root {
+      --mobile-analysis-panel-timeline-reserve: min(
+        var(--mobile-filter-timeline-reserve, 0px),
+        max(0px, calc(100dvh - var(--toolbar-height, 48px) - 244px))
+      );
+    }
+
     .app-root.projection-controls-open :global(.solver-panel),
     .app-root.projection-controls-open :global(.structural-panel),
     .app-root.projection-controls-open :global(.integrity-panel),
@@ -12334,10 +13828,10 @@
     .app-root :global(.scenario-comparison-panel) {
       top: auto;
       right: 8px;
-      bottom: calc(12px + var(--mobile-filter-timeline-reserve, 0px));
+      bottom: calc(12px + var(--mobile-analysis-panel-timeline-reserve, var(--mobile-filter-timeline-reserve, 0px)));
       left: 8px;
       width: auto;
-      max-height: calc(100dvh - var(--toolbar-height, 48px) - 88px - var(--mobile-filter-timeline-reserve, 0px));
+      max-height: calc(100dvh - var(--toolbar-height, 48px) - 88px - var(--mobile-analysis-panel-timeline-reserve, var(--mobile-filter-timeline-reserve, 0px)));
       border-radius: 14px 14px 8px 8px;
     }
   }

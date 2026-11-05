@@ -5,7 +5,8 @@ import test from "node:test";
 const panel = await readFile(new URL("../src/lib/kliqueasp/components/StructuralAnalysisPanel.svelte", import.meta.url), "utf8");
 
 test("community rows show a short member sample and keep the full highlight action", () => {
-  assert.match(panel, /community\.slice\(0, 5\)\.map\(\(nodeId\) => sourceIdByNodeId\[nodeId\] \?\? nodeId\)\.join/);
+  assert.match(panel, /community\.slice\(0, 5\)\.map\(\(nodeId\) => resultNodeLabel\(nodeId\)\)\.join/);
+  assert.match(panel, /ProgressiveList items=\{community\} resetKey=\{community\} label="nodi della comunità" let:item>\s*<span>\{resultNodeLabel\(item\)\}<\/span>/);
   assert.match(panel, /community\.length > 5 \? ` · \+\$\{community\.length - 5\} altri`/);
   assert.match(panel, /highlightCommunity\(community, partition, partitionIndex, communityIndex\)/);
   const action = "on:click={() => highlightCommunity(community, partition, partitionIndex, communityIndex)}";

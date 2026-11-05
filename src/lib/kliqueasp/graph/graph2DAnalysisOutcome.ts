@@ -7,6 +7,7 @@ export type Graph2DAnalysisErrors = Partial<Record<
   | "clique"
   | "structural"
   | "integrity"
+  | "integrityRepair"
   | "motif"
   | "motifCount"
   | "motifCounterfactual"
@@ -65,7 +66,7 @@ export function getGraph2DActiveAnalysisError(
 ): string {
   let errorKey: keyof Graph2DAnalysisErrors | undefined;
   if (panel === "clique") errorKey = "clique";
-  else if (panel === "integrity") errorKey = "integrity";
+  else if (panel === "integrity") errorKey = analysisKind === "integrityRepair" ? "integrityRepair" : "integrity";
   else if (panel === "provenance") errorKey = "provenanceClique";
   else if (panel === "structural") {
     errorKey = analysisKind === "provenanceKCore" ? "provenanceKCore"
@@ -105,8 +106,8 @@ export function buildGraph2DIncompleteAnalysisSummary(
     resultLabel: "Risultato non disponibile",
     completionLabel: "Calcolo non completato · è mostrato solo il grafo di contesto"
   };
-  if (interrupted) summary.completionLabel = `Calcolo interrotto${contextOnlySuffix}`;
-  else if (limitReached) summary.completionLabel = `Limite di calcolo raggiunto${contextOnlySuffix}`;
+  if (limitReached) summary.completionLabel = `Limite di calcolo raggiunto${contextOnlySuffix}`;
+  else if (interrupted) summary.completionLabel = `Calcolo interrotto${contextOnlySuffix}`;
   else if (engineUnavailable) summary.completionLabel = `Motore di calcolo non disponibile${contextOnlySuffix}`;
   else if (prerequisiteMissing) summary.completionLabel = `Analisi non eseguita${contextOnlySuffix}`;
   else if (executionError) summary.completionLabel = `Errore durante il calcolo${contextOnlySuffix}`;
@@ -126,6 +127,18 @@ export function buildGraph2DInfeasibleAnalysisSummary(
   return {
     resultLabel: `${label} · nessuna soluzione ammissibile · solo grafo di contesto`,
     completionLabel: `Infeasibilità provata · ${explanation}`
+  };
+}
+
+/** Labels the temporal walk shown to explain why no simple typed path exists. */
+export function buildGraph2DTemporalNoRouteDiagnosticSummary(
+  goalReachableAsWalk: boolean
+): Graph2DAnalysisSummary {
+  return {
+    resultLabel: "Diagnosi del cammino temporale",
+    completionLabel: goalReachableAsWalk
+      ? "Nessun cammino semplice ammissibile · la meta si raggiunge solo ripassando da nodi visitati"
+      : "Nessun cammino semplice ammissibile · il prefisso massimo non raggiunge la meta"
   };
 }
 
@@ -154,8 +167,9 @@ export function buildGraph2DStructuralCompletionLabel(options: {
   enumerateAllOptima: boolean;
   enumerateAllMaximalKPlex?: boolean;
 }): string | undefined {
-  if ((options.resultStatus === "SATISFIABLE" || options.resultStatus === "OPTIMUM FOUND") &&
-    (options.task === "components" || options.task === "weakComponents" || options.task === "strongComponents")) {
+  if (options.resultStatus !== "SATISFIABLE" && options.resultStatus !== "OPTIMUM FOUND") return undefined;
+  if (!options.hasSolution) return undefined;
+  if (options.task === "components" || options.task === "weakComponents" || options.task === "strongComponents") {
     return "Partizione completa · tutte le componenti";
   }
   if (options.resultStatus === "SATISFIABLE" && options.task === "path") {

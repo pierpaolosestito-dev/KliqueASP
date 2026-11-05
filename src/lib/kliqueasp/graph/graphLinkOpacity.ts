@@ -22,6 +22,13 @@ export function getGraphLinkOpacity({
     return configured;
   }
 
+  // Density alone over-attenuates small complete graphs (for example, a
+  // three-node clique has density 1 but only three visible edges). Apply the
+  // clutter reduction once the network is large enough and its average degree
+  // makes edge overlap likely.
+  const averageDegree = (2 * linkCount) / nodeCount;
+  if (nodeCount < 8 || averageDegree < 6) return configured;
+
   const maximumLinks = directed ? nodeCount * (nodeCount - 1) : nodeCount * (nodeCount - 1) / 2;
   const density = Math.max(0, Math.min(1, linkCount / maximumLinks));
   const opacityFactor = density >= 0.7 ? 0.35

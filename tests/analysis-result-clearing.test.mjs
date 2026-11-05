@@ -20,19 +20,22 @@ const clearFromToolbar = sourceBetween(
 );
 
 test("the Vista menu exposes a separate action for clearing analysis results", () => {
-  assert.match(graphApp, /\$:\s*analysisResultsAvailable\s*=\s*Boolean\(\s*lastAnalysisPanel\s*\|\|/);
+  assert.match(graphApp, /\$:\s*analysisResultsAvailable\s*=\s*Boolean\(\s*analysisStateHasResult\(lastCapturedAnalysisSession\?\.state\s*\?\?\s*\{\}\)\s*\|\|/);
+  assert.doesNotMatch(graphApp, /\$:\s*analysisResultsAvailable\s*=\s*Boolean\(\s*lastAnalysisPanel\s*\|\|/);
   assert.match(graphApp, /\{#if analysisResultsAvailable\}[\s\S]*?Cancella risultati correnti[\s\S]*?\{\/if\}/);
   assert.match(graphApp, /disabled=\{solverRunning\}[\s\S]*?on:click=\{clearAnalysisResultsFromToolbar\}/);
   assert.ok(/Cancella i risultati correnti e mantiene rete, filtri, vista e cronologia/.test(graphApp), "tooltip should describe what clearing preserves");
 });
 
-test("clearing results reuses the projection cleanup and returns focus to Vista", () => {
+test("clearing results reuses the projection cleanup and returns focus to a visible toolbar control", () => {
   assert.notEqual(clearFromToolbar, "", "toolbar action should have a named handler");
   assert.match(clearFromToolbar, /if \(solverRunning \|\| !analysisResultsAvailable\) return;/);
   assert.match(clearFromToolbar, /clearAnalysisResultsForProjectionChange\(\);/);
   assert.match(clearFromToolbar, /closeToolbarMenus\(\);/);
   assert.match(clearFromToolbar, /refreshLinkVisuals\(\);[\s\S]*refreshNodeVisuals\(\);/);
-  assert.match(clearFromToolbar, /viewMenuElement\?\.querySelector\("summary"\)\?\.focus\(\);/);
+  assert.match(clearFromToolbar, /window\.matchMedia\("\(max-width: 900px\)"\)\.matches/);
+  assert.match(clearFromToolbar, /document\.querySelector<HTMLElement>\('\.toolbar input\[aria-label="Cerca un nodo per nome o ID"\]'\)/);
+  assert.match(clearFromToolbar, /viewMenuElement\?\.querySelector\("summary"\)/);
 });
 
 test("result cleanup clears the current session and witnesses without resetting graph settings or archive history", () => {

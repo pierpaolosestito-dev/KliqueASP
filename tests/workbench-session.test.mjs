@@ -35,6 +35,18 @@ test("mantiene draft e ultimo grafo applicato distinti", () => {
   assert.equal(parsed.appliedDatasetText, appliedDatasetText);
 });
 
+test("ripristina il nome del progetto e normalizza metadati vuoti o troppo lunghi", () => {
+  const named = parseWorkbenchSession({ ...validSnapshot, projectName: "  Rete\n psicologi  " });
+  assert.equal(named.projectName, "Rete psicologi");
+
+  const empty = parseWorkbenchSession({ ...validSnapshot, projectName: " \u0000 " });
+  assert.equal(empty.projectName, "Progetto senza nome");
+
+  const long = parseWorkbenchSession({ ...validSnapshot, projectName: "x".repeat(200) });
+  assert.equal(long.projectName?.length, 100);
+  assert.equal(parseWorkbenchSession(validSnapshot).projectName, undefined);
+});
+
 test("conserva un draft JSON ancora incompleto mantenendo il grafo applicato valido", () => {
   const partial = parseWorkbenchSession({
     ...validSnapshot,

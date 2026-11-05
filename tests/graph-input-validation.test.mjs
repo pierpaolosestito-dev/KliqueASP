@@ -76,6 +76,29 @@ test("draft inspection points to the invalid node record before apply", () => {
   assert.equal(formatGraphDiagnostic(indexedConflict), "arco 4: ID arco riutilizzato");
 });
 
+test("draft inspection retains one actionable diagnostic per invalid node in a larger dataset", () => {
+  const mappedConfig = JSON.stringify({
+    schemaVersion: 2,
+    graphMapping: {
+      node: { idField: "$.id" },
+      edge: { sourceField: "$.source", targetField: "$.target" }
+    }
+  });
+  const dataset = JSON.stringify({
+    nodes: Array.from({ length: 40 }, (_, index) => ({ label: `nodo ${index + 1}` })),
+    edges: []
+  });
+
+  const inspection = inspectGraphInput(mappedConfig, dataset);
+
+  assert.equal(inspection.status, "error");
+  assert.equal(inspection.nodeCount, 40);
+  assert.equal(inspection.errorCount, 40);
+  assert.equal(inspection.diagnostics.length, 40);
+  assert.equal(inspection.diagnostics[0].recordIndex, 0);
+  assert.equal(inspection.diagnostics.at(-1).recordIndex, 39);
+});
+
 test("draft inspection explains malformed JSON and a missing edge collection", () => {
   const malformed = inspectGraphInput(config, "{\"nodes\":[");
   assert.equal(malformed.status, "error");

@@ -53,7 +53,7 @@ test("projects every integrity repair action onto its source node or edge in an 
   assert.deepEqual(result.nodeIds.sort(), ["n1", "n2", "n3"]);
   assert.deepEqual(result.edgeIds.sort(), ["source:e-1", "source:e-2", "source:e-3", "source:e-4"]);
   assert.equal(result.resultLabel, "Proposta minima di riparazione · 8 azioni visibili");
-  assert.equal(result.completionLabel, "Ottimo di costo provato · costo 16 · dati invariati");
+  assert.equal(result.completionLabel, "Ottimo di costo provato · una proposta tra eventuali pari merito · costo 16 · dati invariati");
   assert.match(result.nodeAnnotations.n1, /settore = \"clinica\"/);
   assert.match(result.nodeAnnotations.n1, /citta: \"Roma\" → \"Milano\"/);
   assert.match(result.nodeAnnotations.n2, /persona → ente/);
@@ -88,7 +88,7 @@ test("reports when a repair target is outside the current graph projection", () 
   assert.deepEqual(result.nodeIds, []);
   assert.deepEqual(result.edgeIds, []);
   assert.equal(result.resultLabel, "Proposta di riparazione · nessun target visibile nella proiezione corrente");
-  assert.equal(result.completionLabel, "Ottimo di costo provato · costo 2 · dati invariati");
+  assert.equal(result.completionLabel, "Ottimo di costo provato · una proposta tra eventuali pari merito · costo 2 · dati invariati");
 });
 
 test("maps a node-only repair by its current ID and reports the actions hidden by projection", () => {
@@ -103,4 +103,26 @@ test("maps a node-only repair by its current ID and reports the actions hidden b
   assert.deepEqual(result.edgeIds, []);
   assert.match(result.nodeAnnotations.n2, /persona → ente/);
   assert.equal(result.resultLabel, "Proposta minima di riparazione · 1 azione visibile · 1 fuori proiezione");
+});
+
+test("preserves inherited JSON node IDs as data through repair annotations and the 2D SVG", () => {
+  const reservedNodes = [{ id: "constructor", sourceId: "constructor", label: "Nodo riservato" }];
+  const proposal = {
+    edgeIds: [],
+    nodeTypeReplacements: [{ nodeId: "constructor", expectedType: "persona", newType: "ente", cost: 1 }],
+    cost: 1
+  };
+  const result = buildIntegrityRepairVisualization(proposal, reservedNodes, []);
+  const scene = buildGraph2DScene(reservedNodes, [], {
+    mode: "projection",
+    highlightedNodeIds: result.nodeIds,
+    nodeAnnotations: result.nodeAnnotations
+  });
+  const svg = buildGraph2DSvg(scene, { showAnnotations: true, resultLabel: result.resultLabel });
+
+  assert.equal(Object.hasOwn(result.nodeAnnotations, "constructor"), true);
+  assert.match(result.nodeAnnotations.constructor, /persona → ente/);
+  assert.deepEqual(result.nodeIds, ["constructor"]);
+  assert.match(svg, /persona → ente/);
+  assert.equal(Object.prototype.polluted, undefined);
 });

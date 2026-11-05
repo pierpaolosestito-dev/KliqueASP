@@ -76,19 +76,23 @@ function validateConfig(
   mappedEdgeAttributes: Set<string>,
   mappedEdgeTypeAvailable: boolean
 ): string[] {
-  if (!isRecord(config)) return ["Configurare graphAnalysis.signedTriads come oggetto."];
+  if (!isRecord(config)) return ["Completa la configurazione delle triadi firmate in Dati e configurazione."];
   const attribute = typeof config.attribute === "string" ? config.attribute : "";
   const reasons: string[] = [];
-  if (!attribute) reasons.push("graphAnalysis.signedTriads.attribute deve essere un alias non vuoto.");
-  else if (!mappedEdgeAttributes.has(attribute)) reasons.push(`L'attributo '${attribute}' non è mappato in graphMapping.edge.attributes.`);
+  if (!attribute) reasons.push("Indica l'alias dell'attributo di arco che contiene il segno della relazione.");
+  else if (!mappedEdgeAttributes.has(attribute)) reasons.push(`In Dati → Campi opzionali e attributi, mappa l'attributo di arco «${attribute}» usato per il segno.`);
   for (const key of ["positiveValues", "negativeValues"] as const) {
     const values = config[key];
     if (!Array.isArray(values) || values.length === 0 || values.some((value) => !isJsonScalar(value))) {
-      reasons.push(`graphAnalysis.signedTriads.${key} deve contenere valori JSON scalari non vuoti.`);
+      const polarity = key === "positiveValues" ? "positivi" : "negativi";
+      reasons.push(`Indica uno o più valori ${polarity} del segno della relazione (testo, numero o booleano).`);
       continue;
     }
     const signatures = values.map((value) => scalarSignature(value));
-    if (new Set(signatures).size !== signatures.length) reasons.push(`graphAnalysis.signedTriads.${key} contiene duplicati.`);
+    if (new Set(signatures).size !== signatures.length) {
+      const polarity = key === "positiveValues" ? "positivi" : "negativi";
+      reasons.push(`Rimuovi i valori duplicati dall'elenco dei segni ${polarity}.`);
+    }
   }
   if (Array.isArray(config.positiveValues) && Array.isArray(config.negativeValues) &&
     config.positiveValues.every(isJsonScalar) && config.negativeValues.every(isJsonScalar)) {
@@ -100,12 +104,12 @@ function validateConfig(
   if (config.edgeTypes !== undefined) {
     if (!Array.isArray(config.edgeTypes) || config.edgeTypes.length === 0 ||
       config.edgeTypes.some((value) => typeof value !== "string" || value.trim() === "")) {
-      reasons.push("graphAnalysis.signedTriads.edgeTypes deve contenere stringhe non vuote.");
+      reasons.push("Il filtro per tipo di arco deve contenere almeno un nome di tipo non vuoto.");
     } else if (new Set(config.edgeTypes.map((value) => value.trim())).size !== config.edgeTypes.length) {
-      reasons.push("graphAnalysis.signedTriads.edgeTypes non deve contenere duplicati.");
+      reasons.push("Rimuovi i tipi di arco ripetuti dal filtro delle triadi firmate.");
     }
     if (!mappedEdgeTypeAvailable) {
-      reasons.push("graphAnalysis.signedTriads.edgeTypes richiede graphMapping.edge.typeField.");
+      reasons.push("In Dati → Mappatura rapida, associa il campo che contiene il tipo di ogni arco.");
     }
   }
   return reasons;
@@ -125,8 +129,10 @@ export function prepareSignedTriads(
   mappedEdgeTypeAvailable = false
 ): SignedTriadPreparation {
   const reasons = validateConfig(configInput, mappedEdgeAttributes, mappedEdgeTypeAvailable);
-  if (schemaVersion !== 2) reasons.push("Le triadi firmate richiedono schemaVersion: 2.");
-  if (direction !== "undirected") reasons.push("Il bilanciamento sociale qui definito richiede un grafo non orientato.");
+  if (schemaVersion !== 2) reasons.push("Le triadi firmate richiedono la versione 2 del formato di configurazione del grafo.");
+  if (direction !== "undirected") {
+    reasons.push("Imposta «Direzione» su «Non orientato» in Dati → Mappatura rapida: questa analisi richiede relazioni non orientate.");
+  }
   if (reasons.length > 0) return { available: false, reasons, candidateNodeIndices: [], dyads: [] };
   const config = configInput as GraphSignedTriadConfig;
   const selectedEdgeTypes = config.edgeTypes ? new Set(config.edgeTypes.map((edgeType) => edgeType.trim())) : null;
@@ -139,9 +145,9 @@ export function prepareSignedTriads(
     return index && (!selectedGroup || groups.includes(selectedGroup)) ? [index] : [];
   });
   const candidateSet = new Set(candidateNodeIndices);
-  if (nodes.length === 0) reasons.push("La proiezione visibile corrente non contiene nodi da analizzare.");
+  if (nodes.length === 0) reasons.push("La proiezione corrente non contiene nodi da analizzare: rimuovi i filtri o cambia gruppo.");
   if (selectedGroup && candidateNodeIndices.length === 0) {
-    reasons.push(`Il gruppo '${selectedGroup}' non contiene nodi nella proiezione visibile corrente.`);
+    reasons.push(`Il gruppo «${selectedGroup}» non contiene nodi nella proiezione corrente: cambia gruppo o rimuovi i filtri.`);
   }
 
   const rawDyads = new Map<string, {
